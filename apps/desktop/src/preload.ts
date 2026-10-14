@@ -717,6 +717,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ok: number;
       fail: number;
       authFail: number;
+      /** Federation: cross-server sends this relay can't make. */
+      peerFail: number;
+      /** Federation: queued for a relay that's unreachable right now. */
+      deferred: number;
     }>,
   pairingInboxList: () =>
     ipcRenderer.invoke('host:pairing-inbox-list') as Promise<PairingInboxItemIpc[]>,

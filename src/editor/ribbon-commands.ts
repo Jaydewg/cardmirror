@@ -4692,6 +4692,8 @@ export type RibbonCommandId =
   | 'collabJoinSession'
   | 'collabCopyShareCode'
   | 'collabCopyInviteLink'
+  | 'collabCopyCrossServerCode'
+  | 'collabReviewJoinRequests'
   | 'collabInviteStarred'
   | 'collabEndSession'
   | 'insertImage'
@@ -4951,6 +4953,8 @@ export const RIBBON_COMMAND_IDS: RibbonCommandId[] = [
   'collabJoinSession',
   'collabCopyShareCode',
   'collabCopyInviteLink',
+  'collabCopyCrossServerCode',
+  'collabReviewJoinRequests',
   'collabInviteStarred',
   'collabEndSession',
   'insertImage',
@@ -5165,6 +5169,8 @@ export const RIBBON_COMMAND_LABELS: Record<RibbonCommandId, string> = {
   collabJoinSession: 'Join or Rejoin Collaboration Session',
   collabCopyShareCode: 'Copy Session Share Code',
   collabCopyInviteLink: 'Copy Session Invite Link',
+  collabCopyCrossServerCode: 'Copy Cross-Server Session Code',
+  collabReviewJoinRequests: 'Review Session Join Requests',
   collabInviteStarred: 'Invite Starred Partner to Session',
   collabEndSession: 'End or Leave Collaboration Session',
   insertImage: 'Insert Image at Cursor',
@@ -5256,6 +5262,8 @@ export const RIBBON_COMMAND_ALIASES: Partial<Record<RibbonCommandId, readonly st
   collabJoinSession: ['join session', 'rejoin session', 'resume session', 'recent sessions', 'share code', 'coedit'],
   collabCopyShareCode: ['share code', 'invite code', 'session code'],
   collabCopyInviteLink: ['invite link', 'share link', 'join link', 'session link'],
+  collabCopyCrossServerCode: ['cross-server code', 'federated code', 'other server', 'share code', 'v2f'],
+  collabReviewJoinRequests: ['join requests', 'accept join', 'let in', 'other server', 'read-only', 'remove participant', 'revoke'],
   collabInviteStarred: ['invite partner', 'session invite', 'invite to session'],
   openDevConsole: ['devtools', 'dev console', 'debug console', 'inspect', 'developer tools'],
   collabEndSession: ['leave session', 'stop session', 'stop collaborating'],
@@ -5583,6 +5591,8 @@ export const DEFAULT_RIBBON_KEYS: Record<RibbonCommandId, string | string[]> = {
   collabJoinSession: '',
   collabCopyShareCode: '',
   collabCopyInviteLink: '',
+  collabCopyCrossServerCode: '',
+  collabReviewJoinRequests: '',
   collabInviteStarred: '',
   collabEndSession: '',
   newSpeechDocument: '',
@@ -5866,6 +5876,8 @@ export interface RibbonContext {
   collabJoinSession: () => void;
   collabCopyShareCode: () => void;
   collabCopyInviteLink: () => void;
+  collabCopyCrossServerCode: () => void;
+  collabReviewJoinRequests: () => void;
   collabInviteStarred: () => void;
   collabEndSession: () => void;
   /** Open the file picker that prompts for an image to insert at
@@ -6041,6 +6053,8 @@ const DEFAULT_RIBBON_CONTEXT: RibbonContext = {
   collabJoinSession: () => {},
   collabCopyShareCode: () => {},
   collabCopyInviteLink: () => {},
+  collabCopyCrossServerCode: () => {},
+  collabReviewJoinRequests: () => {},
   collabInviteStarred: () => {},
   collabEndSession: () => {},
   insertImage: () => {},
@@ -6784,6 +6798,18 @@ function commandFor(id: RibbonCommandId, ctx: RibbonContext): Command {
       return (_state, dispatch) => {
         if (!dispatch) return true;
         ctx.collabCopyInviteLink();
+        return true;
+      };
+    case 'collabCopyCrossServerCode':
+      return (_state, dispatch) => {
+        if (!dispatch) return true;
+        ctx.collabCopyCrossServerCode();
+        return true;
+      };
+    case 'collabReviewJoinRequests':
+      return (_state, dispatch) => {
+        if (!dispatch) return true;
+        ctx.collabReviewJoinRequests();
         return true;
       };
     case 'collabInviteStarred':

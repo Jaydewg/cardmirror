@@ -72,8 +72,25 @@ import { loadRejoinCandidates, pickSessionToJoin } from './rejoin-picker.js';
 import { importRoomKey, decryptBlob } from './collab-crypto.js';
 import { resetSessionCommentIds } from '../comments-plugin.js';
 import { collabEnabled } from './collab-gate.js';
-import { decodeShareCode } from './collab-crypto.js';
+import { decodeShareCode, encodeShareCode, stripShareCodeHome } from './collab-crypto.js';
 import { CollabSession } from './collab-session.js';
+import type { JoinMode, RoomsClient } from './room-client.js';
+import {
+  collabReadOnlyPlugin,
+  createJoinRequestWatcher,
+  federationFailureMessage,
+  forgetRoomPass,
+  noteRoomPassMode,
+  refreshEditable,
+  remoteHomeOf,
+  remoteRoomClient,
+  requestRemoteAdmission,
+  storedRoomPass,
+  type JoinRequestWatcher,
+} from '../federation/collab-federation.js';
+import { refreshOwnRelayFederation, selfRelayUrl } from '../federation/self.js';
+import { relayLabel } from '../federation/address.js';
+import { pairingCodeRelay } from '../pairing/pairing-ids.js';
 import { compareAppVersions } from '../relay-protocol.js';
 import { appVersion } from '../install-info.js';
 
@@ -139,6 +156,12 @@ interface ActiveSession {
   offlineTimer: ReturnType<typeof setTimeout> | null;
   /** Container-safe undo ledger (undo-guard.ts); disposed at teardown. */
   undoGuardDispose: () => void;
+  /** Federation: the room's home relay when it is ANOTHER server (this
+   *  participant reaches it through its own relay); null = a local room. */
+  home: string | null;
+  /** Federation (local rooms only): prompts this participant to decide
+   *  cross-server join requests. Null when not applicable. */
+  joinWatcher: JoinRequestWatcher | null;
 }
 
 const sessions = new Map<string, ActiveSession>();
@@ -538,6 +561,22 @@ function installSeams(
     if (e.by === 'local' || session.role === 'host') return;
     queueMicrotask(() => adoptSharedTitle(deps, session));
   });
+  // Federation: where the room lives, relative to this app's relay. A
+  // LOCAL room's participants decide cross-server join requests.
+  const decodedCode = decodeShareCode(shareCode);
+  const home = remoteHomeOf(decodedCode?.home);
+  let joinWatcher: JoinRequestWatcher | null = null;
+  if (!home && decodedCode) {
+    const local = relayClient();
+    if (local) {
+      joinWatcher = createJoinRequestWatcher({
+        roomId: session.roomId,
+        client: local,
+        keyBytes: decodedCode.keyBytes,
+        docTitle: () => sessionDocTitle(ownerUid) || sharedDocTitle(session),
+      });
+    }
+  }
   const sess: ActiveSession = {
     session,
     shareCode,
@@ -553,6 +592,8 @@ function installSeams(
     offlineSince: null,
     offlineTimer: null,
     undoGuardDispose: () => undoGuard.dispose(),
+    home,
+    joinWatcher,
   };
   sessions.set(ownerUid, sess);
   // Cross-window live-session claim: while this session is live, other
@@ -596,6 +637,9 @@ function installSeams(
       ),
       commentsSync.plugin,
       ...cursors.plugins(),
+      // Federation: a read-only admission blocks local edits (remote
+      // content still lands — see collab-federation.ts).
+      collabReadOnlyPlugin(() => session.readOnly),
     ],
     ownsUndo: () => true,
     canRedo: () => undoManager.canRedo(),
@@ -603,9 +647,9 @@ function installSeams(
     // undo transactions carry the binding meta (→ sync-origin) and would
     // otherwise sail through the read-mode lock and revert real edits.
     undo: (state, dispatch, view) =>
-      readModePlugin.getState(state)?.on ? true : undoGuard.undo(state, dispatch, view),
+      readModePlugin.getState(state)?.on || session.readOnly ? true : undoGuard.undo(state, dispatch, view),
     redo: (state, dispatch, view) =>
-      readModePlugin.getState(state)?.on ? true : undoGuard.redo(state, dispatch, view),
+      readModePlugin.getState(state)?.on || session.readOnly ? true : undoGuard.redo(state, dispatch, view),
   });
   return sess;
 }
@@ -630,6 +674,8 @@ function teardownSession(
   // window was no longer in (2026-09-01 review). stop() is idempotent, so
   // the End/Leave/close paths that already stopped are unaffected.
   sess.cursors.farewell(); // departure frame needs the stream — before stop()
+  sess.joinWatcher?.dispose();
+  if (roomOver && sess.home) forgetRoomPass(sess.session.roomId);
   if (sess.offlineTimer !== null) clearTimeout(sess.offlineTimer);
   sess.undoGuardDispose();
   clearNotice('collab-offline');
@@ -766,6 +812,37 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
       notifyCollabCopresenceChange();
     },
     onPresence: (bytes: Uint8Array) => getSess()?.cursors.applyRemote(bytes),
+    onJoinRequests: () => {
+      const sess = getSess();
+      if (!sess) return;
+      // Local room: re-list cross-server requests. Remote room: re-check
+      // our own admission (a change made while we were offline has no
+      // live frame to replay).
+      if (sess.joinWatcher) sess.joinWatcher.poke();
+      else if (sess.home) void syncRemoteAccess(deps, sess);
+    },
+    onAccessChanged: (mode: JoinMode) => {
+      const sess = getSess();
+      if (!sess) return;
+      refreshEditable(deps.getViewForUid?.(sess.ownerUid) ?? deps.getView());
+      showToast(
+        mode === 'read'
+          ? 'You can now only view this session (read-only)'
+          : 'You can now edit in this session',
+      );
+    },
+    onRevoked: () => {
+      const sess = getSess();
+      if (sess) forgetRoomPass(sess.session.roomId);
+      postNotice({
+        severity: 'warning',
+        title: 'Removed from the session',
+        body:
+          'The session no longer lets you in from your server. ' +
+          'This copy of the document is yours to keep.',
+        key: 'collab-revoked',
+      });
+    },
     onGuestAuthExpired: () => {
       // Terminal-cause notice for a guest whose (immutable, 7-day) pass
       // the relay refused: onEnded fires right after this and its toast
@@ -883,6 +960,10 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
  *  account" and "self-host, wrong token", so the message names both
  *  without asserting which. Any non-401 keeps its raw reason. */
 export function relayFailureMessage(err: unknown, opts: { initiating: boolean; verb: string }): string {
+  // Federation refusals carry their own codes — say what actually
+  // happened rather than "credentials rejected".
+  const fed = err instanceof RoomsError && err.code ? federationFailureMessage(err, 'that server') : null;
+  if (fed) return fed;
   if (err instanceof RoomsError && err.status === 401) {
     return opts.initiating
       ? 'Starting a collaboration session requires a relay. ' + RELAY_FIX_PATH
@@ -1010,8 +1091,9 @@ async function startSessionFlowInner(
     // a browser; the link carries the guest pass so an account-less
     // joiner works). Desktop keeps the bare code — its partners are
     // other installs, and the code paste-flow is muscle memory there.
+    const crossCode = settings.get('collabCrossServerCodes') ? crossServerShareCode(sess) : null;
     const inviteText = getElectronHost()
-      ? shareCode
+      ? (crossCode ?? shareCode)
       : buildJoinLink({ shareCode, guestPass: session.guestPass });
     const copied = await navigator.clipboard?.writeText(inviteText).then(
       () => true,
@@ -1174,6 +1256,38 @@ async function joinSessionWithCodeInner(
   if (await loadSessionRecord(decoded.roomId)) {
     return resumeSessionFlow(deps, decoded.roomId);
   }
+  // Federation: a room homed on ANOTHER server is reached through this
+  // app's relay, and only once someone there lets us in (Accept, or
+  // Accept read-only). A code naming our own relay is an ordinary join.
+  if (decoded.home) await refreshOwnRelayFederation();
+  const remoteHome = remoteHomeOf(decoded.home);
+  let joinClient: RoomsClient = client;
+  let joinMode: JoinMode = 'write';
+  if (remoteHome) {
+    const out = await requestRemoteAdmission({
+      roomId: decoded.roomId,
+      home: remoteHome,
+      keyBytes: decoded.keyBytes,
+    });
+    if (out.kind === 'cancelled') {
+      showToast('Join request cancelled');
+      return false;
+    }
+    if (out.kind === 'ended') {
+      showToast('That co-editing session has ended — ask for a fresh invite to start a new one.');
+      return true; // a dead room's invite is spent
+    }
+    if (out.kind === 'refused') {
+      showToast(out.message);
+      return false;
+    }
+    if (out.kind === 'error') {
+      showToast(relayFailureMessage(out.err, { initiating: false, verb: 'join' }));
+      return false;
+    }
+    joinClient = out.client;
+    joinMode = out.mode;
+  }
   // Resolved after newSessionDoc/installSeams; callbacks read it lazily.
   let sessRef: ActiveSession | null = null;
   try {
@@ -1182,9 +1296,10 @@ async function joinSessionWithCodeInner(
     try {
       session = await CollabSession.join({
         ...decoded,
-        client,
+        client: joinClient,
         callbacks: sessionCallbacks(deps, () => sessRef),
       });
+      session.setAccess(joinMode);
       session.guestPass = opts?.guestPass ?? null;
     } catch (err) {
       // An ENDED (410) or expired/GC'd (404) room is not an offline
@@ -1206,9 +1321,10 @@ async function joinSessionWithCodeInner(
         snapshot: blobs[0]!,
         increments: blobs.slice(1),
         lastSeq: pre.lastSeq,
-        client,
+        client: joinClient,
         callbacks: sessionCallbacks(deps, () => sessRef),
       });
+      session.setAccess(joinMode);
       joinedOffline = true;
     }
     // Create the fresh unsaved session doc — its uid is the session owner
@@ -1253,7 +1369,11 @@ async function joinSessionWithCodeInner(
     showToast(
       joinedOffline
         ? 'Joined from the prefetched copy — will sync when you reconnect'
-        : 'Joined the session',
+        : joinMode === 'read'
+          ? `Joined the session read-only (on ${relayLabel(remoteHome ?? '')})`
+          : remoteHome
+            ? `Joined the session on ${relayLabel(remoteHome)}`
+            : 'Joined the session',
     );
     deps.getView()?.focus();
     return true;
@@ -1342,6 +1462,36 @@ async function resumeSessionFlowInner(
     showToast('Saved session record is unreadable');
     return false;
   }
+  // Federation: a remote-homed room resumes through our relay with the
+  // stored admission (no new approval, and no network needed to start —
+  // the home relay still enforces it, and access changes arrive live).
+  // Without a stored admission, ask again.
+  if (decoded.home) await refreshOwnRelayFederation();
+  const remoteHome = remoteHomeOf(decoded.home);
+  let resumeClient: RoomsClient = client;
+  let resumeMode: JoinMode = 'write';
+  if (remoteHome) {
+    const stored = storedRoomPass(record.roomId, remoteHome);
+    const remote = stored?.mode ? remoteRoomClient(record.roomId, remoteHome) : null;
+    if (stored?.mode && remote) {
+      resumeClient = remote;
+      resumeMode = stored.mode;
+    } else {
+      const out = await requestRemoteAdmission({
+        roomId: record.roomId,
+        home: remoteHome,
+        keyBytes: decoded.keyBytes,
+      });
+      if (out.kind !== 'admitted') {
+        if (out.kind === 'refused') showToast(out.message);
+        else if (out.kind === 'error') showToast(relayFailureMessage(out.err, { initiating: false, verb: 'resume' }));
+        else if (out.kind === 'ended') showToast('That co-editing session has ended.');
+        return false;
+      }
+      resumeClient = out.client;
+      resumeMode = out.mode;
+    }
+  }
   let sessRef: ActiveSession | null = null;
   try {
     const session = await CollabSession.resume({
@@ -1352,9 +1502,10 @@ async function resumeSessionFlowInner(
       increments: record.increments,
       lastSeq: record.lastSeq,
       sentVersion: record.sentVersion,
-      client,
+      client: resumeClient,
       callbacks: sessionCallbacks(deps, () => sessRef),
     });
+    session.setAccess(resumeMode);
     session.guestPass = record.guestPass ?? null;
     // Host resume without a stored pass: re-mint so fresh invite links
     // stay possible (no-op 404 while the relay flip is off, and guests
@@ -1428,11 +1579,100 @@ export async function copyShareCodeFlow(): Promise<void> {
     showToast('This document has no active session');
     return;
   }
-  const ok = await navigator.clipboard?.writeText(sess.shareCode).then(
+  // A room on OUR relay copies the plain code every build reads (even
+  // when we joined it through a cross-server code naming our relay); a
+  // room on another server must keep naming its home.
+  const decoded = decodeShareCode(sess.shareCode);
+  let code = decoded?.home && !sess.home ? stripShareCodeHome(sess.shareCode) : sess.shareCode;
+  // Opted into cross-server codes (Settings): copy that form instead.
+  if (settings.get('collabCrossServerCodes')) {
+    await refreshOwnRelayFederation();
+    code = crossServerShareCode(sess) ?? code;
+  }
+  const ok = await navigator.clipboard?.writeText(code).then(
     () => true,
     () => false,
   );
   showToast(ok ? 'Share code copied' : 'Could not copy the share code');
+}
+
+/** The session's code naming its home relay (`cmshare2f.…@<home>`), for
+ *  someone on ANOTHER server — produced only on request, so plain codes
+ *  stay the default every build can join. Joiners from other servers
+ *  need a session participant's OK. */
+export function crossServerShareCode(sess: { shareCode: string; home: string | null }): string | null {
+  const self = selfRelayUrl();
+  const decoded = decodeShareCode(sess.shareCode);
+  if (!decoded || !self) return null;
+  return encodeShareCode(decoded.roomId, decoded.keyBytes, decoded.minVersion, sess.home ?? self);
+}
+
+export async function copyCrossServerShareCodeFlow(): Promise<void> {
+  const sess = actionSession();
+  if (!sess) {
+    showToast('This document has no active session');
+    return;
+  }
+  await refreshOwnRelayFederation();
+  const code = crossServerShareCode(sess);
+  if (!code) {
+    showToast('Your relay doesn’t connect to other servers, so there is no cross-server code.');
+    return;
+  }
+  const ok = await navigator.clipboard?.writeText(code).then(
+    () => true,
+    () => false,
+  );
+  showToast(
+    ok
+      ? 'Cross-server code copied — people on other servers will need your OK to join'
+      : 'Could not copy the code',
+  );
+}
+
+/** Prompt again for cross-server join requests put off with "Decide
+ *  later", then offer each admitted remote participant's access for
+ *  change (local rooms only — only the home server's participants
+ *  decide). */
+export async function reviewJoinRequestsFlow(): Promise<void> {
+  const sess = actionSession();
+  if (!sess) {
+    showToast('This document has no active session');
+    return;
+  }
+  if (sess.home) {
+    showToast('Only people on the session’s own server can let others in.');
+    return;
+  }
+  await refreshOwnRelayFederation();
+  if (!sess.joinWatcher || !selfRelayUrl()) {
+    showToast('Your relay doesn’t connect to other servers, so there are no join requests.');
+    return;
+  }
+  await sess.joinWatcher.review();
+}
+
+/** Re-check this REMOTE participant's admission (on every reconnect):
+ *  a mode change made while we were offline has no live frame to
+ *  replay. A revocation surfaces through the session's own refusals. */
+async function syncRemoteAccess(deps: CollabUiDeps, sess: ActiveSession): Promise<void> {
+  if (!sess.home) return;
+  const client = remoteRoomClient(sess.session.roomId, sess.home);
+  if (!client) return;
+  try {
+    const st = await client.joinStatus(sess.session.roomId);
+    if (st.state !== 'approved' || !st.mode) return;
+    noteRoomPassMode(sess.session.roomId, st.mode);
+    const current: JoinMode = sess.session.readOnly ? 'read' : 'write';
+    if (st.mode === current) return;
+    sess.session.setAccess(st.mode);
+    refreshEditable(deps.getViewForUid?.(sess.ownerUid) ?? deps.getView());
+    showToast(
+      st.mode === 'read' ? 'You can now only view this session (read-only)' : 'You can now edit in this session',
+    );
+  } catch {
+    /* offline — the next reconnect re-checks */
+  }
 }
 
 /** Re-publish the owner doc's display name to its live session's meta
@@ -1488,21 +1728,42 @@ async function sendInviteTo(
   shareCode: string,
   ownerUid: string | null | undefined,
 ): Promise<void> {
-  const item = buildRoomInviteItem({
-    shareCode,
-    title: sessionDocTitle(ownerUid),
-  });
+  const title = sessionDocTitle(ownerUid);
   // Movable-format rooms carry the higher floor: a pre-movable build
   // joining one couldn't read its containers at all, so it must get
   // the decline-with-update-toast instead of a broken join.
-  const format = actionSession()?.session.childrenFormat() ?? 'list';
-  const res = await pairingRelayClient.send(target.codes, item, {
-    via: target.via,
-    minReceiverVersion: roomInviteFloor(format),
-  });
-  if (res.fail === 0) showToast(`Invited ${target.label} ✓`);
-  else if (res.ok === 0) showToast(`Couldn't reach ${target.label}`);
-  else showToast(`Invited ${target.label} (${res.fail} failed)`);
+  const active = actionSession();
+  const format = active?.session.childrenFormat() ?? 'list';
+  // Federation: a recipient on the room's own server gets the plain code
+  // every build reads; anyone else needs the code naming the room's home
+  // (and will need a participant's OK to join).
+  await refreshOwnRelayFederation();
+  const self = selfRelayUrl();
+  const roomHome = active?.home ?? self;
+  const crossCode = active && self ? crossServerShareCode(active) : null;
+  const plainCode = active && !active.home ? stripShareCodeHome(shareCode) : shareCode;
+  const groups = new Map<string, string[]>();
+  for (const code of target.codes) {
+    const recipientRelay = pairingCodeRelay(code) ?? self;
+    const invite = crossCode && recipientRelay !== roomHome ? crossCode : plainCode;
+    groups.set(invite, [...(groups.get(invite) ?? []), code]);
+  }
+  let ok = 0;
+  let fail = 0;
+  let peerFail = 0;
+  for (const [invite, codes] of groups) {
+    const res = await pairingRelayClient.send(codes, buildRoomInviteItem({ shareCode: invite, title }), {
+      via: target.via,
+      minReceiverVersion: roomInviteFloor(format),
+    });
+    ok += res.ok;
+    fail += res.fail;
+    peerFail += res.peerFail ?? 0;
+  }
+  if (fail === 0) showToast(`Invited ${target.label} ✓`);
+  else if (peerFail === fail) showToast(`Your relay can't reach ${target.label}'s server`);
+  else if (ok === 0) showToast(`Couldn't reach ${target.label}`);
+  else showToast(`Invited ${target.label} (${fail} failed)`);
 }
 
 /** Send a session invite to the starred partner/group. */

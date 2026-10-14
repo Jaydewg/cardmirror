@@ -51,15 +51,62 @@ export const RELAY_CLIENT_ROUTING_HEADER = 'X-CardMirror-Routing';
 export const MOVABLE_ROOMS_MIN_VERSION = '1.0.0';
 
 /**
+ * Feature flags this BUILD carries (relay/FEDERATION.md §2.2): each
+ * lowercase letter is an independent feature, appended to the version
+ * as a final `-<letters>` segment — `1.15.0-f`. `f` = federation.
+ * Separate from the numeric version on purpose: upstream bumps the
+ * number, flags ride on top of whatever the number is.
+ */
+export const BUILD_VERSION_FLAGS = 'f';
+
+const PRERELEASE_LABELS = new Set(['alpha', 'beta', 'rc']);
+
+/** `'1.15.0-f'` → `{ core: '1.15.0', flags: 'f' }`. Flags are the final
+ *  `-<letters>` segment unless it is a prerelease label; they never
+ *  take part in ordering. Mirrors the relay's `split_version_flags`. */
+export function splitVersionFlags(v: string): { core: string; flags: string } {
+  const s = v.trim();
+  const m = /^(.+)-([a-z]{1,8})$/.exec(s);
+  if (m && !PRERELEASE_LABELS.has(m[2]!)) {
+    return { core: m[1]!, flags: [...new Set(m[2]!)].sort().join('') };
+  }
+  return { core: s, flags: '' };
+}
+
+/** The numeric version normalized to `X.Y.Z[-pre]` — what every relay's
+ *  version parser (old ones require three parts) understands. */
+export function numericVersion(v: string): string {
+  const { core } = splitVersionFlags(v);
+  const m = /^(\d+)\.(\d+)(?:\.(\d+))?(-[0-9A-Za-z.-]+)?$/.exec(core);
+  return m ? `${m[1]}.${m[2]}.${m[3] ?? '0'}${m[4] ?? ''}` : core;
+}
+
+/** This build's full version: numeric core + the build's flags (plus
+ *  any flags the manifest version already carries). */
+export function flaggedVersion(v: string): string {
+  const flags = [...new Set(splitVersionFlags(v).flags + BUILD_VERSION_FLAGS)].sort().join('');
+  return flags ? `${numericVersion(v)}-${flags}` : numericVersion(v);
+}
+
+/** The `X-CardMirror-Version` value for one relay: flags only when the
+ *  relay lists `client.versionFlags` (federating relays); every other
+ *  relay — old ones included — gets the plain numeric version its
+ *  parser and minimum-version gate already understand. */
+export function wireVersion(v: string, relayAcceptsFlags: boolean): string {
+  return relayAcceptsFlags ? flaggedVersion(v) : numericVersion(v);
+}
+
+/**
  * Prerelease-aware version compare for CardMirror's version shapes
- * (`X.Y.Z`, `X.Y.Z-alpha.N`, `-beta.N`, `-rc.N`). Returns <0, 0, >0.
+ * (`X.Y.Z`, `X.Y.Z-alpha.N`, `-beta.N`, `-rc.N`, optionally with
+ * feature flags `-f`, which are ignored). Returns <0, 0, >0.
  * A release outranks its own prereleases; unknown prerelease labels
  * rank with beta; unparseable strings rank lowest (a garbled version
  * must never unlock version-gated behavior).
  */
 export function compareAppVersions(a: string, b: string): number {
   const key = (v: string): number[] => {
-    const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(v.trim());
+    const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(numericVersion(v));
     if (!m) return [-1, 0, 0, 0, 0, 0];
     const core = [Number(m[1]), Number(m[2]), Number(m[3])];
     if (!m[4]) return [...core, 1, 0, 0];

@@ -34,7 +34,8 @@ import {
   collabSessionStarter,
 } from '../collab/collab-hooks.js';
 import { promptForText } from '../text-prompt.js';
-import { normalizePairingCode, looksLikePairingCode } from './pairing-ids.js';
+import { normalizePairingCode, looksLikePairingCode, pairingCodeRelay } from './pairing-ids.js';
+import { relayHost } from '../federation/address.js';
 import { recentSenders } from './inbox-store.js';
 import { setIcon } from '../icons';
 
@@ -602,6 +603,16 @@ export class SendPillController {
     name.textContent = label;
     name.title = label;
     row.appendChild(name);
+    // Federation: a contact on ANOTHER server shows which one (host only
+    // — the URL is the server's identity; nicknames aren't labels here).
+    const relay = codes.length === 1 ? pairingCodeRelay(codes[0]!) : null;
+    if (relay) {
+      const server = document.createElement('span');
+      server.className = 'pmd-send-target-server';
+      server.textContent = `· ${relayHost(relay)}`;
+      name.title = `${label} — on ${relay}`;
+      row.appendChild(server);
+    }
     this.targets.set(row, { codes, label: toastLabel, via });
     return row;
   }

@@ -7724,6 +7724,11 @@ body.pmd-steady-cursor .pmd-italic-caret,
   margin-right: auto;
 }
 
+/* Federation: "Your server: …" under the code, on its own line. */
+.pmd-pairing-owncode .pmd-pairing-owncode-server {
+  flex-basis: 100%;
+}
+
 .pmd-shrink-protection-pattern {
   flex: 1 1 6rem;
   min-width: 4rem;
@@ -8351,6 +8356,14 @@ body.pmd-steady-cursor .pmd-italic-caret,
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Federation: the server of a contact on another relay. */
+.pmd-send-target-server {
+  flex: none;
+  margin-left: 0.3rem;
+  font-size: 0.8em;
+  color: var(--pmd-c-text-muted);
 }
 .pmd-find-result-snippet-match {
   background-color: var(--pmd-c-find-match-strong);

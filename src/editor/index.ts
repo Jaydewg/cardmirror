@@ -1650,6 +1650,12 @@ const ribbonContext: RibbonContext = {
   collabCopyInviteLink: () => {
     void loadCollabUi().then((m) => m.copyInviteLinkFlow());
   },
+  collabCopyCrossServerCode: () => {
+    void loadCollabUi().then((m) => m.copyCrossServerShareCodeFlow());
+  },
+  collabReviewJoinRequests: () => {
+    void loadCollabUi().then((m) => m.reviewJoinRequestsFlow());
+  },
   collabInviteStarred: () => {
     void loadCollabUi().then((m) => m.inviteStarredFlow());
   },
@@ -4587,6 +4593,8 @@ const VIEWLESS_RIBBON_COMMANDS = new Set<AnyCommandId>([
   'collabJoinSession',
   'collabCopyShareCode',
   'collabCopyInviteLink',
+  'collabCopyCrossServerCode',
+  'collabReviewJoinRequests',
   'collabInviteStarred',
   'collabEndSession',
   'openDevConsole',
@@ -4619,6 +4627,8 @@ function runViewlessRibbon(id: AnyCommandId): void {
     case 'collabJoinSession': ribbonContext.collabJoinSession(); return;
     case 'collabCopyShareCode': ribbonContext.collabCopyShareCode(); return;
     case 'collabCopyInviteLink': ribbonContext.collabCopyInviteLink(); return;
+    case 'collabCopyCrossServerCode': ribbonContext.collabCopyCrossServerCode(); return;
+    case 'collabReviewJoinRequests': ribbonContext.collabReviewJoinRequests(); return;
     case 'collabInviteStarred': ribbonContext.collabInviteStarred(); return;
     case 'openDevConsole': ribbonContext.openDevConsole(); return;
     case 'collabEndSession': ribbonContext.collabEndSession(); return;

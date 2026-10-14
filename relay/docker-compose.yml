@@ -28,6 +28,13 @@ services:
       # (comma-separated owner/repo). Plugins are full-trust code —
       # curate deliberately. Defaults to the app's baked list.
       RELAY_PLUGIN_ALLOWLIST: ${RELAY_PLUGIN_ALLOWLIST:-shreerammodi/ebb,shreerammodi/cardmirror-ebb-plugin}
+      # Federation (optional; see README → Federation). Off unless
+      # RELAY_FEDERATION=on, which also needs RELAY_PUBLIC_URL.
+      RELAY_FEDERATION: ${RELAY_FEDERATION:-}
+      RELAY_PUBLIC_URL: ${RELAY_PUBLIC_URL:-}
+      RELAY_NICKNAME: ${RELAY_NICKNAME:-}
+      RELAY_FEDERATION_ALLOW: ${RELAY_FEDERATION_ALLOW:-}
+      RELAY_FEDERATION_DENY: ${RELAY_FEDERATION_DENY:-}
     ports:
       - "8410:8000"
 

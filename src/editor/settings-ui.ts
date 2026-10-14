@@ -53,7 +53,10 @@ import {
 } from './settings.js';
 import { CATEGORY_TABS, visibleCategoryTabs, type SettingsTarget } from './settings-categories.js';
 import { compileSettingsQuery } from './settings-search.js';
-import { generateGroupId, normalizePairingCode } from './pairing/pairing-ids.js';
+import { generateGroupId, normalizePairingCode, pairingCodeRelay } from './pairing/pairing-ids.js';
+import { ownCrossServerCode, ownRelayFederation, refreshOwnRelayFederation } from './federation/self.js';
+import { onRelayCapabilitiesChanged } from './federation/relay-capabilities.js';
+import { relayLabel } from './federation/address.js';
 import { inboxStore, recentSenders } from './pairing/inbox-store.js';
 import { regenerateOwnCode } from './pairing/pairing-wiring.js';
 import { isFontAvailable } from './font-detect.js';
@@ -3042,7 +3045,27 @@ function buildPairingOwnCodeEditor(): HTMLElement {
     })();
   });
 
-  wrap.append(codeEl, copyBtn, regenBtn);
+  // Federation (relay/FEDERATION.md §2.1): when this relay connects to
+  // other servers, offer the code that names it — `cmk1f.<key>@<relay>`
+  // — for people on OTHER servers. The plain code stays the default
+  // (every build reads it; same-server partners need nothing more).
+  const crossBtn = document.createElement('button');
+  crossBtn.type = 'button';
+  crossBtn.className = 'pmd-settings-btn';
+  crossBtn.textContent = 'Copy cross-server code';
+  crossBtn.title = 'For someone on a different server: your code plus the address of your server.';
+  crossBtn.addEventListener('click', () => {
+    const code = ownCrossServerCode(settings.get('pairingOwnCode'));
+    if (!code) return;
+    void navigator.clipboard?.writeText(code).then(
+      () => showToast('Cross-server pairing code copied'),
+      () => showToast('Could not copy code'),
+    );
+  });
+  const serverEl = document.createElement('div');
+  serverEl.className = 'pmd-settings-row-desc pmd-pairing-owncode-server';
+
+  wrap.append(codeEl, copyBtn, crossBtn, regenBtn, serverEl);
 
   function refresh(): void {
     const code = settings.get('pairingOwnCode');
@@ -3057,10 +3080,23 @@ function buildPairingOwnCodeEditor(): HTMLElement {
       copyBtn.disabled = true;
       regenBtn.textContent = 'Generate now';
     }
+    const fed = ownRelayFederation();
+    const cross = code && fed?.mailbox ? ownCrossServerCode(code) : null;
+    crossBtn.hidden = !cross;
+    // The nickname is the server's own claim — always shown with its host.
+    serverEl.hidden = !fed;
+    serverEl.textContent = fed
+      ? `Your server: ${relayLabel(fed.url, fed.nickname)} — connects to other servers`
+      : '';
   }
   refresh();
   const unsub = settings.subscribe(refresh);
-  registerRowCleanup(wrap, () => unsub());
+  const unsubCaps = onRelayCapabilitiesChanged(refresh);
+  void refreshOwnRelayFederation();
+  registerRowCleanup(wrap, () => {
+    unsub();
+    unsubCaps();
+  });
   return wrap;
 }
 
@@ -3169,7 +3205,7 @@ function buildPairingPartnersEditor(): HTMLElement {
       codeInput.type = 'text';
       codeInput.className = 'pmd-pairing-code';
       codeInput.value = partner.code;
-      codeInput.placeholder = 'paste their code (cmk1.…)';
+      codeInput.placeholder = 'paste their code (cmk1.… or cmk1f.…@server)';
       codeInput.spellcheck = false;
       codeInput.autocomplete = 'off';
       codeInput.addEventListener('change', () => {
