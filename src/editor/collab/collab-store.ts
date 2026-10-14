@@ -276,6 +276,10 @@ export async function saveRecentRoom(record: RecentRoomRecord): Promise<void> {
     ...record,
     docTitle: record.docTitle || prev?.docTitle || '',
     guestPass: record.guestPass ?? prev?.guestPass ?? null,
+    // Once this user hosted a room, a later participant-role write (a
+    // rejoin that predates host restoration) must not demote them — the
+    // host role is what lets them end it.
+    role: prev?.role === 'host' ? 'host' : record.role,
   };
   if (record.leftAt === undefined) delete next.leftAt;
   await put(RECENT, next);

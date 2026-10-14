@@ -41,11 +41,12 @@ import {
   setCollabShareCodeGetter,
   setCollabInviteLinkGetter,
   setCollabCrossServerCodeGetter,
+  setCollabClassicCodeGetter,
   collabRoomClaimKey,
 } from './collab-hooks.js';
 import { RoomsError } from './room-client.js';
 import { getElectronHost } from '../host/index.js';
-import { ensureBakedRelay, relayClient, relayClientWithGuestPass, endRoomOnRelay } from './collab-relay.js';
+import { ensureBakedRelay, relayBaseUrl, relayClient, relayClientWithGuestPass, endRoomOnRelay } from './collab-relay.js';
 import { buildJoinLink, parseJoinLinkHash } from './join-link.js';
 import { relayClient as pairingRelayClient } from '../pairing/relay-client.js';
 import { resolveStarredTarget } from '../pairing/send-to-starred.js';
@@ -68,6 +69,7 @@ import {
   deletePrefetch,
   saveRecentRoom,
   deleteRecentRoom,
+  loadRecentRoom,
 } from './collab-store.js';
 import { loadRejoinCandidates, pickSessionToJoin } from './rejoin-picker.js';
 import { importRoomKey, decryptBlob } from './collab-crypto.js';
@@ -90,6 +92,16 @@ import {
   type JoinRequestWatcher,
 } from '../federation/collab-federation.js';
 import { refreshOwnRelayFederation, selfRelayUrl } from '../federation/self.js';
+import {
+  markChipEnded,
+  renderChipSession,
+  setChipActivator,
+  type ChipLink,
+  type ChipPeer,
+  type ChipSessionModel,
+} from './session-chip.js';
+import { refreshSessionPanel, toggleSessionPanel } from './session-panel.js';
+import { ringClasses } from './session-chip.js';
 import { refusalWhy, relayLabel } from '../federation/address.js';
 import { pairingCodeRelay } from '../pairing/pairing-ids.js';
 import { compareAppVersions } from '../relay-protocol.js';
@@ -129,6 +141,8 @@ export interface CollabUiDeps {
    *  never stranded). Returns false to join in THIS window (starter open, or
    *  single-window / web). */
   spawnJoinWindow?(shareCode: string): boolean;
+  /** Go to the Home screen (the session panel's Leave / End). */
+  goHome?(): void;
 }
 
 /** One live co-editing session, owned by a single open doc (the map key). A
@@ -163,6 +177,11 @@ interface ActiveSession {
   /** Federation (local rooms only): prompts this participant to decide
    *  cross-server join requests. Null when not applicable. */
   joinWatcher: JoinRequestWatcher | null;
+  /** The relay refused our credentials mid-session (chip: red ring);
+   *  cleared once the stream connects again. */
+  authRejected: boolean;
+  /** The UI deps this session was installed with (panel Leave → Home). */
+  deps: CollabUiDeps;
 }
 
 const sessions = new Map<string, ActiveSession>();
@@ -218,7 +237,9 @@ setCollabCopresenceProvider((uid) => {
     // the flows also stamp lastStatus so an offline join/resume reads correctly.
     connected: sess.lastStatus?.connected ?? true,
     queued: sess.lastStatus?.queuedUpdates ?? 0,
-    peers: sess.cursors.presence().map((p) => ({ name: p.name, color: p.color, self: p.self })),
+    peers: chipPeers(sess),
+    // The status ring around your own dot in the slot footer.
+    ring: ringClasses(chipModel(sess)),
   };
 });
 
@@ -345,71 +366,160 @@ setCollabCrossServerCodeGetter(() => {
   const s = actionSession();
   return s ? crossServerShareCode(s) : null;
 });
+setCollabClassicCodeGetter(() => {
+  const s = actionSession();
+  return s ? stripShareCodeHome(s.shareCode) : null;
+});
 setCollabInviteLinkGetter(() => {
   const s = actionSession();
   if (!s) return null;
   return buildJoinLink({ shareCode: s.shareCode, guestPass: s.session.guestPass });
 });
 
-function chipEl(): HTMLElement | null {
-  return document.getElementById('collab-chip');
+/** The chip's model for a session: connection state for the status
+ *  ring (streaming / polling / reconnecting / credentials), queued edits,
+ *  read-only, remote, who's here, and joiners waiting. `status` (the
+ *  callers' fresh status) wins over the session's last stored one. */
+function chipModel(
+  sess: ActiveSession,
+  status?: { connected: boolean; queuedUpdates: number } | null,
+): ChipSessionModel {
+  const st = status ?? sess.lastStatus ?? { connected: true, queuedUpdates: 0 };
+  let link: ChipLink;
+  if (sess.authRejected) link = 'auth';
+  else if (st.connected) link = 'streaming';
+  else {
+    // Stream down: "polling" while the relay still answers plain requests
+    // (the session keeps posting and catching up), "reconnecting" when it
+    // doesn't.
+    const t = sess.session.debugState().transport;
+    const httpOk = t.lastOkAt > 0 && Date.now() - t.lastOkAt < 45_000 && t.lastOkAt >= t.lastErrorAt;
+    link = httpOk ? 'degraded' : 'reconnecting';
+  }
+  return {
+    link,
+    queued: st.queuedUpdates,
+    readOnly: sess.session.readOnly,
+    remote: sess.home !== null,
+    peers: chipPeers(sess),
+    pendingJoins: (sess.joinWatcher?.rows() ?? []).filter((r) => r.state === 'pending').length,
+  };
+}
+
+/** Who's here, for the chip / panel / footers: a partner whose announced
+ *  relay isn't the session's home joined from another server (their own
+ *  claim — the relay-verified list is the panel's "From other servers"). */
+function chipPeers(sess: ActiveSession): ChipPeer[] {
+  const roomHome = sess.home ?? selfRelayUrl();
+  return sess.cursors.presence().map((p) => {
+    const remote = !p.self && !!p.relay && !!roomHome && p.relay !== roomHome;
+    return {
+      name: p.name,
+      color: p.color,
+      self: p.self,
+      ...(remote ? { remote: true, server: relayLabel(p.relay!) } : {}),
+      ...(p.readOnly && !p.self ? { readOnly: true } : {}),
+    };
+  });
 }
 
 function updateChip(status: { connected: boolean; queuedUpdates: number } | null): void {
-  const chip = chipEl();
-  if (!chip) return;
-  if (!status) {
-    chip.hidden = true;
-    chip.replaceChildren();
+  const sess = chipSession();
+  renderChipSession(sess ? chipModel(sess, status) : null);
+  refreshSessionPanel();
+}
+
+/** Re-render the chip (and an open panel) from live state — the presence
+ *  timer's tick: peers join/leave, polling ↔ reconnecting ages out. */
+function refreshPresenceDots(): void {
+  updateChip(null);
+}
+
+/** Clicking the session chip: the expanded panel for that session. */
+setChipActivator((anchor) => {
+  const sess = chipSession();
+  if (!sess) return;
+  toggleSessionPanel(anchor, {
+    model: () => {
+      const s2 = sessions.get(sess.ownerUid);
+      return s2 ? chipModel(s2) : null;
+    },
+    role: sess.session.role,
+    homeLabel: relayLabel(sess.home ?? selfRelayUrl() ?? relayBaseUrl()),
+    watcher: sess.joinWatcher,
+    codes: () => ({
+      current: defaultCopyCode(sess),
+      classic: stripShareCodeHome(sess.shareCode),
+      cross: crossServerShareCode(sess),
+    }),
+    copy: (kind) => {
+      if (kind === 'current') {
+        void copyShareCodeFlowFor(sess);
+        return;
+      }
+      const code = kind === 'classic' ? stripShareCodeHome(sess.shareCode) : crossServerShareCode(sess);
+      if (!code) return;
+      const done =
+        kind === 'cross'
+          ? 'Cross-server code copied — people on other servers will need your OK to join'
+          : sess.home
+            ? `Classic code copied — it works only for people on ${relayLabel(sess.home)}`
+            : 'Classic code copied — works with every CardMirror version on your server';
+      void navigator.clipboard?.writeText(code).then(
+        () => showToast(done),
+        () => showToast('Could not copy the code'),
+      );
+    },
+    leave: () => void leaveToHome(sess),
+    // Same-server participants trust each other (and the relay lets any of
+    // them end the room): the way out when the host is gone / role lost.
+    ...(sess.session.role !== 'host' && !sess.home ? { endForEveryone: () => void endForEveryoneToHome(sess) } : {}),
+  });
+});
+
+/** Panel Leave ▾ → "End for everyone…" (a participant on the session's
+ *  own server): confirmed, then the same end as a host's — tombstone the
+ *  room, everyone keeps their copy — and Home. */
+async function endForEveryoneToHome(sess: ActiveSession): Promise<void> {
+  const ok = await confirmDialog(
+    'You didn’t start this session, but you can end it if whoever did is gone. ' +
+      'Everyone keeps their copy; no one can sync or rejoin.',
+    { title: 'End this session for everyone?', okLabel: 'End for everyone' },
+  );
+  if (!ok || !sessions.has(sess.ownerUid)) return;
+  sess.cursors.farewell();
+  await sess.session.stop();
+  try {
+    await endRoomOnRelay(sess.session.roomId);
+  } catch (err) {
+    sess.session.start();
+    showToast(`Couldn't end the session — check your connection and try again. (${err instanceof Error ? err.message : err})`);
     return;
   }
-  chip.hidden = false;
-  const text = status.connected
-    ? status.queuedUpdates > 0
-      ? `Session: sending ${status.queuedUpdates}…`
-      : 'Session: synced'
-    : status.queuedUpdates > 0
-      ? `Session: offline — ${status.queuedUpdates} queued`
-      : 'Session: offline';
-  // Chip = a text label + a presence-dots strip (kept as stable children so
-  // the dots can refresh on their own timer without rebuilding the label).
-  let label = chip.querySelector('.pmd-collab-chip-label');
-  let dots = chip.querySelector('.pmd-collab-chip-dots');
-  if (!(label instanceof HTMLElement) || !(dots instanceof HTMLElement)) {
-    chip.replaceChildren();
-    label = document.createElement('span');
-    label.className = 'pmd-collab-chip-label';
-    chip.appendChild(label);
-    dots = document.createElement('span');
-    dots.className = 'pmd-collab-chip-dots';
-    chip.appendChild(dots);
-  }
-  label.textContent = text;
-  renderPresenceDots(dots as HTMLElement);
+  await teardownSession(sess, false, /* roomOver */ true);
+  refreshChipForFocus();
+  if (sess.deps.refreshPluginsForUid) sess.deps.refreshPluginsForUid(sess.ownerUid);
+  else sess.deps.refreshPlugins();
+  showToast('Session ended for everyone — your copy is kept');
+  sess.deps.goHome?.();
 }
 
-/** One colored dot per person in the room, hover for the name. */
-function renderPresenceDots(container: HTMLElement): void {
-  const peers = chipSession()?.cursors.presence() ?? [];
-  // Skip the DOM rebuild when the roster is unchanged (the 3s presence
-  // timer and every chip update land here).
-  const sig = peers.map((p) => `${p.peer}\u0000${p.name}\u0000${p.color}\u0000${p.self ? 1 : 0}`).join('\n');
-  if (container.dataset['sig'] === sig) return;
-  container.dataset['sig'] = sig;
-  container.replaceChildren();
-  for (const p of peers) {
-    const dot = document.createElement('span');
-    dot.className = 'pmd-collab-presence-dot' + (p.self ? ' pmd-collab-presence-dot-self' : '');
-    dot.style.background = p.color;
-    dot.title = p.self ? `${p.name} (you)` : p.name;
-    container.appendChild(dot);
+/** Panel "Leave session" / "End session": leave (participant) or end
+ *  for everyone (host, confirmed), then go to the Home screen. */
+async function leaveToHome(sess: ActiveSession): Promise<void> {
+  if (sess.session.role === 'host') {
+    const ok = await confirmDialog(
+      'Everyone in the session keeps their copy, but no one can sync or rejoin.',
+      { title: 'End this co-editing session for everyone?', okLabel: 'End session' },
+    );
+    if (!ok) return;
   }
-}
-
-/** Re-render just the dots (peers join/leave/expire between chip updates). */
-function refreshPresenceDots(): void {
-  const dots = chipEl()?.querySelector('.pmd-collab-chip-dots');
-  if (dots instanceof HTMLElement) renderPresenceDots(dots);
+  if (!sessions.has(sess.ownerUid)) return;
+  if (!(await endOrLeaveSession(sess))) return; // couldn't end — kept live; its toast explains
+  if (sess.deps.refreshPluginsForUid) sess.deps.refreshPluginsForUid(sess.ownerUid);
+  else sess.deps.refreshPlugins();
+  showToast(sess.session.role === 'host' ? 'Session ended — your copy is kept' : 'Left the session — your copy is kept');
+  sess.deps.goHome?.();
 }
 
 let presenceTimer: ReturnType<typeof setInterval> | null = null;
@@ -548,7 +658,12 @@ function installSeams(
     undefined,
     { onFailure: (n) => noteWriterFailure('collab-history-failing', 'session history', n) },
   );
-  const cursors = installCursorPresence(session, ownerView);
+  // Roster identity: the relay this app joined through (others compare it
+  // with the session's home for the other-server marker) + read-only.
+  const cursors = installCursorPresence(session, ownerView, () => ({
+    relay: selfRelayUrl(),
+    readOnly: session.readOnly,
+  }));
   const unloadCleanup = installUnloadHooks(session, cursors);
   // One shared timer refreshes the focused session's chip dots AND every slot
   // footer's copresence (peers join/leave/expire between status updates).
@@ -602,8 +717,14 @@ function installSeams(
     undoGuardDispose: () => undoGuard.dispose(),
     home,
     joinWatcher,
+    authRejected: false,
+    deps,
   };
   sessions.set(ownerUid, sess);
+  // A waiting joiner changes the chip's badge.
+  joinWatcher?.onChange(() => {
+    if (isChipSession(ownerUid)) updateChip(null);
+  });
   // Cross-window live-session claim: while this session is live, other
   // windows' Sessions rows (and join-by-code) refuse the same room and focus
   // this window instead — same registry as the duplicate-file-open guard.
@@ -780,6 +901,7 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
       // Reconnected → re-announce presence (partners saw us absent until
       // the 15s keepalive otherwise).
       if (s.connected && !sess.lastStatus?.connected) sess.cursors.rebroadcast();
+      if (s.connected) sess.authRejected = false;
       // Prolonged-disconnect notice (see offlineNoticeMs).
       if (!s.connected && sess.lastStatus?.connected !== false) {
         sess.offlineSince = Date.now();
@@ -832,6 +954,7 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
     onAccessChanged: (mode: JoinMode) => {
       const sess = getSess();
       if (!sess) return;
+      sess.cursors.announce(); // partners' rosters learn the new access
       refreshEditable(deps.getViewForUid?.(sess.ownerUid) ?? deps.getView());
       showToast(
         mode === 'read'
@@ -859,13 +982,18 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
         severity: 'error',
         title: 'Session invite expired',
         body:
-          'Your invite to this session has expired, so it can’t reconnect. ' +
+          'Your invite to this session has expired, so it can’t auto-reconnect. ' +
           'Ask the host for a fresh invite link if the session is still going. ' +
-          'This copy of the document is yours to keep.',
+          'You may save this copy of the document.',
         key: 'collab-guest-expired',
       });
     },
     onAuthRejected: () => {
+      const rejected = getSess();
+      if (rejected) {
+        rejected.authRejected = true;
+        if (isChipSession(rejected.ownerUid)) updateChip(null);
+      }
       // Mid-session 401/403 — without this the endless retry loop reads
       // exactly like being offline (audit find, 2026-07-10). Fired once
       // per session by CollabSession.
@@ -924,8 +1052,10 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
       const sess = getSess();
       if (!sess || !sessions.has(sess.ownerUid)) return;
       const wasHost = sess.session.role === 'host';
+      const wasChip = isChipSession(sess.ownerUid);
       void teardownSession(sess, false, /* roomOver */ true).catch((e) => surfaceError('collab teardown', e));
       refreshChipForFocus(); // repaint from live truth (a stale snapshot left ghost chips — field find, 2026-08-12)
+      if (wasChip) markChipEnded(); // red "Session ended" bar until dismissed
       // Rebuild the OWNER doc's plugin stack — refreshing the focused view
       // left an unfocused owner pane holding dead session plugins (audit
       // find, 2026-07-10).
@@ -940,7 +1070,7 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
     onFull: () => {
       const sess = getSess();
       if (!sess || !sessions.has(sess.ownerUid)) {
-        showToast('That session is full (10 participants)');
+        showToast('That session is full -- maximum number of coeditors reached');
         return;
       }
       // The join/resume half-succeeded over REST before the stream's 409:
@@ -953,7 +1083,7 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
       if (deps.refreshPluginsForUid) deps.refreshPluginsForUid(sess.ownerUid);
       else deps.refreshPlugins();
       showToast(
-        'The session is full (10 people) — your copy is saved; rejoin from the ' +
+        'The session is full. Your copy is saved; rejoin from the ' +
           'Sessions list when someone leaves.',
       );
     },
@@ -1244,7 +1374,7 @@ async function joinSessionWithCodeInner(
   }
   const decoded = decodeShareCode(code);
   if (!decoded) {
-    showToast('That does not look like a share code');
+    showToast('That does not look like a share code. Check that it is correct.');
     return false;
   }
   // v2 codes carry the room's compatibility floor. (Old builds never
@@ -1296,6 +1426,14 @@ async function joinSessionWithCodeInner(
     joinClient = out.client;
     joinMode = out.mode;
   }
+  // Rejoining a session you started and then LEFT (Leave / close cleared
+  // its saved record; recent rooms remembers you hosted it and marks when
+  // you left): stay the host — coming back as a participant left no one
+  // able to end it. While your hosting session is still live (no leftAt),
+  // another window joining it is a participant, as before.
+  const recent = await loadRecentRoom(decoded.roomId).catch(() => null);
+  const rejoinRole: 'host' | 'participant' =
+    recent?.role === 'host' && recent.leftAt !== undefined && !remoteHome ? 'host' : 'participant';
   // Resolved after newSessionDoc/installSeams; callbacks read it lazily.
   let sessRef: ActiveSession | null = null;
   try {
@@ -1306,6 +1444,7 @@ async function joinSessionWithCodeInner(
         ...decoded,
         client: joinClient,
         callbacks: sessionCallbacks(deps, () => sessRef),
+        role: rejoinRole,
       });
       session.setAccess(joinMode);
       session.guestPass = opts?.guestPass ?? null;
@@ -1325,7 +1464,7 @@ async function joinSessionWithCodeInner(
       session = await CollabSession.resume({
         roomId: decoded.roomId,
         keyBytes: decoded.keyBytes,
-        role: 'participant',
+        role: rejoinRole,
         snapshot: blobs[0]!,
         increments: blobs.slice(1),
         lastSeq: pre.lastSeq,
@@ -1587,6 +1726,10 @@ export async function copyShareCodeFlow(): Promise<void> {
     showToast('This document has no active session');
     return;
   }
+  await copyShareCodeFlowFor(sess);
+}
+
+async function copyShareCodeFlowFor(sess: ActiveSession): Promise<void> {
   if (settings.get('collabCrossServerCodes')) await refreshOwnRelayFederation();
   const code = defaultCopyCode(sess);
   const ok = await navigator.clipboard?.writeText(code).then(

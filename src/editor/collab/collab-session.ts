@@ -451,6 +451,10 @@ export class CollabSession {
     stallMs?: number;
     maxBackoffMs?: number;
     updateByteLimit?: number;
+    /** Rejoining a session THIS user started (the recent-rooms record says
+     *  host): keep the host role — End for everyone, compaction — instead
+     *  of coming back as a participant who can only leave. */
+    role?: 'host' | 'participant';
   }): Promise<CollabSession> {
     const key = await importRoomKey(opts.keyBytes);
     const loroDoc = new LoroDoc();
@@ -458,7 +462,7 @@ export class CollabSession {
     const session = new CollabSession({
       ...opts,
       key,
-      role: 'participant',
+      role: opts.role ?? 'participant',
       loroDoc,
     });
     // Strict initial sync: steady-state catchUp() swallows network

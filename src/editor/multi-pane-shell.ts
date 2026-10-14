@@ -1228,10 +1228,21 @@ class Slot {
     dots.className = 'pmd-collab-chip-dots';
     for (const p of cp.peers) {
       const dot = document.createElement('span');
-      dot.className = 'pmd-collab-presence-dot' + (p.self ? ' pmd-collab-presence-dot-self' : '');
+      dot.className =
+        'pmd-collab-presence-dot' +
+        (p.self ? ' pmd-collab-presence-dot-self' : '') +
+        (p.remote ? ' pmd-collab-presence-dot-remote' : '');
       dot.style.background = p.color;
-      dot.title = p.self ? `${p.name} (you)` : p.name;
-      dots.appendChild(dot);
+      dot.title = p.self ? `${p.name} (you)` : p.remote && p.server ? `${p.name} — from ${p.server}` : p.name;
+      if (p.self && cp.ring) {
+        // Your dot keeps its color; the ring around it is the status.
+        const ring = document.createElement('span');
+        ring.className = cp.ring;
+        ring.appendChild(dot);
+        dots.appendChild(ring);
+      } else {
+        dots.appendChild(dot);
+      }
     }
     this.copresenceEl.replaceChildren(labelEl, dots);
   }

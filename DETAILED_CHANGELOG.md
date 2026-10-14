@@ -291,6 +291,45 @@ senders with their server and matches partners by identity.
   *Your server: Nickname (host)* and a *Copy cross-server code* button
   when the relay federates.
 
+### Added: session chip, status ring, and session panel
+
+`collab/session-chip.ts` (always loaded) owns `#collab-chip` in every
+state; `collab/session-panel.ts` (collab chunk) is the expanded view.
+Your dot keeps its presence color and shrinks inside a status ring:
+streaming = blue with an outward ripple; polling (stream down, relay
+answered a request within 45 s) = yellow; reconnecting = pulsing grey;
+credentials rejected = red dotted; queued edits = the ring turns
+(dashed); read-only = a yellow pip; joined from another server = rounded
+square. A pulsing badge counts cross-server joiners waiting. "Session
+ended" replaces the label as a red bar until clicked or the next session;
+with no session the chip reads "Connected to <server>" / "Server
+unreachable" (relay-capabilities now records `reachable`). Animations use
+transform/opacity only and stop under prefers-reduced-motion. Clicking
+the chip opens the panel: state + where the session is hosted, who's
+here, waiting joiners (Accept / Read-only / Decline / Later — deferring
+keeps them listed), admitted remote participants (Allow editing / Make
+read-only / Remove), and Copy code / Cross-server code / Leave or End
+session → Home (new `CollabUiDeps.goHome`). The join watcher exposes
+`rows()` / `onChange` / `decide` / `defer` for it. The three-pane footers
+draw the same ring (`CollabCopresence.ring`). No server changes.
+
+### Fixed: partners vanished from "who's here" without a cursor
+
+The roster came from the cursor ephemeral store, so anyone without a
+selection (editor unfocused, cursor removed, or cursors turned off)
+disappeared — and a remote participant, who has no relay-side list to
+fall back on, saw the home side's people only while their cursors
+showed. New presence frame `0x03` (roster JSON `{peer, name, relay?,
+ro?}` / `{peer, leave}`), sent every 15 s, on reconnect and on access
+changes, independent of the cursor and of the cursors setting; entries
+expire after 45 s like cursors. `presence()` merges roster + cursor store
+(older builds still appear through their cursors; they ignore 0x03).
+`relay` (the sender's own claim) drives the other-server marker: a
+partner whose relay isn't the session's home is a rounded square, with
+the server in the tooltip. `ro` also fixes a read-only bug: a read-only
+participant could win the repair-leader election and then be unable to
+repair; `visiblePeers()` now excludes read-only peers.
+
 ### Fixed: relay failed to start on SQLAlchemy 2.1
 
 SQLAlchemy 2.1 maps a bare `postgresql://` (and hosts' legacy

@@ -1492,6 +1492,7 @@ setCollabSessionJoinPrompt(() => {
 setCommentIdSessionResolver(() => collabPluginSourceFor(activeDocIdentity().sessionUid) != null);
 const collabDeps = {
   getView: () => view,
+  goHome: () => ribbonContext.goHome(),
   // The uid of the doc a session is being started/joined for = the focused
   // doc's uid. Captured at install so the binding attaches only to that view.
   getOwnerUid: () => activeDocIdentity().sessionUid,
@@ -1586,6 +1587,7 @@ function makeMultiPaneSessionDeps(existingUid?: string) {
   const viewFor = (u: string | null): EditorView | null =>
     u ? getSpeechDocResolver().viewForUid(u) : null;
   return {
+    goHome: () => ribbonContext.goHome(),
     // Before the session doc exists this is only consulted by guards; the
     // focused pane's view is fine (and null is allowed — the flows create
     // their doc via newSessionDoc).

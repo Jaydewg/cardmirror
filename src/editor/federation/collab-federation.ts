@@ -339,9 +339,31 @@ function waitingDialog(title: string, message: string): {
 
 // ── Home side: prompt for pending requests ──
 
+/** One cross-server request or admitted remote participant, as the
+ *  session panel shows it. */
+export interface JoinRow {
+  requestId: string;
+  /** The joiner's self-declared name ('' if none / unreadable). */
+  name: string;
+  /** Relay-verified server, labelled (nickname always with its host). */
+  server: string;
+  state: 'pending' | 'approved';
+  mode: JoinMode | null;
+  /** Put off with "Later" / "Decide later" (pending only). */
+  deferred: boolean;
+}
+
 export interface JoinRequestWatcher {
   /** Re-list and prompt (the stream's `j` nudge; every reconnect). */
   poke(): void;
+  /** The latest listing (pending first), for the session panel. */
+  rows(): JoinRow[];
+  /** Called whenever rows() may have changed. */
+  onChange(fn: () => void): () => void;
+  /** Decide from the panel (closes any open prompt for that request). */
+  decide(requestId: string, decision: JoinMode | 'deny' | 'revoke'): Promise<void>;
+  /** "Later": stop prompting for it; it stays listed (and in the badge). */
+  defer(requestId: string): void;
   /** Prompt again for requests the user put off ("Decide later"),
    *  then offer each admitted remote participant's access for change
    *  (read-only ↔ editing, or remove). Resolves when done. */
@@ -363,6 +385,12 @@ export function createJoinRequestWatcher(opts: {
   const deferred = new Set<string>();
   let open: { requestId: string; abort: AbortController } | null = null;
   let keyP: Promise<CryptoKey> | null = null;
+  const names = new Map<string, string>();
+  let rows: JoinRow[] = [];
+  const listeners = new Set<() => void>();
+  const changed = (): void => {
+    for (const fn of listeners) fn();
+  };
 
   const introName = async (blob: Uint8Array): Promise<string> => {
     try {
@@ -385,8 +413,8 @@ export function createJoinRequestWatcher(opts: {
       message: `${name || 'Someone'} wants to join from another server`,
       detail:
         `${name ? `"${name}"` : 'A participant'} on ${server} is asking to join` +
-        `${title ? ` "${title}"` : ' this session'}. People on other servers need your OK. ` +
-        'Read-only lets them follow along without editing.',
+        `${title ? ` "${title}"` : ' this session'}. People on other servers need your permission. ` +
+        '(Selecting Read-only lets them follow along without editing.)',
       choices: [
         { value: 'write', label: 'Accept', primary: true },
         { value: 'read', label: 'Accept (read-only)' },
@@ -398,7 +426,11 @@ export function createJoinRequestWatcher(opts: {
     open = null;
     if (disposed) return;
     if (choice === null) {
-      if (!abort.signal.aborted) deferred.add(req.requestId);
+      if (!abort.signal.aborted) {
+        deferred.add(req.requestId);
+        rows = rows.map((r) => (r.requestId === req.requestId ? { ...r, deferred: true } : r));
+        changed();
+      }
       return;
     }
     try {
@@ -447,6 +479,23 @@ export function createJoinRequestWatcher(opts: {
           return; // offline / older relay — the next nudge retries
         }
         if (disposed) return;
+        for (const r of list) {
+          if (!names.has(r.requestId)) names.set(r.requestId, await introName(r.blob));
+        }
+        rows = list
+          .filter((r): r is JoinRequestListing & { state: 'pending' | 'approved' } =>
+            r.state === 'pending' || r.state === 'approved',
+          )
+          .sort((a, b) => (a.state === b.state ? a.createdAt - b.createdAt : a.state === 'pending' ? -1 : 1))
+          .map((r) => ({
+            requestId: r.requestId,
+            name: names.get(r.requestId) ?? '',
+            server: relayLabel(r.origin, r.originNickname),
+            state: r.state,
+            mode: r.mode,
+            deferred: deferred.has(r.requestId),
+          }));
+        changed();
         const pending = list.filter((r) => r.state === 'pending');
         const ids = new Set(pending.map((r) => r.requestId));
         if (open && !ids.has(open.requestId)) open.abort.abort();
@@ -460,6 +509,26 @@ export function createJoinRequestWatcher(opts: {
 
   return {
     poke: () => void refresh(),
+    rows: () => rows,
+    onChange: (fn) => {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+    decide: async (requestId, decision) => {
+      if (open?.requestId === requestId) open.abort.abort();
+      try {
+        await opts.client.decideJoinRequest(opts.roomId, requestId, decision);
+      } catch {
+        /* decided elsewhere / gone — the re-list shows the truth */
+      }
+      await refresh();
+    },
+    defer: (requestId) => {
+      deferred.add(requestId);
+      if (open?.requestId === requestId) open.abort.abort();
+      rows = rows.map((r) => (r.requestId === requestId ? { ...r, deferred: true } : r));
+      changed();
+    },
     review: async () => {
       deferred.clear();
       await refresh();
@@ -500,6 +569,7 @@ export function createJoinRequestWatcher(opts: {
     },
     dispose: () => {
       disposed = true;
+      listeners.clear();
       open?.abort.abort();
     },
   };

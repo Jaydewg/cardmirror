@@ -14,6 +14,16 @@
  *         advisory always: the partner maps them through local edits
  *         and repaints on each re-broadcast (every LEASE_MS while any
  *         lease is held, cleared when none are).
+ *   0x03  roster JSON — "I'm in this session" ({peer, name, relay?, ro?},
+ *         or {peer, leave}). Independent of the cursor: the "who's here"
+ *         dots used to come from the cursor store alone, so a partner
+ *         with no selection (editor unfocused, cursors off) vanished.
+ *         Sent every KEEPALIVE_MS and on reconnect; entries expire like
+ *         cursors. `relay` = the relay the sender joined through (for
+ *         the other-server marker — the sender's own claim), `ro` = it
+ *         was admitted read-only (it can't run repairs, so the repair
+ *         leader election skips it). Older builds ignore the type; they
+ *         still appear through their cursors.
  *
  * Throttling: local cursor updates coalesce to ≤1 frame per
  * CURSOR_THROTTLE_MS (trailing edge, so the final resting position
@@ -50,6 +60,7 @@ function defaultPresenceName(): string {
 
 const FRAME_CURSOR = 0x01;
 const FRAME_LEASE = 0x02;
+const FRAME_ROSTER = 0x03;
 // 250ms: a cursor that repaints four times a second still reads as live
 // (the trailing edge sends the final resting position), and presence
 // egress scales linearly with this while a typist holds the throttle
@@ -175,6 +186,30 @@ function frame(type: number, payload: Uint8Array): Uint8Array {
   return out;
 }
 
+interface RosterAd {
+  v: 1;
+  peer: string;
+  name?: string;
+  /** The relay the sender joined through (canonical URL), if known. */
+  relay?: string;
+  /** Admitted read-only. */
+  ro?: boolean;
+  /** Departure. */
+  leave?: boolean;
+}
+
+/** One person in the room, for the "who's here" dots and the panel. */
+export interface PresencePeer {
+  peer: string;
+  name: string;
+  color: string;
+  self: boolean;
+  /** The relay they joined through (self-declared; null = unknown —
+   *  an older build, or not announced yet). */
+  relay: string | null;
+  readOnly: boolean;
+}
+
 interface LeaseAd {
   /** Sender's loro peer id — the receiver drops its own echoes (the
    *  relay's presence fan-out includes the poster's own stream). */
@@ -196,27 +231,38 @@ export interface CursorsHandle {
   plugins(): Plugin[];
   /** Feed an incoming (decrypted) presence frame. */
   applyRemote(bytes: Uint8Array): void;
-  /** Peer ids currently visible in the presence store (self excluded).
-   *  Best-effort: with cursors disabled nothing broadcasts, so this
-   *  goes empty — callers must degrade safely (the repair leader gate
+  /** Peer ids of partners who can run repairs (self excluded): everyone
+   *  on the roster or in the cursor store, minus read-only admissions.
+   *  Best-effort — callers must degrade safely (the repair leader gate
    *  falls back to everyone-repairs, which idempotence makes safe). */
   visiblePeers(): string[];
-  /** Everyone in the room right now — self first, then visible remotes —
-   *  each with a display name + dot color, for the "who's here" presence
-   *  dots. Remotes only appear once they've broadcast presence, so the
-   *  remote list is populated only while cursors are enabled
-   *  (`collabShowCursors`); self is always included. */
-  presence(): { peer: string; name: string; color: string; self: boolean }[];
+  /** Everyone in the room right now — self first, then partners from the
+   *  roster (whether or not their cursor is showing) plus any older
+   *  builds visible only through their cursors. */
+  presence(): PresencePeer[];
+  /** Re-announce this peer's roster entry now (e.g. after an access
+   *  change, so read-only status is current for partners). */
+  announce(): void;
   dispose(): void;
 }
 
 export function installCursorPresence(
   session: CollabSession,
   getView: () => EditorView | null,
+  /** What this peer announces on the roster beyond its name: the relay
+   *  it joined through, and whether it's read-only. Read per announce. */
+  identity: () => { relay: string | null; readOnly: boolean } = () => ({ relay: null, readOnly: false }),
 ): CursorsHandle {
   const peerId = session.loroDoc.peerIdStr as PeerID;
   const store = new CoalescingCursorStore(peerId, STORE_TIMEOUT_MS);
   let disposed = false;
+  /** Partners who announced themselves (see FRAME_ROSTER). */
+  const roster = new Map<string, { name: string; relay: string | null; ro: boolean; at: number }>();
+  const liveRoster = (): typeof roster => {
+    const cutoff = Date.now() - STORE_TIMEOUT_MS;
+    for (const [p, e] of roster) if (e.at < cutoff) roster.delete(p);
+    return roster;
+  };
 
   // --- outbound: cursor bytes, throttled trailing-edge ---
   let sendTimer: ReturnType<typeof setTimeout> | null = null;
@@ -267,6 +313,21 @@ export function installCursorPresence(
     name: settings.get('pairingDisplayName').trim() || defaultPresenceName(),
     color: peerColor(peerId),
   };
+
+  // Roster: announced regardless of the cursor (and of the cursors
+  // setting, which governs the cursor overlay — being IN the session
+  // isn't something to hide from its other participants).
+  const sendRoster = (leave = false, opts?: { keepalive?: boolean }): void => {
+    if (disposed) return;
+    const id = identity();
+    const ad: RosterAd = leave
+      ? { v: 1, peer: peerId, leave: true }
+      : { v: 1, peer: peerId, name: user.name, ...(id.relay ? { relay: id.relay } : {}), ...(id.readOnly ? { ro: true } : {}) };
+    void session.sendPresence(frame(FRAME_ROSTER, new TextEncoder().encode(JSON.stringify(ad))), opts);
+  };
+  const rosterTimer = setInterval(() => sendRoster(), KEEPALIVE_MS);
+  // First announcement once the session is up (install runs before start).
+  const rosterKickoff = setTimeout(() => sendRoster(), 0);
 
   // --- inbound cursor coalescing buffer (see CURSOR_RECEIVE_COALESCE_MS) ---
   let cursorBuf: Uint8Array[] = [];
@@ -377,29 +438,50 @@ export function installCursorPresence(
       ];
     },
     visiblePeers(): string[] {
+      const ids = new Set<string>();
       try {
-        return Object.keys(store.getAllStates()).filter((p) => p !== peerId);
+        for (const p of Object.keys(store.getAllStates())) ids.add(p);
       } catch {
-        return [];
+        /* store timing — roster alone */
       }
+      for (const [p, e] of liveRoster()) {
+        if (e.ro) ids.delete(p); // read-only admissions can't run repairs
+        else ids.add(p);
+      }
+      ids.delete(peerId);
+      return [...ids];
     },
-    presence(): { peer: string; name: string; color: string; self: boolean }[] {
-      const out = [{ peer: String(peerId), name: user.name, color: user.color, self: true }];
+    presence(): PresencePeer[] {
+      const id = identity();
+      const out: PresencePeer[] = [
+        { peer: String(peerId), name: user.name, color: user.color, self: true, relay: id.relay, readOnly: id.readOnly },
+      ];
+      const seen = new Set<string>([String(peerId)]);
+      for (const [p, e] of liveRoster()) {
+        if (seen.has(p)) continue;
+        seen.add(p);
+        out.push({ peer: p, name: e.name || 'Partner', color: peerColor(p), self: false, relay: e.relay, readOnly: e.ro });
+      }
       try {
+        // Older builds announce no roster — they show while their cursor does.
         const states = store.getAllStates() as Record<
           string,
           { user?: { name?: string; color?: string } }
         >;
         for (const p of Object.keys(states)) {
-          if (p === peerId) continue;
+          if (seen.has(p)) continue;
+          seen.add(p);
           const nm = states[p]?.user?.name;
           const name = (typeof nm === 'string' && nm.trim()) || 'Partner';
-          out.push({ peer: p, name, color: peerColor(p), self: false });
+          out.push({ peer: p, name, color: peerColor(p), self: false, relay: null, readOnly: false });
         }
       } catch {
-        /* store shape / timing — self-only is safe */
+        /* store shape / timing — roster + self is safe */
       }
       return out;
+    },
+    announce(): void {
+      sendRoster();
     },
     applyRemote(bytes: Uint8Array): void {
       if (disposed || bytes.length < 2) return;
@@ -423,9 +505,27 @@ export function installCursorPresence(
         } catch {
           /* malformed — drop */
         }
+      } else if (type === FRAME_ROSTER) {
+        try {
+          const ad = JSON.parse(new TextDecoder().decode(payload)) as RosterAd;
+          if (!ad || typeof ad.peer !== 'string' || ad.peer === peerId) return; // own echo
+          if (ad.leave) {
+            roster.delete(ad.peer);
+            return;
+          }
+          roster.set(ad.peer, {
+            name: typeof ad.name === 'string' ? ad.name.trim().slice(0, 80) : '',
+            relay: typeof ad.relay === 'string' && ad.relay ? ad.relay : null,
+            ro: ad.ro === true,
+            at: Date.now(),
+          });
+        } catch {
+          /* malformed — drop */
+        }
       }
     },
     farewell(opts: { keepalive?: boolean } = {}): void {
+      sendRoster(true, opts); // leave the roster too (independent of cursors)
       // Departure frame, sent SYNCHRONOUSLY and before dispose/stop: the
       // ephemeral store's only expiry is its 45s timeout, and dispose()
       // set `disposed` before unhooking, so a leaving peer's caret and
@@ -452,6 +552,7 @@ export function installCursorPresence(
     rebroadcast(): void {
       // After a stream reconnect nothing re-announced presence until the
       // 15s keepalive; partners saw us absent for up to that long.
+      sendRoster();
       if (disposed || !cursorsEnabled()) return;
       const local = store.getLocal() ?? partingLocal;
       partingLocal = undefined;
@@ -465,6 +566,8 @@ export function installCursorPresence(
       unsubLocal();
       clearInterval(keepalive);
       clearInterval(leaseTimer);
+      clearInterval(rosterTimer);
+      clearTimeout(rosterKickoff);
       if (sendTimer) clearTimeout(sendTimer);
       if (drainTimer) clearTimeout(drainTimer);
     },

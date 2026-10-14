@@ -31,6 +31,7 @@ import { collabSettingsAvailable, collabSettingsButton } from './collab-settings
 import {
   collabActiveShareCode,
   collabActiveCrossServerCode,
+  collabActiveClassicCode,
   collabInviter,
   collabSessionStarter,
 } from '../collab/collab-hooks.js';
@@ -132,8 +133,10 @@ export class SendPillController {
   /** The always-rendered bottom actions row (click buttons / drag zones). */
   private addContactEl: HTMLButtonElement | null = null;
   private startSessionEl: HTMLButtonElement | null = null;
-  /** Federation: "Cross-server code" beside "Copy code" (click-open only). */
-  private crossCodeEl: HTMLButtonElement | null = null;
+  /** Federation: the ▾ beside "Copy code" (click-open only) and the
+   *  dropdown of code forms it opens (classic / cross-server). */
+  private codeMenuToggle: HTMLButtonElement | null = null;
+  private codeMenuEl: HTMLElement | null = null;
   /** Drag-only recent-senders sub-list + its rows (subset of targets). */
   private recentSection: HTMLDivElement | null = null;
   private recentRows = new Set<HTMLElement>();
@@ -441,25 +444,24 @@ export class SendPillController {
     );
     this.startSessionEl.classList.toggle('pmd-send-action-collab-hidden', !canInvite);
     actions.appendChild(this.startSessionEl);
-    // Federation: the session's code for someone on ANOTHER server, one
-    // click away on any doc already in a session — "Copy code" keeps the
-    // plain code every build reads. Shown only when it differs from it.
-    this.crossCodeEl = this.actionButton(
-      COLLAB_INVITE_ICON,
-      'Cross-server code',
-      'Copy this session’s code for someone on another server — they’ll need your OK to join',
-      () => {
-        this.collapse();
-        const code = collabActiveCrossServerCode();
-        if (code === null) return;
-        void navigator.clipboard?.writeText(code).then(
-          () => showToast('Cross-server code copied — people on other servers will need your OK to join'),
-          () => showToast('Could not copy the code'),
-        );
-      },
-    );
-    this.crossCodeEl.classList.add('pmd-send-action-clickonly');
-    actions.appendChild(this.crossCodeEl);
+    // Federation: ▾ beside "Copy code" opens a dropdown of every form of
+    // the code (classic cmshare1/2, cross-server) — the same choice as the
+    // session panel's Copy code ▾. Shown only when there IS a choice.
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'pmd-send-action pmd-send-action-caret pmd-send-action-clickonly';
+    toggle.textContent = '▾';
+    toggle.title = 'Other forms of the code';
+    toggle.setAttribute('aria-label', 'Choose which code to copy');
+    toggle.setAttribute('aria-haspopup', 'menu');
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.addEventListener('click', (e) => {
+      if (!this.inviteMode) return;
+      e.stopPropagation();
+      this.toggleCodeMenu();
+    });
+    this.codeMenuToggle = toggle;
+    actions.appendChild(toggle);
     this.refreshSessionAction();
     // Click-open only (CSS hides it while the row is a drag's drop zones).
     if (collabSettingsAvailable()) {
@@ -481,11 +483,89 @@ export class SendPillController {
     this.startSessionEl.title = live
       ? 'Copy this session’s share code for a teammate to join'
       : 'Start a collaboration session on this document';
-    if (this.crossCodeEl) {
-      const cross = live ? collabActiveCrossServerCode() : null;
-      const show = cross !== null && cross !== collabActiveShareCode() && collabEnabled();
-      this.crossCodeEl.classList.toggle('pmd-send-action-collab-hidden', !show);
+    this.closeCodeMenu();
+    if (this.codeMenuToggle) {
+      this.codeMenuToggle.classList.toggle(
+        'pmd-send-action-collab-hidden',
+        !(live && collabEnabled() && this.codeForms().length > 1),
+      );
     }
+  }
+
+  /** The forms of the focused session's code, default first-class marked. */
+  private codeForms(): { title: string; code: string; hint: string; isDefault: boolean }[] {
+    const current = collabActiveShareCode();
+    const classic = collabActiveClassicCode();
+    const cross = collabActiveCrossServerCode();
+    const out: { title: string; code: string; hint: string; isDefault: boolean }[] = [];
+    if (classic) {
+      out.push({
+        title: classic.startsWith('cmshare2') ? 'Classic code (cmshare2)' : 'Classic code (cmshare1)',
+        code: classic,
+        hint: 'For people on the session’s server — works with every CardMirror version',
+        isDefault: classic === current,
+      });
+    }
+    if (cross) {
+      out.push({
+        title: 'Cross-server code',
+        code: cross,
+        hint: 'For people on other servers — they’ll need your OK to join',
+        isDefault: cross === current,
+      });
+    }
+    return out;
+  }
+
+  private closeCodeMenu(): void {
+    this.codeMenuEl?.remove();
+    this.codeMenuEl = null;
+    this.codeMenuToggle?.setAttribute('aria-expanded', 'false');
+  }
+
+  private toggleCodeMenu(): void {
+    if (this.codeMenuEl) {
+      this.closeCodeMenu();
+      return;
+    }
+    const menu = document.createElement('div');
+    menu.className = 'pmd-send-code-menu';
+    menu.setAttribute('role', 'menu');
+    for (const f of this.codeForms()) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'pmd-send-code-menu-item';
+      item.setAttribute('role', 'menuitem');
+      const title = document.createElement('span');
+      title.className = 'pmd-send-code-menu-title';
+      title.textContent = f.title;
+      if (f.isDefault) {
+        const tag = document.createElement('span');
+        tag.className = 'pmd-send-code-menu-default';
+        tag.textContent = 'Copy code';
+        title.appendChild(tag);
+      }
+      const code = document.createElement('span');
+      code.className = 'pmd-send-code-menu-code';
+      code.textContent = f.code;
+      const hint = document.createElement('span');
+      hint.className = 'pmd-send-code-menu-hint';
+      hint.textContent = f.hint;
+      item.append(title, code, hint);
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.collapse();
+        void navigator.clipboard?.writeText(f.code).then(
+          () => showToast(`${f.title} copied`),
+          () => showToast('Could not copy the code'),
+        );
+      });
+      menu.appendChild(item);
+    }
+    this.panel.appendChild(menu);
+    this.codeMenuEl = menu;
+    this.codeMenuToggle?.setAttribute('aria-expanded', 'true');
+    menu.querySelector<HTMLElement>('button')?.focus();
   }
 
   /** One action-row entry: icon + label. Click behavior is live only in
@@ -773,6 +853,7 @@ export class SendPillController {
   }
 
   private collapse(): void {
+    this.closeCodeMenu();
     if (this.inviteMode) {
       this.inviteMode = false;
       this.root.classList.remove('pmd-send-invite-mode');

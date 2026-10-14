@@ -29,6 +29,9 @@ interface Entry {
   at: number;
   fed: RelayFederation | null;
   versionFlags: boolean;
+  /** The last fetch got an answer from the relay (any HTTP status a relay
+   *  gives — 200/304/404); false after a network failure; null = unknown. */
+  reachable: boolean | null;
   /** Settled at least once (a failed fetch still settles: "unknown"
    *  reads as "no federation" until a later refresh succeeds). */
   settled: boolean;
@@ -77,14 +80,15 @@ export function ensureRelayCapabilities(
   const now = Date.now();
   const cur = cache.get(k);
   if (cur?.inflight) return cur.inflight;
-  if (cur && !opts.force && now - cur.at < (cur.fed || cur.versionFlags ? FRESH_MS : RETRY_MS)) {
+  if (cur && !opts.force && now - cur.at < (cur.reachable ? FRESH_MS : RETRY_MS)) {
     return Promise.resolve();
   }
   const fetchImpl = opts.fetchImpl ?? ((i: RequestInfo | URL, n?: RequestInit) => fetch(i, n));
-  const entry: Entry = cur ?? { at: 0, fed: null, versionFlags: false, settled: false, inflight: null };
+  const entry: Entry = cur ?? { at: 0, fed: null, versionFlags: false, reachable: null, settled: false, inflight: null };
   cache.set(k, entry);
   const run = (async () => {
     let next = { fed: entry.fed, versionFlags: entry.versionFlags };
+    let reachable = false;
     try {
       const res = await fetchImpl(`${k}/capabilities`, {
         // The relay serves this with max-age=300; without revalidating,
@@ -94,6 +98,7 @@ export function ensureRelayCapabilities(
         cache: 'no-cache',
         signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(10_000) : undefined,
       });
+      reachable = res.ok || res.status === 404 || res.status === 304;
       if (res.ok) next = parse(await res.json());
       else if (res.status === 404) next = { fed: null, versionFlags: false }; // pre-capabilities relay
     } catch {
@@ -102,7 +107,10 @@ export function ensureRelayCapabilities(
     // Any field counts (nickname and feature flags included — a nickname
     // change used to leave the Settings line stale forever).
     const changed =
-      JSON.stringify(next.fed) !== JSON.stringify(entry.fed) || next.versionFlags !== entry.versionFlags;
+      JSON.stringify(next.fed) !== JSON.stringify(entry.fed) ||
+      next.versionFlags !== entry.versionFlags ||
+      reachable !== entry.reachable;
+    entry.reachable = reachable;
     entry.fed = next.fed;
     entry.versionFlags = next.versionFlags;
     entry.at = Date.now();
@@ -118,6 +126,12 @@ export function ensureRelayCapabilities(
  *  null (doesn't federate, or not known yet). */
 export function federationFor(base: string): RelayFederation | null {
   return cache.get(keyOf(base))?.fed ?? null;
+}
+
+/** Whether the relay at `base` answered its last capabilities fetch
+ *  (null before the first one settles). */
+export function relayReachable(base: string): boolean | null {
+  return cache.get(keyOf(base))?.reachable ?? null;
 }
 
 /** Whether the relay at `base` reads version flags (see wireVersion). */
