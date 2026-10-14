@@ -27,6 +27,10 @@ or locked-down school machine.
 > **Desktop builds are unsigned**, so Windows and macOS warn you the
 > first time you launch. The one-time workaround for each is in the
 > install steps below.
+>
+> **Be cautious of third-party servers.** Versions of Cardmirror that 
+> support federation can link to servers that in themselves link many
+> other servers. Trust the server you are linking to.
 
 See [`MANUAL.md`](./MANUAL.md) for the full user
 manual; [`PRIVACY.md`](./PRIVACY.md) for how CardMirror handles your data;
@@ -34,6 +38,8 @@ manual; [`PRIVACY.md`](./PRIVACY.md) for how CardMirror handles your data;
 [`CHANGELOG.md`](./CHANGELOG.md) for release notes;
 [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design;
 [`PROJECT.md`](./PROJECT.md) for project orientation.
+
+(Federated Versions) Go to [`relay/FEDERATION.md`](./relay/FEDERATION.md) for details on federation (Federated branches ONLY).
 
 You can find a video walkthrough of CardMirror's basic functions [here](https://www.youtube.com/playlist?list=PLXM5iwKNQkSs). 
 
@@ -49,8 +55,8 @@ offline and does not depend on it.
 
 ## Support
 
-The core CardMirror editor is free, and built and maintained by one
-person. If it's useful to you, two ways to help keep it going:
+The core CardMirror editor which this one is built off of is free, and built and maintained by one
+person. Please go donate to them: there's two ways to help keep it going:
 
 - **Subscribe at [Debate Decoded](https://debate-decoded.ghost.io/)** —
   recurring support that funds ongoing development, and the best way to
@@ -61,9 +67,13 @@ person. If it's useful to you, two ways to help keep it going:
 
 ## Install
 
-Desktop builds live on the [Releases page](https://github.com/ant981228/cardmirror/releases).
+
+**Installing directly doesn't work right now.** I still need to get to doing releases. Go [here](#run-from-source) for instructions on how to manually build the software.
+When I get around to it, desktop builds will eventually live on the [Releases page](https://github.com/ant981228/cardmirror/releases).
 Pick the file for your operating system, run the installer, and
 launch CardMirror like any other app.
+
+I'm a lazy person right now, though, so go to build instructions below.
 
 ### macOS
 
@@ -120,42 +130,16 @@ Two options for installation, depending upon distribution:
 
 ### Web app (Chromebook & browser)
 
-No download needed — open the
-[live web app](https://cardmirror.app/) in a Chromium browser
-(Chrome, Edge, or ChromeOS) and click the **Install** button in the address bar
-to run CardMirror in its own window, offline, updating itself on relaunch. On a
-Chromebook this is the way to run it — no desktop build required.
-
-Installed, the web app does most of what the desktop editions do: **save in
-place** and autosave (it may ask for permission to edit each file),
-one-keystroke **Paste Text**, **multiple windows** (New Document / New Speech
-Document open their own window) with the dropzone, Quick Cards, and send-to-speech
-kept in sync across them, the **three-pane workspace**, and single-file **Clean /
-Convert / Compress** tools on the home screen.
-
-Still desktop-only: background file-library search, folder-wide bulk operations,
-Send to Verbatim Flow, voice control, card sharing, and real-time **co-editing**
-(share a document and edit it together live — experimental). Firefox and Safari run the
-editor but lack the File System Access API, so there Save falls back to a
-download. See **[Desktop vs. web](./MANUAL.md#desktop-vs-web)** in the manual for
-the full breakdown.
-
-> **Web feels slow on big documents? Check your extensions.** Some browser
-> extensions — password managers (1Password, LastPass, Bitwarden) and form
-> fillers especially — rescan the whole page every time you focus a text box,
-> which can freeze the editor for a second or more on a large file. The desktop
-> app never hits this because it loads no extensions. To confirm, open the app
-> in an Incognito window (extensions are off there) — if it's snappy, an
-> extension is the cause. To fix it without turning the extension off
-> everywhere, tell Chrome to run it only on this site by request: click the
-> **puzzle-piece (Extensions)** icon in the toolbar, click the **⋮** next to the
-> extension, and set **"This can read and change site data" → "When you click
-> the extension."**
+There's no corresponding web-app for this. The original one (that is the one located upstream) is located at [cardmirror.app](https://cardmirror.app)
 
 ### Updates
 
-**Help → Check for Updates…** checks manually: it tells you you're
-current, or announces an available update and downloads it in the
+Please don't update. There's no Releases to grab from, and not everything points towards the 
+fork's Github. Updates are always consentual -- just don't. Turn off autoupdates at Settings → General → "About 
+this install" → **Check for updates automatically**.
+
+If you wish to move to the original version (at your own risk), **Help → Check for Updates…** checks manually: it 
+tells you you're current, or announces an available update and downloads it in the
 background.
 
 CardMirror also checks for updates automatically — silently at launch
@@ -163,6 +147,7 @@ and once a day, speaking up only when a new version is actually ready.
 Turn this off (or pause it for a week — handy at a tournament) in
 Settings → General → "About this install" → **Check for updates
 automatically**.
+
 
 Updates never interrupt you: when a new version has finished
 downloading, a small chip appears in the status bar ("Update x.y.z
@@ -222,7 +207,8 @@ Translation key. Configure it under Settings → Editing → Translation.
 
 ## Run from source
 
-You only need this if you want to **build CardMirror yourself**
+You **always need this for now**. It's easy, and as long as your computer is recent (and you're not 
+running a Windows ARM or Apple Intel computer), you can share
 (contribute, run a development branch, or use the editor on a
 platform we don't publish binaries for). For day-to-day use,
 download a release above.
@@ -315,6 +301,16 @@ a native window with file-system access.
 Open a terminal in the same folder; run `npm run dev` (or
 `npm run desktop:dev`) again. To pick up newer code, download a
 fresh ZIP and rerun `npm install` in it.
+
+## Creating an installer
+
+Assuming you've just finished building, in the folder that you are already in, run:
+
+```
+npm ci
+npm --prefix apps/desktop ci
+npm --prefix apps/desktop run dist -- --publish never
+```
 
 ## Other commands
 
@@ -451,7 +447,15 @@ and the bridge protocol — lives in
 
 ## Acknowledgements
 
-CardMirror is built on [ProseMirror](https://prosemirror.net/), the
+The [original Cardmirror](https://github.com/ant981228/cardmirror) was built 
+by **Anthony Trufanov and the contributers**, the people who made the base which this fork is 
+built off of. They have made many of Cardmirror's core decisions, features, and things that have
+made it truly useful, including read mode, the original contributing framework, as well as 
+making an astonishing number of QOL improvements.
+
+Thank you to these wonderful people for making this awesome application for debate for me and much of the debate community.
+
+Original CardMirror is built on [ProseMirror](https://prosemirror.net/), the
 modular rich-text editor framework created and maintained by
 [Marijn Haverbeke](https://marijnhaverbeke.nl/). Nearly every editor
 primitive CardMirror leans on — the schema-validated transactions,
@@ -482,6 +486,8 @@ Features and code have been contributed by
 [cora](https://github.com/coralynnkc), and
 [Neo Cai](https://github.com/caineoyuan). Each contribution is
 credited where it shipped in the [changelog](./CHANGELOG.md).
+
+Every change is listed in the detailed changelog [changelog](./DETAILED_CHANGELOG.md).
 
 Special thanks to Q Cooper and Missouri State debate for beta
 testing.
