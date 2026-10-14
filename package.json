@@ -4,13 +4,13 @@
   "description": "CardMirror — ProseMirror-based editor that interoperates with Advanced Verbatim",
   "license": "SEE LICENSE IN LICENSE",
   "author": "Anthony Trufanov",
-  "homepage": "https://github.com/ant981228/cardmirror#readme",
+  "homepage": "https://github.com/Jaydewg/cardmirror#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ant981228/cardmirror.git"
+    "url": "git+https://github.com/Jaydewg/cardmirror.git"
   },
   "bugs": {
-    "url": "https://github.com/ant981228/cardmirror/issues"
+    "url": "https://github.com/Jaydewg/cardmirror/issues"
   },
   "type": "module",
   "private": true,
