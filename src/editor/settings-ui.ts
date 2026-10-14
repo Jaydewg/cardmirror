@@ -2083,9 +2083,9 @@ function buildCrashDumpsSection(): HTMLElement | null {
 /** GitHub-hosted copies of the user-facing docs — opened from Settings → General
  *  (and, on macOS, the Help menu). Pinned in Settings so they stay reachable on
  *  Windows/Linux, which carry no native menu bar. */
-const MANUAL_URL = 'https://github.com/ant981228/cardmirror/blob/main/MANUAL.md';
-const PRIVACY_URL = 'https://github.com/ant981228/cardmirror/blob/main/PRIVACY.md';
-const TERMS_URL = 'https://github.com/ant981228/cardmirror/blob/main/TERMS.md';
+const MANUAL_URL = 'https://github.com/Jaydewg/cardmirror/blob/main/MANUAL.md';
+const PRIVACY_URL = 'https://github.com/Jaydewg/cardmirror/blob/main/PRIVACY.md';
+const TERMS_URL = 'https://github.com/Jaydewg/cardmirror/blob/main/TERMS.md';
 
 /** One external doc link. On desktop it routes through the host so it opens in
  *  the OS browser rather than a new Electron window; on web the anchor opens a

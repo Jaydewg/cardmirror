@@ -38,6 +38,7 @@ import { bundlePathFromExe, launchSwapHelper, macBundleSelfUpdatable } from './m
 import { registerVoiceIpc } from './voice/ipc';
 import { registerFlowIpc } from './flow-bridge.js';
 import { registerPairingIpc, relayUrl } from './pairing-ipc.js';
+import { flaggedVersion } from './federation-main.js';
 import { LITE_BUILD } from './lite-build.js';
 import {
   readAccessibilityTreeEnabled,
@@ -1919,6 +1920,10 @@ async function pruneHistoryFiles(): Promise<void> {
 }
 
 void app.whenReady().then(() => {
+  // The native About panel (Help/app menu → About) shows the version
+  // people see everywhere else: with this build's feature flags
+  // (`1.15.0-f`). The manifest — and so the updater — stays numeric.
+  app.setAboutPanelOptions({ applicationVersion: flaggedVersion(app.getVersion()) });
   // Lite enforcement, desktop edition: the CSP equivalent. Every
   // http(s)/ws request from ANY renderer session is cancelled at the
   // network layer — "does not talk to the internet" as a property of
@@ -3096,19 +3101,19 @@ ipcMain.handle(
 
 /** Public GitHub Releases page — fallback link surfaced in update
  *  dialogs so users always have a manual-download path. */
-const RELEASES_URL = 'https://github.com/ant981228/cardmirror/releases';
+const RELEASES_URL = 'https://github.com/Jaydewg/cardmirror/releases';
 
 /** The user manual (MANUAL.md), rendered on GitHub. Linked from the Help
  *  menu so the full guide is one click away. */
-const MANUAL_URL = 'https://github.com/ant981228/cardmirror/blob/main/MANUAL.md';
+const MANUAL_URL = 'https://github.com/Jaydewg/cardmirror/blob/main/MANUAL.md';
 
 /** The privacy policy (PRIVACY.md), rendered on GitHub. Linked from the Help
  *  menu alongside the manual (and from Settings → General). */
-const PRIVACY_URL = 'https://github.com/ant981228/cardmirror/blob/main/PRIVACY.md';
+const PRIVACY_URL = 'https://github.com/Jaydewg/cardmirror/blob/main/PRIVACY.md';
 
 /** The terms of use (TERMS.md), rendered on GitHub. Linked from the Help menu
  *  alongside the manual and privacy policy (and from Settings → General). */
-const TERMS_URL = 'https://github.com/ant981228/cardmirror/blob/main/TERMS.md';
+const TERMS_URL = 'https://github.com/Jaydewg/cardmirror/blob/main/TERMS.md';
 
 /** Best-effort dialog-parent lookup. Prefers the focused window,
  *  but if the user has alt-tabbed away between clicking
@@ -3224,7 +3229,7 @@ function runUpdateCheck(opts: UpdateCheckOpts): void {
       type: 'info',
       title: 'No updates',
       message: "You're on the latest version.",
-      detail: `CardMirror ${app.getVersion()}`,
+      detail: `CardMirror ${flaggedVersion(app.getVersion())}`,
     });
   };
 

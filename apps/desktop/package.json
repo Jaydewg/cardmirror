@@ -3,7 +3,7 @@
   "version": "1.15.0",
   "description": "CardMirror — Electron desktop wrapper",
   "author": "Anthony Trufanov",
-  "homepage": "https://github.com/ant981228/cardmirror",
+  "homepage": "https://github.com/Jaydewg/cardmirror",
   "private": true,
   "type": "commonjs",
   "main": "dist/main.js",
@@ -111,7 +111,7 @@
     },
     "linux": {
       "category": "Office",
-      "maintainer": "Anthony Trufanov <ant981228@gmail.com>",
+      "maintainer": "Jayden Wang <jaydenwtao@outlook.com>",
       "target": [
         {
           "target": "AppImage",
@@ -147,7 +147,7 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "ant981228",
+      "owner": "Jaydewg",
       "repo": "cardmirror"
     },
     "afterSign": "scripts/sign-mac.js"

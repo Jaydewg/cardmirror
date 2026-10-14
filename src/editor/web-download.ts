@@ -20,13 +20,13 @@
 import { getElectronHost } from './host/index.js';
 import { promptForRouteChoice } from './text-prompt.js';
 
-const REPO_URL = 'https://github.com/ant981228/cardmirror';
+const REPO_URL = 'https://github.com/Jaydewg/cardmirror';
 // The LIST endpoint, newest first — NOT `/releases/latest`, which only
 // serves full releases and returns nothing while every CardMirror
 // release is marked pre-release (beta). Same reason the fallback page
 // is `/releases`, not `/releases/latest`.
 const LATEST_RELEASE_API =
-  'https://api.github.com/repos/ant981228/cardmirror/releases?per_page=1';
+  'https://api.github.com/repos/Jaydewg/cardmirror/releases?per_page=1';
 const RELEASES_PAGE = `${REPO_URL}/releases`;
 
 export type InstallerTarget = 'win-x64' | 'mac-arm64' | 'mac-x64' | 'linux-appimage';
