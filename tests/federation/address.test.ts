@@ -122,6 +122,23 @@ describe('pairing codes', () => {
   });
 });
 
+describe('refusal reasons', () => {
+  it('a policy refusal says why, and an unknown reason adds nothing', async () => {
+    const { sendOutcomeToast } = await import('../../src/editor/pairing/relay-client.js');
+    expect(renderer.refusalWhy('private-address')).toContain('RELAY_FEDERATION_ALLOW_PRIVATE');
+    expect(renderer.refusalWhy('http-not-allowed')).toContain('RELAY_FEDERATION_ALLOW_HTTP');
+    expect(renderer.refusalWhy('peer-not-federating')).toContain('doesn’t connect to other servers');
+    expect(renderer.refusalWhy('mystery')).toBe('');
+    expect(
+      sendOutcomeToast('Bob', { ok: 0, fail: 1, authFail: 0, peerFail: 1, peerReason: 'private-address' }),
+    ).toContain('private network address');
+    // No reason from an older main process: the generic wording.
+    expect(sendOutcomeToast('Bob', { ok: 0, fail: 1, authFail: 0, peerFail: 1 })).toContain(
+      'doesn\'t connect to other servers, or not to that one',
+    );
+  });
+});
+
 describe('version flags (FEDERATION.md §2.2)', () => {
   const cases: Array<[string, string, string]> = [
     ['1.15.0-f', '1.15.0', 'f'],

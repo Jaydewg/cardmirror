@@ -15,6 +15,7 @@ import { getElectronHost } from '../host/index.js';
 import { collabEnabled } from '../collab/collab-gate.js';
 import { webEntitlementToken } from '../collab/web-account.js';
 import { RELAY_FIX_PATH } from '../relay-decline.js';
+import { refusalWhy } from '../federation/address.js';
 
 /** The minimal card shape sent over the wire — the dropzone's existing
  *  serialized slice plus a label and node kind. */
@@ -40,6 +41,9 @@ export interface SendResult {
   /** Federation: how many of `ok` were queued for a server that is
    *  unreachable right now (delivered if it comes back in time). */
   deferred?: number;
+  /** Federation: the relay's reason for the first cross-server refusal
+   *  (`private-address`, `peer-not-federating`, …), for the toast. */
+  peerReason?: string;
 }
 
 /** The toast for a send's outcome — shared by the send pill and
@@ -57,7 +61,10 @@ export function sendOutcomeToast(label: string, res: SendResult): string {
   const peerFail = res.peerFail ?? 0;
   if (peerFail > 0 && peerFail === res.fail) {
     const scope = res.ok === 0 ? '' : ` for ${peerFail} recipient(s)`;
-    return `Your relay can't reach that server${scope} — it doesn't connect to other servers, or not to that one.`;
+    const why = refusalWhy(res.peerReason ?? '');
+    return why
+      ? `Your relay can't reach that server${scope}${why}.`
+      : `Your relay can't reach that server${scope} — it doesn't connect to other servers, or not to that one.`;
   }
   if (res.authFail > 0) {
     const scope = res.ok === 0 && res.authFail === res.fail ? '' : ` for ${res.authFail} recipient(s)`;
@@ -123,6 +130,7 @@ class RelayClient {
         authFail: res?.authFail ?? 0,
         peerFail: res?.peerFail ?? 0,
         deferred: res?.deferred ?? 0,
+        ...(res?.peerReason ? { peerReason: res.peerReason } : {}),
       };
     } catch {
       return { ok: 0, fail: targets.length, authFail: 0 };

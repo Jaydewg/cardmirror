@@ -577,13 +577,16 @@ async function pollOnce(): Promise<void> {
   }
 }
 
-/** The `error` code of a federation refusal body ('' when none). */
-async function federationErrorCode(res: Response): Promise<string> {
+/** The `error` code (and policy `reason`) of a federation refusal body. */
+async function federationError(res: Response): Promise<{ code: string; reason: string }> {
   try {
-    const body = (await res.json()) as { error?: unknown };
-    return typeof body?.error === 'string' ? body.error : '';
+    const body = (await res.json()) as { error?: unknown; reason?: unknown };
+    return {
+      code: typeof body?.error === 'string' ? body.error : '',
+      reason: typeof body?.reason === 'string' ? body.reason : '',
+    };
   } catch {
-    return '';
+    return { code: '', reason: '' };
   }
 }
 
@@ -909,7 +912,7 @@ export function registerPairingIpc(): void {
         via?: string;
         minReceiverVersion?: string;
       },
-    ): Promise<{ ok: number; fail: number; authFail: number; peerFail: number; deferred: number }> => {
+    ): Promise<{ ok: number; fail: number; authFail: number; peerFail: number; deferred: number; peerReason?: string }> => {
       const targets = Array.isArray(payload?.recipientCodes)
         ? Array.from(new Set(payload.recipientCodes.filter((c) => typeof c === 'string' && c)))
         : [];
@@ -935,6 +938,8 @@ export function registerPairingIpc(): void {
       /** How many of `ok` were queued for a relay that is unreachable
        *  right now (delivered if it returns within the TTL). */
       let deferred = 0;
+      /** The relay's stated reason for the first federation refusal. */
+      let peerReason = '';
       await Promise.all(
         targets.map(async (rawRecipientCode) => {
           const addr = parsePairingCode(rawRecipientCode);
@@ -944,6 +949,7 @@ export function registerPairingIpc(): void {
           if (remoteRelay && !fed?.mailbox) {
             fail++;
             peerFail++;
+            peerReason ||= 'relay-not-federating';
             console.warn('[pairing] cross-server send, but this relay does not federate');
             return;
           }
@@ -1000,9 +1006,10 @@ export function registerPairingIpc(): void {
               }
             } else {
               fail++;
-              const code = remoteRelay ? await federationErrorCode(res) : '';
+              const { code, reason } = remoteRelay ? await federationError(res) : { code: '', reason: '' };
               if (remoteRelay && (code.startsWith('peer-') || code === 'too-large-for-peer' || res.status === 404)) {
                 peerFail++;
+                peerReason ||= reason || code;
               } else if (res.status === 401 || res.status === 403) authFail++;
               console.warn(`[pairing] POST returned ${res.status}${code ? ` (${code})` : ''}`);
             }
@@ -1012,7 +1019,7 @@ export function registerPairingIpc(): void {
           }
         }),
       );
-      return { ok, fail, authFail, peerFail, deferred };
+      return { ok, fail, authFail, peerFail, deferred, ...(peerReason ? { peerReason } : {}) };
     },
   );
 

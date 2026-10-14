@@ -87,6 +87,11 @@ export function ensureRelayCapabilities(
     let next = { fed: entry.fed, versionFlags: entry.versionFlags };
     try {
       const res = await fetchImpl(`${k}/capabilities`, {
+        // The relay serves this with max-age=300; without revalidating,
+        // the HTTP cache answered for 5 minutes and an operator's change
+        // (nickname, federation on/off) didn't show. `no-cache` still
+        // uses the ETag, so an unchanged document is a bodyless 304.
+        cache: 'no-cache',
         signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(10_000) : undefined,
       });
       if (res.ok) next = parse(await res.json());
@@ -94,7 +99,10 @@ export function ensureRelayCapabilities(
     } catch {
       /* unreachable: keep the last known answer */
     }
-    const changed = next.fed?.url !== entry.fed?.url || !!next.fed !== !!entry.fed || next.versionFlags !== entry.versionFlags;
+    // Any field counts (nickname and feature flags included — a nickname
+    // change used to leave the Settings line stale forever).
+    const changed =
+      JSON.stringify(next.fed) !== JSON.stringify(entry.fed) || next.versionFlags !== entry.versionFlags;
     entry.fed = next.fed;
     entry.versionFlags = next.versionFlags;
     entry.at = Date.now();

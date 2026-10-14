@@ -35,6 +35,10 @@ services:
       RELAY_NICKNAME: ${RELAY_NICKNAME:-}
       RELAY_FEDERATION_ALLOW: ${RELAY_FEDERATION_ALLOW:-}
       RELAY_FEDERATION_DENY: ${RELAY_FEDERATION_DENY:-}
+      # LAN / development federations: allow plain-http peers and peers
+      # on private or loopback addresses (both off by default).
+      RELAY_FEDERATION_ALLOW_HTTP: ${RELAY_FEDERATION_ALLOW_HTTP:-}
+      RELAY_FEDERATION_ALLOW_PRIVATE: ${RELAY_FEDERATION_ALLOW_PRIVATE:-}
     ports:
       - "8410:8000"
 

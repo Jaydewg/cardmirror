@@ -167,6 +167,24 @@ def test_peer_auth_required(relays):
     assert r.status_code == 404 and r.json()["error"] == "unknown-handshake"
 
 
+def test_refusals_say_why(relays):
+    """A relay without RELAY_FEDERATION_ALLOW_PRIVATE refuses LAN /
+    loopback peers — and says so, to the app and in its log."""
+    a, e = relays["a"], relays["e"]
+    r = _send(e, "r", a.base, "x")
+    assert r.status_code == 403
+    assert r.json() == {"error": "peer-refused", "detail": "peer-refused", "relay": a.base,
+                        "reason": "private-address"}
+    r = e.client().get(f"/federation/v1/via/{b64url(a.base)}/rooms/{'0' * 32}/updates")
+    assert r.status_code == 403 and r.json()["reason"] == "private-address"
+    info = e.client().get("/federation/v1/peer", params={"url": a.base}).json()
+    assert info["permitted"] is False and info["refusal"] == "private-address"
+    assert "RELAY_FEDERATION_ALLOW_PRIVATE=1" in e.log.read_text()
+    # A deny-listed peer reports that reason instead.
+    info = a.client().get("/federation/v1/peer", params={"url": "https://denied.invalid/relay"}).json()
+    assert info["refusal"] == "denied"
+
+
 def test_handshake_to_unreachable_origin_fails(relays):
     b = relays["b"]
     r = httpx.post(f"{b.base}/federation/v1/handshake",
@@ -221,6 +239,7 @@ def test_mailbox_refusals(relays):
     assert r.status_code == 409 and r.json()["error"] == "peer-not-federating"
     r = _send(a, "r", "https://denied.invalid/relay", "x")
     assert r.status_code == 403 and r.json()["error"] == "peer-refused"
+    assert r.json()["reason"] == "denied"
     r = _send(a, "r", "not a url", "x")
     assert r.status_code == 400
     r = a.client().post("/federation/v1/outbox", json={"recipientCode": "a@b", "recipientRelay": c.base})

@@ -165,3 +165,27 @@ export function pairingIdentity(code: string, selfRelay: string | null): string 
   if (!a) return code.trim().replace(/\s+/g, '');
   return a.relay && a.relay !== selfRelay ? formatPairingCode(a.key, a.relay) : a.key;
 }
+
+/** The relay's stated reason for a policy refusal, as a clause. */
+export function refusalWhy(reason: string): string {
+  switch (reason) {
+    case 'private-address':
+      return ' — it’s on a private network address (LAN or tailnet), which your relay doesn’t allow (relay settings RELAY_FEDERATION_ALLOW / RELAY_FEDERATION_ALLOW_PRIVATE)';
+    case 'http-not-allowed':
+      return ' — it uses plain http, which your relay doesn’t allow (relay setting RELAY_FEDERATION_ALLOW_HTTP)';
+    case 'denied':
+      return ' — your relay blocks it';
+    case 'not-on-allow-list':
+      return ' — it isn’t on your relay’s list of allowed servers';
+    case 'self':
+      return ' — that’s your own relay';
+    case 'relay-not-federating':
+      return ' — your relay doesn’t connect to other servers';
+    case 'peer-not-federating':
+      return ' — that server doesn’t connect to other servers';
+    case 'too-large-for-peer':
+      return ' — it’s larger than that server accepts';
+    default:
+      return '';
+  }
+}

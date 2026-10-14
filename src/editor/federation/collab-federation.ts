@@ -33,7 +33,8 @@ import {
   type JoinRequestListing,
   type RoomsClient,
 } from '../collab/room-client.js';
-import { relayLabel } from './address.js';
+import { refusalWhy, relayLabel } from './address.js';
+export { refusalWhy };
 import { ownRelayFederation, refreshOwnRelayFederation, selfRelayUrl } from './self.js';
 
 // ── Where a room lives ──
@@ -135,7 +136,7 @@ export function federationFailureMessage(err: unknown, homeLabel: string): strin
   }
   switch (err.code) {
     case 'peer-refused':
-      return `Your relay doesn't connect to ${homeLabel}.`;
+      return `Your relay doesn't connect to ${homeLabel}${refusalWhy(err.reason)}.`;
     case 'home-refused':
       return `${homeLabel} doesn't accept connections from your relay.`;
     case 'home-not-federating':

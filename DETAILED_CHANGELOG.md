@@ -192,7 +192,11 @@ so an upstream `cmshare3` composes as `cmshare3f`), `splitRelaySuffix`
 a miss), parse the federation block (URL canonicalized, nickname trimmed)
 and `client.versionFlags`. A 404, a document without a federation block,
 a malformed block, or an unreachable relay all read as "no federation";
-an outage keeps the last known answer. `federation/self.ts` exposes
+an outage keeps the last known answer. Fetches use `cache: 'no-cache'`
+(the relay's `max-age=300` otherwise answered from the HTTP cache), any
+field change — nickname included — notifies listeners, and opening
+Settings forces a re-read, so an operator's change shows without
+restarting the app. `federation/self.ts` exposes
 `ownRelayFederation()` / `selfRelayUrl()` / `ownCrossServerCode()` and
 `wireOwnRelayFederation()` (called from `initPairingWiring`; re-fetches
 when the relay URL or token setting changes). The main process refreshes
@@ -269,6 +273,13 @@ senders with their server and matches partners by identity.
   `f` otherwise). *Copy Session Share Code* copies the plain code for a
   local room (even one joined via a self-naming `f` code) and keeps the
   `f` code for a remote room.
+- **Send pill:** on a doc already in a session, a *Cross-server code*
+  action sits beside *Copy code* (click-open only; shown when the relay
+  federates and that code differs from the default), so an existing
+  session's `f` code is one click away while *Copy code* keeps the plain
+  code. Both go through one rule (`defaultCopyCode`) shared with the
+  command; the code getter now applies it (it used to return the stored
+  code verbatim). New hook `collabActiveCrossServerCode`.
 - **New commands:** *Copy Cross-Server Session Code*
   (`collabCopyCrossServerCode`) and *Review Session Join Requests*
   (`collabReviewJoinRequests` — re-prompts deferred requests, then offers

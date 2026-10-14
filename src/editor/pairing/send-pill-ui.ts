@@ -30,6 +30,7 @@ import { collabEnabled } from '../collab/collab-gate.js';
 import { collabSettingsAvailable, collabSettingsButton } from './collab-settings-button.js';
 import {
   collabActiveShareCode,
+  collabActiveCrossServerCode,
   collabInviter,
   collabSessionStarter,
 } from '../collab/collab-hooks.js';
@@ -131,6 +132,8 @@ export class SendPillController {
   /** The always-rendered bottom actions row (click buttons / drag zones). */
   private addContactEl: HTMLButtonElement | null = null;
   private startSessionEl: HTMLButtonElement | null = null;
+  /** Federation: "Cross-server code" beside "Copy code" (click-open only). */
+  private crossCodeEl: HTMLButtonElement | null = null;
   /** Drag-only recent-senders sub-list + its rows (subset of targets). */
   private recentSection: HTMLDivElement | null = null;
   private recentRows = new Set<HTMLElement>();
@@ -437,8 +440,27 @@ export class SendPillController {
       },
     );
     this.startSessionEl.classList.toggle('pmd-send-action-collab-hidden', !canInvite);
-    this.refreshSessionAction();
     actions.appendChild(this.startSessionEl);
+    // Federation: the session's code for someone on ANOTHER server, one
+    // click away on any doc already in a session — "Copy code" keeps the
+    // plain code every build reads. Shown only when it differs from it.
+    this.crossCodeEl = this.actionButton(
+      COLLAB_INVITE_ICON,
+      'Cross-server code',
+      'Copy this session’s code for someone on another server — they’ll need your OK to join',
+      () => {
+        this.collapse();
+        const code = collabActiveCrossServerCode();
+        if (code === null) return;
+        void navigator.clipboard?.writeText(code).then(
+          () => showToast('Cross-server code copied — people on other servers will need your OK to join'),
+          () => showToast('Could not copy the code'),
+        );
+      },
+    );
+    this.crossCodeEl.classList.add('pmd-send-action-clickonly');
+    actions.appendChild(this.crossCodeEl);
+    this.refreshSessionAction();
     // Click-open only (CSS hides it while the row is a drag's drop zones).
     if (collabSettingsAvailable()) {
       actions.appendChild(collabSettingsButton('pmd-send-action', () => this.collapse()));
@@ -459,6 +481,11 @@ export class SendPillController {
     this.startSessionEl.title = live
       ? 'Copy this session’s share code for a teammate to join'
       : 'Start a collaboration session on this document';
+    if (this.crossCodeEl) {
+      const cross = live ? collabActiveCrossServerCode() : null;
+      const show = cross !== null && cross !== collabActiveShareCode() && collabEnabled();
+      this.crossCodeEl.classList.toggle('pmd-send-action-collab-hidden', !show);
+    }
   }
 
   /** One action-row entry: icon + label. Click behavior is live only in

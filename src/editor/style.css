@@ -15030,6 +15030,11 @@ body.pmd-multi-doc .pmd-cardcutter-trim {
 .pmd-send-action-collab-hidden {
   display: none;
 }
+/* Click-open-only actions (federation's "Cross-server code"): during a
+   drag the action row is drop zones, and these aren't. */
+.pmd-send-pill:not(.pmd-send-invite-mode) .pmd-send-action-clickonly {
+  display: none;
+}
 /* Collaboration-settings gear at the end of the Send / Receive action rows:
    a square icon button beside the two labelled actions. In the Send pill
    it's a click-open affordance only — during a drag that row is drop

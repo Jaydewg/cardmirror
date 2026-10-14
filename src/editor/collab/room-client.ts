@@ -39,22 +39,24 @@ const boundFetch: RoomsFetch = (input, init) => fetch(input, init);
 /** Best-effort ' — <detail>' suffix from a non-2xx body (FastAPI's
  *  `{detail}` or the mock's `{error}`; a non-JSON body contributes a
  *  short trimmed prefix). Never throws; at most 512 bytes read. */
-async function errorDetail(res: Response): Promise<{ detail: string; code: string }> {
+async function errorDetail(res: Response): Promise<{ detail: string; code: string; reason: string }> {
   try {
     const text = (await res.text()).slice(0, 512).trim();
-    if (!text) return { detail: '', code: '' };
+    if (!text) return { detail: '', code: '', reason: '' };
     try {
-      const parsed = JSON.parse(text) as { detail?: unknown; error?: unknown };
+      const parsed = JSON.parse(text) as { detail?: unknown; error?: unknown; reason?: unknown };
       const d = parsed.detail ?? parsed.error;
-      // Federation refusals carry a machine-readable `error` code.
+      // Federation refusals carry a machine-readable `error` code (and,
+      // for policy refusals, the `reason`).
       const code = typeof parsed.error === 'string' ? parsed.error : '';
-      if (typeof d === 'string' && d) return { detail: ` — ${d}`, code };
-      return { detail: '', code };
+      const reason = typeof parsed.reason === 'string' ? parsed.reason : '';
+      if (typeof d === 'string' && d) return { detail: ` — ${d}`, code, reason };
+      return { detail: '', code, reason };
     } catch {
-      return { detail: /^</.test(text) ? '' : ` — ${text.slice(0, 120)}`, code: '' };
+      return { detail: /^</.test(text) ? '' : ` — ${text.slice(0, 120)}`, code: '', reason: '' };
     }
   } catch {
-    return { detail: '', code: '' };
+    return { detail: '', code: '', reason: '' };
   }
 }
 
@@ -85,6 +87,8 @@ export class RoomsError extends Error {
     /** Machine-readable refusal code (federation: `join-pending`,
      *  `join-denied`, `read-only`, `home-unreachable`, …); '' if none. */
     readonly code: string = '',
+    /** Federation policy refusals: why (`private-address`, …); '' if none. */
+    readonly reason: string = '',
   ) {
     super(message);
     this.name = 'RoomsError';
@@ -268,14 +272,14 @@ export class RoomsClient {
       // the field (2026-09-01 review). Bounded read: an interceptor's
       // HTML page must not be inhaled whole. Reading also releases the
       // connection back to the pool (an abandoned body holds it).
-      const { detail, code } = await errorDetail(res);
+      const { detail, code, reason } = await errorDetail(res);
       // A federated base whose 404 lacks the proxy marker: the RELAY has
       // no federation routes (older / federation off) — never "room gone".
       const notFederating =
         this.opts.federated === true && res.status === 404 && !res.headers.get(FEDERATION_RESPONSE_HEADER);
       const e = notFederating
         ? new RoomsError(RELAY_NOT_FEDERATING_STATUS, 'your relay does not connect to other servers', 'relay-not-federating')
-        : new RoomsError(res.status, `rooms request failed: ${res.status}${detail}`, code);
+        : new RoomsError(res.status, `rooms request failed: ${res.status}${detail}`, code, reason);
       this.noteFailure(e);
       throw e;
     }

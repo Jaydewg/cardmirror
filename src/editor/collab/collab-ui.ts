@@ -40,6 +40,7 @@ import {
   setCollabFocusChangeHandler,
   setCollabShareCodeGetter,
   setCollabInviteLinkGetter,
+  setCollabCrossServerCodeGetter,
   collabRoomClaimKey,
 } from './collab-hooks.js';
 import { RoomsError } from './room-client.js';
@@ -89,7 +90,7 @@ import {
   type JoinRequestWatcher,
 } from '../federation/collab-federation.js';
 import { refreshOwnRelayFederation, selfRelayUrl } from '../federation/self.js';
-import { relayLabel } from '../federation/address.js';
+import { refusalWhy, relayLabel } from '../federation/address.js';
 import { pairingCodeRelay } from '../pairing/pairing-ids.js';
 import { compareAppVersions } from '../relay-protocol.js';
 import { appVersion } from '../install-info.js';
@@ -336,7 +337,14 @@ function actionSession(): ActiveSession | null {
 // The Send pill's session action ("Start session" vs "Copy session
 // code") keys off the FOCUSED doc's live session — an action, so it
 // uses actionSession(), never the display fallback (see above).
-setCollabShareCodeGetter(() => actionSession()?.shareCode ?? null);
+setCollabShareCodeGetter(() => {
+  const s = actionSession();
+  return s ? defaultCopyCode(s) : null;
+});
+setCollabCrossServerCodeGetter(() => {
+  const s = actionSession();
+  return s ? crossServerShareCode(s) : null;
+});
 setCollabInviteLinkGetter(() => {
   const s = actionSession();
   if (!s) return null;
@@ -1579,21 +1587,27 @@ export async function copyShareCodeFlow(): Promise<void> {
     showToast('This document has no active session');
     return;
   }
-  // A room on OUR relay copies the plain code every build reads (even
-  // when we joined it through a cross-server code naming our relay); a
-  // room on another server must keep naming its home.
-  const decoded = decodeShareCode(sess.shareCode);
-  let code = decoded?.home && !sess.home ? stripShareCodeHome(sess.shareCode) : sess.shareCode;
-  // Opted into cross-server codes (Settings): copy that form instead.
-  if (settings.get('collabCrossServerCodes')) {
-    await refreshOwnRelayFederation();
-    code = crossServerShareCode(sess) ?? code;
-  }
+  if (settings.get('collabCrossServerCodes')) await refreshOwnRelayFederation();
+  const code = defaultCopyCode(sess);
   const ok = await navigator.clipboard?.writeText(code).then(
     () => true,
     () => false,
   );
   showToast(ok ? 'Share code copied' : 'Could not copy the share code');
+}
+
+/** The code "Copy code" hands out — the ONE rule behind the command and
+ *  the Send pill. A room on OUR relay gives the plain code every build
+ *  reads (even when we joined it through a cross-server code naming our
+ *  relay); a room on another server keeps naming its home; and opting
+ *  into cross-server codes (Settings) gives that form for every room. */
+function defaultCopyCode(sess: { shareCode: string; home: string | null }): string {
+  if (settings.get('collabCrossServerCodes')) {
+    const cross = crossServerShareCode(sess);
+    if (cross) return cross;
+  }
+  const decoded = decodeShareCode(sess.shareCode);
+  return decoded?.home && !sess.home ? stripShareCodeHome(sess.shareCode) : sess.shareCode;
 }
 
 /** The session's code naming its home relay (`cmshare2f.…@<home>`), for
@@ -1751,6 +1765,7 @@ async function sendInviteTo(
   let ok = 0;
   let fail = 0;
   let peerFail = 0;
+  let peerReason = '';
   for (const [invite, codes] of groups) {
     const res = await pairingRelayClient.send(codes, buildRoomInviteItem({ shareCode: invite, title }), {
       via: target.via,
@@ -1759,9 +1774,10 @@ async function sendInviteTo(
     ok += res.ok;
     fail += res.fail;
     peerFail += res.peerFail ?? 0;
+    peerReason ||= res.peerReason ?? '';
   }
   if (fail === 0) showToast(`Invited ${target.label} ✓`);
-  else if (peerFail === fail) showToast(`Your relay can't reach ${target.label}'s server`);
+  else if (peerFail === fail) showToast(`Your relay can't reach ${target.label}'s server${refusalWhy(peerReason)}`);
   else if (ok === 0) showToast(`Couldn't reach ${target.label}`);
   else showToast(`Invited ${target.label} (${fail} failed)`);
 }

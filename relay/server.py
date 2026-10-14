@@ -1711,10 +1711,54 @@ def _peer_address_ok(url: str) -> bool:
     return ok
 
 
+def _static_refusal(url: str) -> Optional[str]:
+    """Why the operator's static policy refuses `url` (None = it doesn't)."""
+    if url == FEDERATION.url:
+        return "self"
+    if url.startswith("http://") and not FEDERATION.allow_http:
+        return "http-not-allowed"
+    if FederationConfig._matches(url, FEDERATION.deny):
+        return "denied"
+    if FEDERATION.allow and not FederationConfig._matches(url, FEDERATION.allow):
+        return "not-on-allow-list"
+    return None
+
+
+def _refusal(url: str) -> Optional[str]:
+    """Why this relay won't contact `url`, or None: the static policy,
+    then the address check (may DNS — call from a thread).
+
+    A peer the operator NAMED in RELAY_FEDERATION_ALLOW skips the address
+    check: the operator has vouched for it, and private-looking addresses
+    are normal for legitimate peers on overlay networks — e.g. Tailscale
+    Funnel hosts on the same tailnet resolve to 100.64.0.0/10 addresses."""
+    reason = _static_refusal(url)
+    if reason is None and not FEDERATION.allow and not _peer_address_ok(url):
+        reason = "private-address"
+    return reason
+
+
+_REFUSAL_HINTS = {
+    "http-not-allowed": "set RELAY_FEDERATION_ALLOW_HTTP=1 to allow plain-http peers",
+    "private-address": "it resolves to a private/loopback/tailnet address; name it in RELAY_FEDERATION_ALLOW "
+                       "(e.g. *.tailXXXX.ts.net) or set RELAY_FEDERATION_ALLOW_PRIVATE=1",
+    "denied": "it matches RELAY_FEDERATION_DENY",
+    "not-on-allow-list": "it isn't on RELAY_FEDERATION_ALLOW",
+    "self": "that is this relay's own URL",
+}
+
+
+def _refuse(url: str, reason: str, what: str) -> "FedError":
+    """Log a policy refusal with the operator's fix, and build the app's
+    `403 peer-refused` (now carrying `reason`)."""
+    logger.warning("[fed] refused %s %s: %s (%s)", what, url, reason, _REFUSAL_HINTS.get(reason, ""))
+    return FedError(403, "peer-refused", relay=url, reason=reason)
+
+
 def _peer_allowed(url: str) -> bool:
     """Full outbound policy: operator lists + address check (may DNS —
     call from a thread)."""
-    return FEDERATION.permits(url) and _peer_address_ok(url)
+    return _refusal(url) is None
 
 
 # ── HTTP clients ──
@@ -2083,7 +2127,7 @@ async def require_peer(request: Request) -> str:
     if not origin or not token:
         raise FedError(401, "peer-token-invalid")
     if not FEDERATION.permits(origin):
-        raise FedError(403, "peer-refused")
+        raise _refuse(origin, _static_refusal(origin) or "denied", "inbound request from")
     ok = PEERS.verify_in_cached(origin, token)
     if ok is None:
         ok = await run_in_threadpool(PEERS.verify_in_db, origin, token)
@@ -2215,9 +2259,9 @@ def fed_handshake(raw: bytes = Depends(_raw_body)) -> JSONResponse:
     nonce = body.get("nonce")
     if not origin or not isinstance(nonce, str) or not 16 <= len(nonce) <= 128:
         raise FedError(400, "bad-handshake")
-    if not _peer_allowed(origin):
-        logger.info("[fed] handshake refused origin=%s (policy)", origin)
-        raise FedError(403, "peer-refused")
+    reason = _refusal(origin)
+    if reason is not None:
+        raise _refuse(origin, reason, "handshake from")
     if not PEERS.allow_handshake(origin):
         raise FedError(429, "handshake-rate-limited")
     token = PEERS.issue_in_token(origin)
@@ -2509,10 +2553,9 @@ def _decode_home(home64: str) -> str:
 
 
 async def _ensure_home(home: str) -> dict:
-    if not FEDERATION.permits(home):
-        raise FedError(403, "peer-refused", relay=home)
-    if not await run_in_threadpool(_peer_address_ok, home):
-        raise FedError(403, "peer-refused", relay=home)
+    reason = _static_refusal(home) or await run_in_threadpool(_refusal, home)
+    if reason is not None:
+        raise _refuse(home, reason, "room home")
     info = PEERS.info_cached(home) or await run_in_threadpool(PEERS.info, home)
     if not info["reachable"]:
         raise FedError(503, "home-unreachable", relay=home)
@@ -2690,8 +2733,9 @@ def fed_outbox_post(
         return JSONResponse(
             {"msgId": _store_local_message(db, recipient, payload, data), "queued": False}, status_code=202
         )
-    if not _peer_allowed(peer):
-        raise FedError(403, "peer-refused", relay=peer)
+    reason = _refusal(peer)
+    if reason is not None:
+        raise _refuse(peer, reason, "card recipient relay")
     info = PEERS.info(peer, timeout=5)
     if info["reachable"] and not info["federates"]:
         raise FedError(409, "peer-not-federating", relay=peer)
@@ -2865,10 +2909,13 @@ def fed_peer_info(url: str = Query(..., max_length=600)) -> JSONResponse:
             "url": peer, "self": True, "permitted": True, "reachable": True, "federates": True,
             "nickname": FEDERATION.nickname or None,
         })
-    permitted = _peer_allowed(peer)
+    refusal = _refusal(peer)
+    permitted = refusal is None
     info = PEERS.info(peer, timeout=5) if permitted else {"reachable": None, "federates": None, "nickname": None}
     return JSONResponse({
         "url": peer, "self": False, "permitted": permitted,
+        # Why not, for the operator ("private-address", "http-not-allowed", …).
+        **({"refusal": refusal} if refusal else {}),
         "reachable": info["reachable"], "federates": info["federates"], "nickname": info["nickname"],
     })
 

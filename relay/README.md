@@ -74,6 +74,18 @@ RELAY_NICKNAME="Debate Club"                        # optional display name
   (always wins). Plain-`http` peers and peers on private/loopback
   addresses are refused unless `RELAY_FEDERATION_ALLOW_HTTP=1` /
   `RELAY_FEDERATION_ALLOW_PRIVATE=1` (for LAN or development setups).
+- **Tailscale Funnel / overlay networks.** Relays on the same tailnet
+  reach each other's `*.ts.net` names at tailnet (100.64.0.0/10)
+  addresses, which the private-address guard refuses. Name your peers
+  instead — `RELAY_FEDERATION_ALLOW=*.tailXXXX.ts.net` (peers named
+  there skip the address check) — or set
+  `RELAY_FEDERATION_ALLOW_PRIVATE=1`. Refusals are logged with the
+  reason and the fix (`[fed] refused …`), and
+  `GET /relay/federation/v1/peer?url=…` reports it as `refusal`.
+- **Served under a path** (e.g. `https://host/cmrelay/relay`): set
+  `RELAY_PUBLIC_URL` to that full URL. The proxy in front must strip
+  its own prefix so the relay still sees `/relay/…`; check with
+  `curl https://host/cmrelay/relay/health` → `{"ok": true}`.
 - **Card sharing** across relays is store-and-forward: your relay
   queues the bundle and retries delivery with backoff; undelivered
   bundles expire after the same 3 hours as local mail.

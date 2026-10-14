@@ -3092,7 +3092,9 @@ function buildPairingOwnCodeEditor(): HTMLElement {
   refresh();
   const unsub = settings.subscribe(refresh);
   const unsubCaps = onRelayCapabilitiesChanged(refresh);
-  void refreshOwnRelayFederation();
+  // Opening Settings re-reads the relay (forced: past the 5-min cache),
+  // so an operator's change shows up here without restarting the app.
+  void refreshOwnRelayFederation(true);
   registerRowCleanup(wrap, () => {
     unsub();
     unsubCaps();

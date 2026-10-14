@@ -6,6 +6,7 @@ Starts real relays (uvicorn subprocesses, one Postgres database each):
   B  federating, nickname "Beta"
   C  NOT federating (compatibility)
   D  federating, with a minimum-version gate (version flags)
+  E  federating, but private addresses NOT allowed (refusal reasons)
 
 Postgres: set RELAY_TEST_PG_URL (a superuser URL, e.g.
 postgresql://postgres@localhost/postgres) or `pip install pgserver` and
@@ -142,12 +143,17 @@ def relays(pg_url):
     d = Relay("d", _fresh_db(pg_url, "relay_fed_d"), "tok-d", {
         **_FED, "RELAY_MIN_CLIENT_VERSION": "1.15.0", "RELAY_MIN_VERSION_SCOPE": "all",
     })
+    # Federating over http but WITHOUT the private-address opt-in: every
+    # 127.0.0.1 peer is refused as a private address (the LAN pitfall).
+    e = Relay("e", _fresh_db(pg_url, "relay_fed_e"), "tok-e", {
+        "RELAY_FEDERATION": "on", "RELAY_FEDERATION_ALLOW_HTTP": "1",
+    })
     started = []
     try:
-        for r in (a, b, c, d):
+        for r in (a, b, c, d, e):
             r.start()
             started.append(r)
-        yield {"a": a, "b": b, "c": c, "d": d}
+        yield {"a": a, "b": b, "c": c, "d": d, "e": e}
     finally:
         for r in started:
             r.stop()

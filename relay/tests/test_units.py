@@ -59,6 +59,18 @@ def test_flags_never_affect_ordering():
     assert p("garbage") is None
 
 
+def test_named_peers_skip_the_address_check(monkeypatch):
+    """Tailscale Funnel peers on one tailnet resolve to 100.64/10: naming
+    them in the allow list admits them; open federation still refuses."""
+    peer = "https://127.0.0.1/relay"  # loopback: never a "global" address
+    monkeypatch.setattr(server, "FEDERATION", server.FederationConfig(
+        enabled=True, url="https://me.example/relay", allow=("127.0.0.1",)))
+    assert server._refusal(peer) is None
+    monkeypatch.setattr(server, "FEDERATION", server.FederationConfig(
+        enabled=True, url="https://me.example/relay"))
+    assert server._refusal(peer) == "private-address"
+
+
 def test_peer_policy():
     cfg = server.FederationConfig(
         enabled=True, url="https://me.example/relay",

@@ -163,6 +163,20 @@ export function collabActiveShareCode(): string | null {
   return shareCodeGetter?.() ?? null;
 }
 
+/** Focused doc's session code for someone on ANOTHER server
+ *  (`cmshare…f…@<home>`), or null when there is no session or this
+ *  app's relay doesn't federate. The Send pill offers it beside the
+ *  default "Copy code", so plain codes stay the default. */
+let crossServerCodeGetter: (() => string | null) | null = null;
+
+export function setCollabCrossServerCodeGetter(fn: (() => string | null) | null): void {
+  crossServerCodeGetter = fn;
+}
+
+export function collabActiveCrossServerCode(): string | null {
+  return crossServerCodeGetter?.() ?? null;
+}
+
 /** Focused doc's session INVITE LINK (share code + guest pass packed
  *  for the web joiner) — same registration pattern as the share code. */
 let inviteLinkGetter: (() => string | null) | null = null;

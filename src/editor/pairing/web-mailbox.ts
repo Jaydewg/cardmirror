@@ -353,7 +353,7 @@ export async function webPairingRegenerateKey(): Promise<{ ownCode: string }> {
 
 export async function webPairingSend(
   payload: PairingSendIpc,
-): Promise<{ ok: number; fail: number; authFail: number; peerFail: number; deferred: number }> {
+): Promise<{ ok: number; fail: number; authFail: number; peerFail: number; deferred: number; peerReason?: string }> {
   const plainSenderCode = await webOwnPublicCode();
   // Federation (relay/FEDERATION.md §5) — same routing rule as desktop.
   if (payload.recipientCodes.some((c) => !!parsePairingCode(c)?.relay)) {
@@ -365,6 +365,7 @@ export async function webPairingSend(
   let authFail = 0;
   let peerFail = 0;
   let deferred = 0;
+  let peerReason = '';
   await Promise.all(
     payload.recipientCodes.map(async (rawRecipientCode) => {
       const addr = parsePairingCode(rawRecipientCode);
@@ -373,6 +374,7 @@ export async function webPairingSend(
       if (remoteRelay && !fed?.mailbox) {
         fail++;
         peerFail++;
+        peerReason ||= 'relay-not-federating';
         return;
       }
       const senderCode = remoteRelay && fed ? formatPairingCode(plainSenderCode, fed.url) : plainSenderCode;
@@ -415,12 +417,15 @@ export async function webPairingSend(
         } else {
           fail++;
           let code = '';
+          let reason = '';
           if (remoteRelay) {
-            const r = (await res.json().catch(() => null)) as { error?: unknown } | null;
+            const r = (await res.json().catch(() => null)) as { error?: unknown; reason?: unknown } | null;
             code = typeof r?.error === 'string' ? r.error : '';
+            reason = typeof r?.reason === 'string' ? r.reason : '';
           }
           if (remoteRelay && (code.startsWith('peer-') || code === 'too-large-for-peer' || res.status === 404)) {
             peerFail++;
+            peerReason ||= reason || code;
           } else if (res.status === 401 || res.status === 403) authFail++;
         }
       } catch {
@@ -428,7 +433,7 @@ export async function webPairingSend(
       }
     }),
   );
-  return { ok, fail, authFail, peerFail, deferred };
+  return { ok, fail, authFail, peerFail, deferred, ...(peerReason ? { peerReason } : {}) };
 }
 
 export function onWebPairingVersionMismatch(

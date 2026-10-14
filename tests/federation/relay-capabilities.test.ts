@@ -54,6 +54,30 @@ describe('own-relay capabilities', () => {
     expect(changes).toBe(1);
   });
 
+  it('an operator change (nickname) reaches the UI; fetches revalidate past the HTTP cache', async () => {
+    const inits: Array<RequestInit | undefined> = [];
+    let nickname = 'Old Name';
+    const fetchImpl = (async (_u: unknown, init?: RequestInit) => {
+      inits.push(init);
+      return new Response(
+        JSON.stringify({ ...FEDERATING, federation: { ...FEDERATING.federation, nickname } }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+    let changes = 0;
+    onRelayCapabilitiesChanged(() => changes++);
+    await ensureRelayCapabilities(BASE, { fetchImpl });
+    expect(federationFor(BASE)?.nickname).toBe('Old Name');
+    nickname = 'New Name';
+    await ensureRelayCapabilities(BASE, { force: true, fetchImpl });
+    expect(federationFor(BASE)?.nickname).toBe('New Name');
+    expect(changes).toBe(2); // the nickname change notified listeners
+    await ensureRelayCapabilities(BASE, { force: true, fetchImpl });
+    expect(changes).toBe(2); // …an unchanged document doesn't
+    // The relay's max-age=300 must not answer for it.
+    expect(inits.every((i) => i?.cache === 'no-cache')).toBe(true);
+  });
+
   it('a relay without capabilities (404) is a pre-federation relay', async () => {
     await ensureRelayCapabilities(BASE, { fetchImpl: fetchReturning(404) });
     expect(federationFor(BASE)).toBeNull();

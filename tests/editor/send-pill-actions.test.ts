@@ -24,6 +24,7 @@ import { settings } from '../../src/editor/settings.js';
 import {
   setCollabSessionStarter,
   setCollabShareCodeGetter,
+  setCollabCrossServerCodeGetter,
 } from '../../src/editor/collab/collab-hooks.js';
 import { showToast } from '../../src/editor/toast.js';
 import * as collabGate from '../../src/editor/collab/collab-gate.js';
@@ -52,6 +53,7 @@ afterEach(() => {
   settings.set('pairingEnabled', false);
   setCollabSessionStarter(null);
   setCollabShareCodeGetter(null);
+  setCollabCrossServerCodeGetter(null);
   vi.restoreAllMocks();
 });
 
@@ -81,10 +83,45 @@ describe('send pill actions row + hidden recipients', () => {
   it('the actions row renders; Start session hides while the collab gate is closed', () => {
     const { root } = mountPill();
     const actions = root.querySelectorAll('.pmd-send-action:not(.pmd-pill-settings)');
-    expect(actions.length).toBe(2);
+    expect(actions.length).toBe(3);
     expect(actions[0]!.textContent).toContain('Add contact');
     // No collab starter registered (gate closed) → hidden by class.
     expect(actions[1]!.classList.contains('pmd-send-action-collab-hidden')).toBe(true);
+    // Federation's cross-server code: hidden with no live session.
+    expect(actions[2]!.textContent).toContain('Cross-server code');
+    expect(actions[2]!.classList.contains('pmd-send-action-collab-hidden')).toBe(true);
+  });
+
+  it('cross-server code: offered beside Copy code only when it differs; copies that form', () => {
+    vi.spyOn(collabGate, 'collabEnabled').mockReturnValue(true);
+    setCollabSessionStarter(vi.fn());
+    const PLAIN = `cmshare2.${'a'.repeat(32)}.key456.1.0.0`;
+    const CROSS = `cmshare2f.${'a'.repeat(32)}.key456.1.0.0@https://relay-a.example/relay`;
+    setCollabShareCodeGetter(() => PLAIN);
+    let cross: string | null = CROSS;
+    setCollabCrossServerCodeGetter(() => cross);
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+
+    const { root } = mountPill();
+    (root.querySelector('.pmd-send-bar') as HTMLElement).click();
+    const [, copyBtn, crossBtn] = [...root.querySelectorAll('.pmd-send-action:not(.pmd-pill-settings)')] as HTMLElement[];
+    expect(copyBtn!.textContent).toContain('Copy code');
+    expect(crossBtn!.classList.contains('pmd-send-action-collab-hidden')).toBe(false);
+    expect(crossBtn!.classList.contains('pmd-send-action-clickonly')).toBe(true); // not a drop zone
+    crossBtn!.click();
+    expect(writeText).toHaveBeenCalledWith(CROSS);
+    (root.querySelector('.pmd-send-bar') as HTMLElement).click(); // the action collapsed the pill
+    copyBtn!.click();
+    expect(writeText).toHaveBeenLastCalledWith(PLAIN); // the default stays plain
+
+    // Relay doesn't federate (or Copy code already gives the cross form): hidden.
+    cross = null;
+    (root.querySelector('.pmd-send-bar') as HTMLElement).click();
+    expect(crossBtn!.classList.contains('pmd-send-action-collab-hidden')).toBe(true);
+    cross = PLAIN;
+    (root.querySelector('.pmd-send-bar') as HTMLElement).click();
+    expect(crossBtn!.classList.contains('pmd-send-action-collab-hidden')).toBe(true);
   });
 
   it('session action toggles: Copy code with a live session, Start session without', () => {

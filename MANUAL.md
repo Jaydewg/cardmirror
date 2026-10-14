@@ -1739,8 +1739,10 @@ reached right now, the card is queued and delivered if it comes back within
 a few hours; if your relay doesn't connect to theirs, the Send pill says so.
 
 **Co-editing across servers.** The classic share code only works for people
-on the session's own server. For someone elsewhere, run **Copy Cross-Server
-Session Code** (it ends in `@` and the session's server address), or invite a
+on the session's own server. For someone elsewhere, click **Cross-server
+code** in the Send pill (next to **Copy code**, on any document that's in a
+session), or run **Copy Cross-Server Session Code** — the code ends in `@`
+and the session's server address. Or invite a
 contact on another server from the Send pill, which picks the right code
 automatically. To make every copied code cross-server, turn on **Share
 cross-server session codes** in Settings → Collaboration.
