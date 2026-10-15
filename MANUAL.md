@@ -16,6 +16,8 @@ for the parts that aren't.
 > shortcut shown is the default — all of them are rebindable in
 > **Settings → Keyboard shortcuts**.
 
+**Note for now: this Cardmirror Branch comes with no web app. While most components are backwards-compatible with each other, enhanced functionality can only come with using the client here.**
+
 ---
 
 ## Contents
@@ -1499,10 +1501,7 @@ it does nothing and tells you so. Card numbers are frozen into the saved copy as
 There are two collaboration features: **card sharing** (send cards to
 another machine) and **co-editing** (edit a document together in real time).
 Both are off until you enable them, and both are end-to-end encrypted — the
-relay server that passes traffic along sees only scrambled data. Both work
-in the desktop app and the web editor (see
-**[Collaboration on the web](#collaboration-on-the-web)** below); the web
-edition's mobile layout has neither.
+relay server that passes traffic along sees only scrambled data. The desktop app has 
 
 ### Setting up
 
@@ -2299,9 +2298,7 @@ focused document.
 
 ### Two formats
 
-- **`.cmir`** — CardMirror's native format. Lossless, and the format to
-  use for your working files: autosave works without limits (a `.docx`
-  with live links can't autosave). Files are
+- **`.cmir`** — CardMirror's native format. Lossless, and preferred format to use. Files are
   saved compressed (roughly 10× smaller than before) and open just as fast;
   any older uncompressed file shrinks automatically the next time you save
   it — no action needed.

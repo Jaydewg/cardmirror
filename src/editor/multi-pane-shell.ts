@@ -291,6 +291,9 @@ async function clearJournalForRecord(record: DocRecord): Promise<void> {
  *  (autosave-policy.ts), supportsInPlaceSave host. */
 async function runAutosaveForRecord(record: DocRecord): Promise<void> {
   if (!record.autosaveEnabled) return;
+  // Already saved since the edit that armed the debounce (a manual Save):
+  // don't rewrite identical content (for a `.docx`, a full re-export).
+  if (!record.dirty) return;
   const format = record.format;
   if (!format || autosaveEffect({ format, handle: record.handle, doc: record.view.state.doc }) !== 'effective') return;
   if (typeof record.handle !== 'string' || !record.handle) return;

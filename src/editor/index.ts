@@ -6626,6 +6626,11 @@ function markCurrentDocClean(): void {
   // clean (save completions commit via their token, not this fn).
   currentDocEditGen++;
 }
+/** Unsaved changes in the active doc: the focused pane's record in
+ *  multi-doc, the single-doc flag otherwise. */
+function activeDocDirty(): boolean {
+  return multiDocActive ? (multiDocGetFocusedFile?.()?.dirty ?? false) : currentDocDirty;
+}
 
 /** Generate a fresh session-scoped doc UID. Used by the single-doc
  *  edit path; multi-doc DocRecords have their own newDocUid pool.
@@ -8675,17 +8680,25 @@ function setSaveInProgress(on: boolean): void {
   }
 }
 
-export async function runSaveFlow(): Promise<boolean> {
+/** `awaitFailureAlert`: resolve only after the user dismisses the
+ *  save's own failure alert — for callers that show another dialog
+ *  next (the close-time save falls back to the unsaved prompt), which
+ *  would otherwise stack on top of it. */
+export async function runSaveFlow(opts?: { awaitFailureAlert?: boolean }): Promise<boolean> {
+  const alerts: Promise<void>[] = [];
   setSaveInProgress(true);
+  let ok: boolean;
   try {
-    return await runSaveFlowInner();
+    ok = await runSaveFlowInner(alerts);
   } catch (err) {
     console.error('Save flow crashed:', err);
-    void alertDialog(`Save failed unexpectedly: ${err instanceof Error ? err.message : err}`);
-    return false;
+    alerts.push(alertDialog(`Save failed unexpectedly: ${err instanceof Error ? err.message : err}`));
+    ok = false;
   } finally {
     setSaveInProgress(false);
   }
+  if (opts?.awaitFailureAlert) await Promise.all(alerts);
+  return ok;
 }
 
 /** The changed-on-disk decision, shared by manual save and the
@@ -8706,6 +8719,8 @@ export async function runSaveFlow(): Promise<boolean> {
 async function keepBothForActiveFile(
   file: { handle: string; filename: string | null; format: 'cmir' | 'docx' },
   bytes: Uint8Array,
+  /** Collects the failure alert for a caller that waits on it (runSaveFlow). */
+  alerts?: Promise<void>[],
 ): Promise<boolean> {
   const electron = getElectronHost();
   if (!electron) return false;
@@ -8719,7 +8734,8 @@ async function keepBothForActiveFile(
     return true;
   } catch (err) {
     console.error('Conflicted-copy save failed:', err);
-    void alertDialog(`Couldn't save a conflicted copy: ${err instanceof Error ? err.message : String(err)}`);
+    const alert = alertDialog(`Couldn't save a conflicted copy: ${err instanceof Error ? err.message : String(err)}`);
+    alerts?.push(alert);
     return false;
   }
 }
@@ -8852,7 +8868,7 @@ function ensureDiskBadge(): void {
       return { handle: typeof f.handle === 'string' ? f.handle : null, name: f.filename };
     },
     isSuppressed: () => readModeStateForActive() || getTimerStateNow().poppedOut,
-    isDirty: () => (multiDocActive ? (multiDocGetFocusedFile?.()?.dirty ?? false) : currentDocDirty),
+    isDirty: activeDocDirty,
     isSessionHost: () => collabCopresenceFor(activeDocIdentity().sessionUid)?.role === 'host',
     reveal: (handle) => void getElectronHost()?.showItemInFolder?.(handle),
     reloadFromDisk: reloadActiveFromDisk,
@@ -8864,7 +8880,7 @@ function ensureDiskBadge(): void {
   subscribeTimer(() => refreshDiskBadge());
 }
 
-async function runSaveFlowInner(): Promise<boolean> {
+async function runSaveFlowInner(alerts: Promise<void>[]): Promise<boolean> {
   const file = activeFile();
   if (!file.handle || !file.format || !getHost().supportsInPlaceSave) {
     return runSaveAsFlow();
@@ -8952,7 +8968,7 @@ async function runSaveFlowInner(): Promise<boolean> {
       // becomes a conflicted copy beside the original and this window
       // switches to the copy. No dialog; the chip + badge say so.
       if (!isFileChangedOnDiskError(err) || typeof file.handle !== 'string') throw err;
-      if (!(await keepBothForActiveFile({ handle: file.handle, filename: file.filename, format: file.format }, bytes))) {
+      if (!(await keepBothForActiveFile({ handle: file.handle, filename: file.filename, format: file.format }, bytes, alerts))) {
         return false;
       }
     }
@@ -9007,7 +9023,7 @@ async function runSaveFlowInner(): Promise<boolean> {
         ],
       });
       if (choice === 'saveAs') return runSaveAsFlow();
-      if (choice === 'retry') return runSaveFlowInner();
+      if (choice === 'retry') return runSaveFlowInner(alerts);
       return false;
     }
     // The file's folder was renamed/moved/deleted out from under us (field
@@ -9025,7 +9041,7 @@ async function runSaveFlowInner(): Promise<boolean> {
       return rescue ? runSaveAsFlow() : false;
     }
     const lockedMsg = fileLockedMessage(err);
-    void alertDialog(`Save failed: ${lockedMsg ?? (err instanceof Error ? err.message : err)}`);
+    alerts.push(alertDialog(`Save failed: ${lockedMsg ?? (err instanceof Error ? err.message : err)}`));
     return false;
   }
 }
@@ -9198,12 +9214,21 @@ export function explainLiveLinkStoppedAutosave(
   }, 0);
 }
 
+/** Longest the close-time save waits for an in-flight autosave. An autosave
+ *  write has no deadline (its watchdog only posts a notice), so a write hung
+ *  on a stalled sync folder would otherwise freeze the close — and a pending
+ *  app quit with it. Past this, the Save goes ahead: desktop queues writes to
+ *  the same path in order (doc-writes.ts), and Save's own watchdog offers
+ *  Save As if the folder stays stuck. */
+const CLOSE_SAVE_SETTLE_MS = 3000;
+
 /** Closing a dirty doc with autosave on: save it silently instead of asking,
  *  when autosave would have written it anyway (`shouldSaveOnClose`). Acts on
  *  the active doc — the caller focuses the one being closed. `settle` cancels
- *  that doc's pending autosave and waits out an in-flight one, so the two
- *  writes can't race; it only runs when the close save goes ahead. True when
- *  the save landed; false → the caller shows the usual unsaved prompt. */
+ *  that doc's pending autosave and waits out an in-flight one (bounded by
+ *  CLOSE_SAVE_SETTLE_MS), so the two writes don't race; it only runs when the
+ *  close save goes ahead. True when the save landed; false → the caller shows
+ *  the usual unsaved prompt (after any save-failure alert is dismissed). */
 export async function saveOnCloseIfAutosaving(opts: {
   autosaveOn: boolean;
   settle: () => Promise<void>;
@@ -9218,8 +9243,8 @@ export async function saveOnCloseIfAutosaving(opts: {
     doc: view?.state.doc,
   });
   if (!save) return false;
-  await opts.settle();
-  return runSaveFlow();
+  await Promise.race([opts.settle(), new Promise<void>((r) => window.setTimeout(r, CLOSE_SAVE_SETTLE_MS))]);
+  return runSaveFlow({ awaitFailureAlert: true });
 }
 
 function saveSingleDocOnCloseIfAutosaving(): Promise<boolean> {
@@ -9335,6 +9360,10 @@ function captureActiveDocCleanToken(): () => boolean {
 
 async function runAutosaveAttempt(): Promise<void> {
   if (!settings.get('autosaveEnabled')) return;
+  // Nothing unsaved: the debounce can outlive the doc that armed it — Save,
+  // back to Home, open another file inside the window — and must not rewrite
+  // a file nobody edited (for a `.docx`, a full re-export through our writer).
+  if (!activeDocDirty()) return;
   const file = activeFile();
   const format = file.format;
   // No file yet, or a `.docx` whose live links a write would flatten
