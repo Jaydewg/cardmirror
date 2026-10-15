@@ -16,6 +16,8 @@ for the parts that aren't.
 > shortcut shown is the default — all of them are rebindable in
 > **Settings → Keyboard shortcuts**.
 
+**Note for now: this Cardmirror Branch comes with no web app. While most components are backwards-compatible with each other, enhanced functionality can only come with using the client here.**
+
 ---
 
 ## Contents
@@ -1499,10 +1501,7 @@ it does nothing and tells you so. Card numbers are frozen into the saved copy as
 There are two collaboration features: **card sharing** (send cards to
 another machine) and **co-editing** (edit a document together in real time).
 Both are off until you enable them, and both are end-to-end encrypted — the
-relay server that passes traffic along sees only scrambled data. Both work
-in the desktop app and the web editor (see
-**[Collaboration on the web](#collaboration-on-the-web)** below); the web
-edition's mobile layout has neither.
+relay server that passes traffic along sees only scrambled data. The desktop app has 
 
 ### Setting up
 
@@ -2353,8 +2352,7 @@ focused document.
 
 ### Two formats
 
-- **`.cmir`** — CardMirror's native format. Lossless, and required for
-  autosave and crash recovery. Use it for your working files. Files are
+- **`.cmir`** — CardMirror's native format. Lossless, and preferred format to use. Files are
   saved compressed (roughly 10× smaller than before) and open just as fast;
   any older uncompressed file shrinks automatically the next time you save
   it — no action needed.
@@ -2417,13 +2415,28 @@ and headings instead of importing flat text.
 ### Saving
 
 - **Save (Mod-S)** / **Save As… (Mod-Shift-S)**.
-- **Autosave** is a toggle in the ribbon that applies to `.cmir`
-  files. The button shows whether autosave is actually protecting the
-  current doc: a **solid filled** button means it's saving; a **hollow
-  button with a dashed outline** means it's on but not firing (the doc
-  is `.docx`, or hasn't been saved once yet); a **red button with a solid
-  outline** means the last autosave FAILED and your latest changes are not
-  on disk — hover over it for the reason. **(Desktop only.)**
+- **Autosave** is a toggle in the ribbon. A `.cmir` file saves a few
+  seconds after each edit. A `.docx` file saves once you pause editing
+  (about 30 seconds), as soon as you switch to another window, and when
+  you close it. It waits because writing Word files takes longer, and
+  saving while you type would slow typing on large files.
+  - **Closing saves for you.** With autosave on, closing a document or
+    window (or quitting) saves it without asking. You only see the
+    Save / Don't Save prompt if that save fails, or if autosave couldn't
+    have saved the document anyway (see below).
+  - **Word documents with live links don't autosave.** A `.docx` can't
+    hold [live views or linked copies](#10-live-views-and-linked-copies),
+    and saving would turn them into plain cards, so autosave never makes
+    that call for you. If you turn autosave on for such a document, or add
+    the first live link while it's on, a dialog explains this and offers
+    **Save as .cmir…** (keeps the links, and autosave works). It also
+    offers **Undo the link** or **Turn autosave off**.
+  - **What the button shows.** A **solid filled** button means autosave is
+    saving. A **hollow button with a dashed outline** means it's on but
+    not saving: the doc hasn't been saved once yet, or it's a `.docx` with
+    live links. A **red button with a solid outline** means the last
+    autosave FAILED and your latest changes are not on disk. Hover over the
+    button for the reason. **(Desktop only.)**
 - **If a file (or its folder) gets renamed, moved, or deleted** while the
   document is open (say, someone reorganizes a shared Dropbox), the next
   save can't find the old location. CardMirror will tell you what happened
@@ -2763,8 +2776,9 @@ file search scans, and how much version history to keep.
   Speech Document saves by default. Empty leaves the doc unsaved until
   you Save.
 - **Default format for new speech documents** — `.docx`
-  (Verbatim-compatible) or `.cmir` (native, and the only format that
-  supports autosave).
+  (Verbatim-compatible) or `.cmir` (native, and fully supports autosave;
+  a `.docx` autosaves only when you pause editing, and not while it has
+  live links).
 - **Speech document filename** — the name New Speech Document gives a
   new file: literal text plus two fields. `{speech}` is the name you
   type at the prompt (1NC, 2AC, …); `{date:...}` writes the current
