@@ -79,6 +79,14 @@ import { liveContainerSegment, orderWordCountSegments, primaryReadSegment, remai
 import { openWordCount } from './word-count-ui.js';
 import { isAutosaveOnForPath, setAutosaveForPath } from './autosave-prefs-store.js';
 import {
+  autosaveDelayFor,
+  autosaveEffect,
+  explainAutosaveBlockedOnToggle,
+  hasLiveLinks,
+  liveLinkCounts,
+  liveLinksAppeared,
+} from './autosave-policy.js';
+import {
   autosaveBlockedForRecoveredDraft,
   recoveredDraftJournalSavedAt,
 } from './journal-staleness.js';
@@ -124,6 +132,9 @@ import {
   resolveCoEditedClose,
   runSaveFlow,
   runSaveAsFlow,
+  saveOnCloseIfAutosaving,
+  explainLiveLinkStoppedAutosave,
+  serializeWorkingCopy,
   registerDocPath,
   releaseDocPath,
   setMultiDocReloadFromDisk,
@@ -272,18 +283,16 @@ async function clearJournalForRecord(record: DocRecord): Promise<void> {
   }
 }
 
-/** Debounce delay before an autosave attempt fires after the user
- *  pauses editing. Matches the single-doc constant in editor/index.ts. */
-const AUTOSAVE_DELAY_MS = 5000;
-
 /** Per-DocRecord autosave attempt. Like the single-doc
  *  `runAutosaveAttempt`, but bound to `record` instead of the
  *  module-level focused view — so edits in pane A flush to A's
  *  file even when focus has since moved to B. Same gates: opt-in
- *  per-record, .cmir + saved-once only, supportsInPlaceSave host. */
+ *  per-record, saved-once only, no live links in a `.docx`
+ *  (autosave-policy.ts), supportsInPlaceSave host. */
 async function runAutosaveForRecord(record: DocRecord): Promise<void> {
   if (!record.autosaveEnabled) return;
-  if (record.format !== 'cmir') return;
+  const format = record.format;
+  if (!format || autosaveEffect({ format, handle: record.handle, doc: record.view.state.doc }) !== 'effective') return;
   if (typeof record.handle !== 'string' || !record.handle) return;
   const host = getHost();
   if (!host.supportsInPlaceSave) return;
@@ -310,10 +319,13 @@ async function runAutosaveForRecord(record: DocRecord): Promise<void> {
     });
     const state = record.view.state;
     const threads = Array.from(getCommentsState(state).threads.values());
-    const bytes = await serializeNativeAsync(state.doc, {
-      ...(threads.length ? { threads } : {}),
-      ...(record.docId ? { docId: record.docId } : {}),
-    });
+    const bytes =
+      format === 'cmir'
+        ? await serializeNativeAsync(state.doc, {
+            ...(threads.length ? { threads } : {}),
+            ...(record.docId ? { docId: record.docId } : {}),
+          })
+        : await serializeWorkingCopy('docx', { doc: state.doc, threads }, record.docId);
     // Same as the single-doc autosave: the pre-write version snapshot, and
     // the watchdog without its dialog (the 10s chip still turns a hung write
     // on a stalled sync folder into feedback instead of silence).
@@ -332,7 +344,7 @@ async function runAutosaveForRecord(record: DocRecord): Promise<void> {
       const original = record.handle;
       const copy = await electron.saveConflictedCopy(original, bytes, conflictedCopyUserName());
       noteKeptCopy(copy.handle, original);
-      adoptFileForRecord(record, { filename: copy.name, handle: copy.handle, format: 'cmir' });
+      adoptFileForRecord(record, { filename: copy.name, handle: copy.handle, format });
       // No chip or toast: the pill's "Conflicted copy" state is the announcement.
     }
     commitClean();
@@ -350,16 +362,57 @@ function scheduleAutosaveForRecord(record: DocRecord): void {
   if (record.autosaveTimer !== null) window.clearTimeout(record.autosaveTimer);
   record.autosaveTimer = window.setTimeout(() => {
     record.autosaveTimer = null;
-    const prev = recordAutosaveChains.get(record) ?? Promise.resolve();
-    // .catch keeps the chain fulfilled — one guard-line throw must not kill
-    // this record's autosave for the session (same fix as the single-doc chain).
-    recordAutosaveChains.set(
-      record,
-      prev
-        .then(() => runAutosaveForRecord(record))
-        .catch((err) => reportAutosaveFailure(record.filename, err)),
-    );
-  }, AUTOSAVE_DELAY_MS);
+    queueAutosaveForRecord(record);
+  }, autosaveDelayFor(record.format));
+}
+
+function queueAutosaveForRecord(record: DocRecord): void {
+  const prev = recordAutosaveChains.get(record) ?? Promise.resolve();
+  // .catch keeps the chain fulfilled — one guard-line throw must not kill
+  // this record's autosave for the session (same fix as the single-doc chain).
+  recordAutosaveChains.set(
+    record,
+    prev
+      .then(() => runAutosaveForRecord(record))
+      .catch((err) => reportAutosaveFailure(record.filename, err)),
+  );
+}
+
+/** Run `record`'s pending autosave now instead of at the end of its
+ *  debounce (the user left the window). */
+function flushPendingAutosaveForRecord(record: DocRecord): void {
+  if (record.autosaveTimer === null) return;
+  window.clearTimeout(record.autosaveTimer);
+  record.autosaveTimer = null;
+  queueAutosaveForRecord(record);
+}
+
+/** Set `record`'s autosave toggle, remember it for its file, and repaint
+ *  the ribbon button when the record is the focused one. */
+function setRecordAutosave(record: DocRecord, on: boolean): void {
+  record.autosaveEnabled = on;
+  // Remember the choice per-file so it survives close + reopen.
+  setAutosaveForPath(record.handle, on);
+  if (!on && record.autosaveTimer !== null) {
+    window.clearTimeout(record.autosaveTimer);
+    record.autosaveTimer = null;
+  }
+  if (getActiveView() === record.view) setActiveView(record.view);
+}
+
+/** Close-time save for `record` (focused by the caller) when its autosave is
+ *  on — see `saveOnCloseIfAutosaving`. False → show the unsaved prompt. */
+function saveRecordOnCloseIfAutosaving(record: DocRecord): Promise<boolean> {
+  return saveOnCloseIfAutosaving({
+    autosaveOn: record.autosaveEnabled,
+    settle: async () => {
+      if (record.autosaveTimer !== null) {
+        window.clearTimeout(record.autosaveTimer);
+        record.autosaveTimer = null;
+      }
+      await recordAutosaveChains.get(record);
+    },
+  });
 }
 
 /**
@@ -1022,6 +1075,8 @@ class Slot {
     // Unsaved-file prompt (save / save-as / discard / cancel). Returns false to
     // abort the close.
     const runDirtyPrompt = async (): Promise<boolean> => {
+      // Autosave on: save instead of asking (the prompt only on failure).
+      if (await saveRecordOnCloseIfAutosaving(closing)) return true;
       const choice = await confirmCloseUnsaved();
       if (choice === 'cancel') return false;
       if (choice === 'save') return runSaveFlow();
@@ -1119,6 +1174,8 @@ class Slot {
       if (!rec.dirty) continue;
       this.showRecord(rec); // surface it so the prompt has context
       this.shell.focusSlot(this); // save commands route via the focused doc
+      // Autosave on: save instead of asking (the prompt only on failure).
+      if (await saveRecordOnCloseIfAutosaving(rec)) continue;
       const choice = await confirmCloseUnsaved();
       if (choice === 'cancel') return false;
       if (choice === 'save') {
@@ -1663,6 +1720,13 @@ class MultiPaneShell {
     // comment on Slot.syncCardIntrinsicWidth for why.
     window.addEventListener('resize', this.onWindowResize);
 
+    // Leaving the window means the user stopped editing: run every pending
+    // autosave now (a `.docx` otherwise waits out its long idle window).
+    window.addEventListener('blur', this.flushPendingAutosaves);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') this.flushPendingAutosaves();
+    });
+
     // Build the doc-switcher overlay element (Alt+Tab-style list)
     // and stash a reference. The overlay is hidden until
     // `onDocCycleKey` opens it, then survives across Ctrl-Tab
@@ -2058,6 +2122,12 @@ class MultiPaneShell {
     });
   }
 
+  private flushPendingAutosaves = (): void => {
+    for (const id of SLOT_IDS) {
+      for (const rec of this.slots[id].stack) flushPendingAutosaveForRecord(rec);
+    }
+  };
+
   private onWindowResize = (): void => {
     this.scheduleSyncAllCardIntrinsicWidths();
   };
@@ -2406,14 +2476,18 @@ class MultiPaneShell {
   toggleFocusedAutosave(): void {
     const rec = this.focusedSlot?.visible;
     if (!rec) return;
-    rec.autosaveEnabled = !rec.autosaveEnabled;
-    // Remember the choice per-file so it survives close + reopen.
-    setAutosaveForPath(rec.handle, rec.autosaveEnabled);
-    if (!rec.autosaveEnabled && rec.autosaveTimer !== null) {
-      window.clearTimeout(rec.autosaveTimer);
-      rec.autosaveTimer = null;
+    const next = !rec.autosaveEnabled;
+    if (next && rec.format === 'docx' && hasLiveLinks(rec.view.state.doc)) {
+      // Turning autosave on where it can't work: say why in a modal and
+      // offer the way out (Save As acts on the focused pane — this one).
+      void explainAutosaveBlockedOnToggle(liveLinkCounts(rec.view.state.doc)).then(async (choice) => {
+        if (choice === 'saveAsCmir' && (await runSaveAsFlow({ defaultFormat: 'cmir' })) && rec.format === 'cmir') {
+          setRecordAutosave(rec, true);
+        }
+      });
+      return;
     }
-    setActiveView(rec.view);
+    setRecordAutosave(rec, next);
   }
 
   /** Clean token for the focused pane — captured by the single-doc
@@ -3671,6 +3745,19 @@ function buildDocRecord(
         record.editGen++;
         scheduleAutosaveForRecord(record);
         scheduleJournalForRecord(record);
+        // First live view / linked copy in a `.docx` with autosave on stops
+        // its autosave — say why in a modal (not for a co-editor's sync).
+        if (
+          record.autosaveEnabled &&
+          record.format === 'docx' &&
+          !isSyncOrigin(tx) &&
+          liveLinksAppeared(prevState.doc, next.doc)
+        ) {
+          explainLiveLinkStoppedAutosave(next.doc, {
+            turnOff: () => setRecordAutosave(record, false),
+            keepOnAfterSaveAs: () => setRecordAutosave(record, true),
+          });
+        }
       }
       // Keep the shared comments column in sync — same updates the
       // single-doc dispatchTransaction makes, but only when this

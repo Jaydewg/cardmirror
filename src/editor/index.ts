@@ -7,7 +7,7 @@
  * multi-pane / mobile shells install to take over per-pane state.
  */
 
-import { EditorState, Plugin, Selection, TextSelection, type Command } from 'prosemirror-state';
+import { EditorState, Plugin, Selection, TextSelection, type Command, type Transaction } from 'prosemirror-state';
 import { serializeRangesForClipboard, serializeNodesForClipboard } from './clipboard-slice.js';
 import { EditorView } from 'prosemirror-view';
 import { keymap } from 'prosemirror-keymap';
@@ -154,6 +154,16 @@ import {
 const MODE_SWITCH_MARKER_KEY = 'cardmirror:mode-switch-recovery';
 import { isAutosaveOnForPath, setAutosaveForPath } from './autosave-prefs-store.js';
 import {
+  autosaveDelayFor,
+  autosaveEffect,
+  explainAutosaveBlockedOnCreate,
+  explainAutosaveBlockedOnToggle,
+  hasLiveLinks,
+  liveLinkCounts,
+  liveLinksAppeared,
+  shouldSaveOnClose,
+} from './autosave-policy.js';
+import {
   settings,
   condenseWarningCloseFor,
   CUSTOM_OVERRIDE_TOKEN_NAMES,
@@ -203,7 +213,6 @@ import {
   flattenSelfRefs,
   flattenSelfRefsInSlice,
   fragmentHasSelfRef,
-  isSelfRef,
 } from './self-transclusion.js';
 import { rememberLinkedCopy, clearLinkedCopy } from './clipboard-link-cache.js';
 import { makeTransclusionDivergencePlugin, transclusionDivergenceKey } from './transclusion-divergence-plugin.js';
@@ -266,7 +275,7 @@ import { collabEnabled } from './collab/collab-gate.js';
 import { parseJoinLinkHash } from './collab/join-link.js';
 import { setRePickOpener, setOpenSourceOpener } from './transclusion-actions.js';
 import { isLiteBuild } from './lite.js';
-import { isTransclusionNode, fragmentHasZone } from './transclusion.js';
+import { fragmentHasZone } from './transclusion.js';
 import { showConfirm } from './confirm-dialog.js';
 import { linkContextMenuPlugin } from './link-context-menu-plugin.js';
 import { autolinkPlugin, autolinkEnterPlugin, linkModClickPlugin } from './autolink.js';
@@ -2109,13 +2118,17 @@ const ribbonContext: RibbonContext = {
       return;
     }
     const next = !settings.get('autosaveEnabled');
-    settings.set('autosaveEnabled', next);
-    // Remember the choice per-file so it survives close + reopen.
-    setAutosaveForPath(activeFile().handle, next);
-    // Turning autosave ON: secure write permission now, while this click's
-    // activation is fresh — autosave fires on a timer with no gesture to prompt
-    // from, so it relies on the grant being in place already.
-    if (next) void getHost().ensureWritable(activeFile().handle);
+    if (next && activeFile().format === 'docx' && view && hasLiveLinks(view.state.doc)) {
+      // Turning autosave on where it can't work: say why (a modal, not just
+      // the button state), and offer the way out.
+      void explainAutosaveBlockedOnToggle(liveLinkCounts(view.state.doc)).then(async (choice) => {
+        if (choice === 'saveAsCmir' && (await runSaveAsFlow({ defaultFormat: 'cmir' })) && activeFile().format === 'cmir') {
+          setSingleDocAutosave(true);
+        }
+      });
+      return;
+    }
+    setSingleDocAutosave(next);
   },
   newSpeechDocument: () => {
     if (multiDocNewSpeechDocument) {
@@ -6063,6 +6076,7 @@ function mountView(doc: PMNode, threads: Thread[] = []): void {
           // Re-arm the autosave debounce. No-ops when the setting
           // is off, so the call is cheap to fire unconditionally.
           notifyEditForAutosave();
+          noteLiveLinksForSingleDocAutosave(prevState.doc, next.doc, tx);
         }
         // The cached whole-doc word count is now stale. Null it so a
         // selection collapse before the debounced recount re-walks the
@@ -7339,6 +7353,11 @@ async function handleCloseDocToHomeInner(): Promise<void> {
     finish();
     return;
   }
+  // Autosave on: save instead of asking (the prompt below only on failure).
+  if (await saveSingleDocOnCloseIfAutosaving()) {
+    finish();
+    return;
+  }
   const choice = await confirmCloseUnsaved();
   switch (choice) {
     case 'save': {
@@ -8137,8 +8156,11 @@ async function serializeForSave(
   /** Stable doc identity to embed (`.cmir` field / `.docx` docProps).
    *  Omitted for derived/lossy exports, which stay clean (no identity). */
   docId?: string,
+  /** Serialize this doc + threads instead of the active view's — for a
+   *  multi-pane record that may not be focused (its autosave). */
+  source?: { doc: PMNode; threads: Thread[] },
 ): Promise<Uint8Array> {
-  const liveDoc = view ? view.state.doc : currentDoc;
+  const liveDoc = source ? source.doc : view ? view.state.doc : currentDoc;
   // Card numbers are settled FIRST, on the full document, so the strips
   // below cannot renumber what survives: frozen as heading text or removed,
   // per the preset's setting or the Custom save's choice; a caller that
@@ -8161,11 +8183,14 @@ async function serializeForSave(
       settings.get('markUnreadAfterMarker'),
     ),
   });
-  if (view) gcOrphanThreads(view);
-  const baseThreads =
-    opts.includeComments && view
-      ? Array.from(getCommentsState(view.state).threads.values())
-      : [];
+  if (view && !source) gcOrphanThreads(view);
+  const baseThreads = !opts.includeComments
+    ? []
+    : source
+      ? source.threads
+      : view
+        ? Array.from(getCommentsState(view.state).threads.values())
+        : [];
   // Opt-in: convert the private annotation layer (notes / AI threads)
   // into real comments baked onto the export doc. Never touches the
   // working doc — this is a snapshot.
@@ -8209,21 +8234,7 @@ async function serializeForSave(
  *  A matched node isn't descended into: whatever it contains is part of the
  *  view/copy being flattened, not a separately-droppable link. */
 function activeSaveDocLiveLinkCounts(): { views: number; copies: number } {
-  const doc = view ? view.state.doc : currentDoc;
-  const counts = { views: 0, copies: 0 };
-  if (!doc) return counts;
-  doc.descendants((node) => {
-    if (isSelfRef(node)) {
-      counts.views++;
-      return false;
-    }
-    if (isTransclusionNode(node)) {
-      counts.copies++;
-      return false;
-    }
-    return true;
-  });
-  return counts;
+  return liveLinkCounts(view ? view.state.doc : currentDoc);
 }
 
 /** Warn before a `.docx` write that would flatten live views / linked copies.
@@ -8231,7 +8242,8 @@ function activeSaveDocLiveLinkCounts(): { views: number; copies: number } {
  *  stays, the link doesn't) — a silent, one-way loss if the doc is later
  *  reopened from that `.docx`. Every `.docx`-writing path asks: Save, Save As,
  *  and the close/quit prompts in both layouts all route through
- *  `runSaveFlow` / `runSaveAsFlow` (autosave never writes `.docx`).
+ *  `runSaveFlow` / `runSaveAsFlow` (autosave skips a `.docx` with live links;
+ *  see autosave-policy.ts).
  *  Returns true to proceed, false to cancel. `.cmir` saves never ask. */
 async function confirmDocxDropsLiveLinks(): Promise<boolean> {
   const { views, copies } = activeSaveDocLiveLinkCounts();
@@ -8259,9 +8271,9 @@ async function confirmDocxDropsLiveLinks(): Promise<boolean> {
  *  where an escaped rejection silently aborts the close (field bug
  *  2026-07-12: "click Save As → nothing happens"). A crash anywhere in the
  *  flow now surfaces as an explicit dialog and reads as a failed save. */
-export async function runSaveAsFlow(): Promise<boolean> {
+export async function runSaveAsFlow(opts?: { defaultFormat?: 'cmir' | 'docx' }): Promise<boolean> {
   try {
-    return await runSaveAsFlowInner();
+    return await runSaveAsFlowInner(opts);
   } catch (err) {
     console.error('Save As flow crashed:', err);
     void alertDialog(
@@ -8271,13 +8283,14 @@ export async function runSaveAsFlow(): Promise<boolean> {
   }
 }
 
-async function runSaveAsFlowInner(): Promise<boolean> {
+async function runSaveAsFlowInner(opts?: { defaultFormat?: 'cmir' | 'docx' }): Promise<boolean> {
   const file = activeFile();
   const suggestedName = basenameWithoutExt(file.filename ?? 'untitled');
-  // Existing on-disk handle wins (preserves the file's current
-  // format on Save As); otherwise honor the user's preferred
+  // A caller's explicit format wins (the autosave live-links modal's
+  // "Save as .cmir"); then the existing on-disk handle's (preserves the
+  // file's current format on Save As); otherwise the user's preferred
   // default for new docs.
-  const defaultFormat: 'cmir' | 'docx' = file.format ?? settings.get('defaultSaveFormat');
+  const defaultFormat: 'cmir' | 'docx' = opts?.defaultFormat ?? file.format ?? settings.get('defaultSaveFormat');
   const choice = await openSaveAs({
     initialFilename: suggestedName,
     defaultFormat,
@@ -8720,6 +8733,21 @@ async function serializeActiveForSave(format: 'cmir' | 'docx', docId: string | n
   );
 }
 
+/** Serialize `source` (a multi-pane record's doc + threads) the way Save
+ *  writes a working file — the per-record autosave's `.docx` path. */
+export function serializeWorkingCopy(
+  format: 'cmir' | 'docx',
+  source: { doc: PMNode; threads: Thread[] },
+  docId: string | null,
+): Promise<Uint8Array> {
+  return serializeForSave(
+    format,
+    { includeComments: true, includeAnalytics: true, includeUndertags: true, readMode: false, workingCopy: true },
+    docId ?? undefined,
+    source,
+  );
+}
+
 /** Badge action: "Keep mine as a copy" without a prior refused save. */
 async function saveActiveAsConflictedCopy(): Promise<void> {
   const file = activeFile();
@@ -9062,11 +9090,12 @@ function flashSaveSuccess(): void {
 }
 
 // ─── Autosave + crash-recovery journal ────────────────────────────
-// Autosave: debounced ~5s after the last doc-changing edit. Only
-// fires for `.cmir` files with an existing on-disk handle and a host
-// that supports in-place saves. `.docx` is skipped because `toDocx`
-// is expensive enough that per-edit autosaves would visibly stutter
-// the editor on large debate files.
+// Autosave: fires for files with an existing on-disk handle on a host
+// that supports in-place saves. `.cmir` debounces ~5s after the last
+// doc-changing edit; `.docx` waits for a longer idle window (or the
+// window losing focus), because `toDocx` is expensive enough that
+// per-edit autosaves would visibly stutter large debate files. A
+// `.docx` with live links never autosaves (autosave-policy.ts).
 //
 // Journaling: debounced ~3s after the last doc-changing edit.
 // Always fires (regardless of autosave) when the host supports it.
@@ -9074,7 +9103,6 @@ function flashSaveSuccess(): void {
 // on successful save / explicit close. Drives the recovery modal
 // on startup.
 
-const AUTOSAVE_DELAY_MS = 5000;
 const JOURNAL_DELAY_MS = 3000;
 let autosaveTimer: number | null = null;
 let journalTimer: number | null = null;
@@ -9096,19 +9124,130 @@ export function notifyEditForAutosave(): void {
   if (autosaveTimer !== null) window.clearTimeout(autosaveTimer);
   autosaveTimer = window.setTimeout(() => {
     autosaveTimer = null;
-    // .catch keeps the chain FULFILLED: runAutosaveAttempt handles its own
-    // write errors, but a throw from its guard lines (before its try) used
-    // to reject the chain — after which every later .then silently skipped
-    // and autosave was dead for the session while its button stayed lit.
-    autosaveChain = autosaveChain
-      .then(() => runAutosaveAttempt())
-      .catch((err) =>
-        reportAutosaveFailure(currentDocFilename ?? 'Untitled', err, {
-          promptConflict: () => void runSaveFlow(),
-        }),
-      );
-  }, AUTOSAVE_DELAY_MS);
+    queueAutosaveAttempt();
+  }, autosaveDelayFor(activeFile().format));
 }
+
+function queueAutosaveAttempt(): void {
+  // .catch keeps the chain FULFILLED: runAutosaveAttempt handles its own
+  // write errors, but a throw from its guard lines (before its try) used
+  // to reject the chain — after which every later .then silently skipped
+  // and autosave was dead for the session while its button stayed lit.
+  autosaveChain = autosaveChain
+    .then(() => runAutosaveAttempt())
+    .catch((err) =>
+      reportAutosaveFailure(currentDocFilename ?? 'Untitled', err, {
+        promptConflict: () => void runSaveFlow(),
+      }),
+    );
+}
+
+/** Set the single-doc autosave toggle and remember it for the file. */
+function setSingleDocAutosave(on: boolean): void {
+  settings.set('autosaveEnabled', on);
+  // Remember the choice per-file so it survives close + reopen.
+  setAutosaveForPath(activeFile().handle, on);
+  // Turning autosave ON: secure write permission now, while this click's
+  // activation is fresh — autosave fires on a timer with no gesture to prompt
+  // from, so it relies on the grant being in place already.
+  if (on) void getHost().ensureWritable(activeFile().handle);
+}
+
+/** Single-doc dispatch hook: a `.docx` with autosave on just gained or lost
+ *  its live links, which turns autosave off / back on for it. Repaint the
+ *  button; on the first link, explain why in a modal. */
+function noteLiveLinksForSingleDocAutosave(prev: PMNode, next: PMNode, tx: Transaction): void {
+  if (!settings.get('autosaveEnabled') || currentDocFormat !== 'docx') return;
+  if (hasLiveLinks(prev) === hasLiveLinks(next)) return;
+  refreshAutosaveBtn();
+  // A co-editor's link arriving over sync isn't this user's action.
+  if (isSyncOrigin(tx) || !liveLinksAppeared(prev, next)) return;
+  explainLiveLinkStoppedAutosave(next, {
+    turnOff: () => setSingleDocAutosave(false),
+    keepOnAfterSaveAs: () => setSingleDocAutosave(true),
+  });
+}
+
+let liveLinkAutosaveModalOpen = false;
+/** The first live view / linked copy just landed in a `.docx` doc with
+ *  autosave on, so autosave stops writing it. Explain in a modal (deferred
+ *  out of the dispatch that created the link) and run the chosen way out.
+ *  `undo` acts on the focused view — the one the user just edited. */
+export function explainLiveLinkStoppedAutosave(
+  doc: PMNode,
+  actions: { turnOff: () => void; keepOnAfterSaveAs: () => void },
+): void {
+  if (liveLinkAutosaveModalOpen) return;
+  liveLinkAutosaveModalOpen = true;
+  const counts = liveLinkCounts(doc);
+  window.setTimeout(() => {
+    void explainAutosaveBlockedOnCreate(counts)
+      .then(async (choice) => {
+        if (choice === 'undo') runRibbon('undo');
+        else if (choice === 'turnOff') actions.turnOff();
+        else if (choice === 'saveAsCmir') {
+          if ((await runSaveAsFlow({ defaultFormat: 'cmir' })) && activeFile().format === 'cmir') {
+            actions.keepOnAfterSaveAs();
+          }
+        }
+        refreshAutosaveBtn();
+      })
+      .finally(() => {
+        liveLinkAutosaveModalOpen = false;
+      });
+  }, 0);
+}
+
+/** Closing a dirty doc with autosave on: save it silently instead of asking,
+ *  when autosave would have written it anyway (`shouldSaveOnClose`). Acts on
+ *  the active doc — the caller focuses the one being closed. `settle` cancels
+ *  that doc's pending autosave and waits out an in-flight one, so the two
+ *  writes can't race; it only runs when the close save goes ahead. True when
+ *  the save landed; false → the caller shows the usual unsaved prompt. */
+export async function saveOnCloseIfAutosaving(opts: {
+  autosaveOn: boolean;
+  settle: () => Promise<void>;
+}): Promise<boolean> {
+  const file = activeFile();
+  const save = shouldSaveOnClose({
+    autosaveOn: opts.autosaveOn,
+    inPlaceSupported: getHost().supportsInPlaceSave,
+    recoveredDraft: autosaveBlockedForRecoveredDraft(activeDocIdentity().sessionUid),
+    format: file.format,
+    handle: file.handle,
+    doc: view?.state.doc,
+  });
+  if (!save) return false;
+  await opts.settle();
+  return runSaveFlow();
+}
+
+function saveSingleDocOnCloseIfAutosaving(): Promise<boolean> {
+  return saveOnCloseIfAutosaving({
+    autosaveOn: settings.get('autosaveEnabled'),
+    settle: async () => {
+      if (autosaveTimer !== null) {
+        window.clearTimeout(autosaveTimer);
+        autosaveTimer = null;
+      }
+      await autosaveChain;
+    },
+  });
+}
+
+/** Run a pending single-doc autosave now instead of at the end of its
+ *  debounce — the user left the window, so they've stopped editing.
+ *  Mostly matters for `.docx`, whose idle window is long. */
+function flushPendingAutosave(): void {
+  if (autosaveTimer === null) return;
+  window.clearTimeout(autosaveTimer);
+  autosaveTimer = null;
+  queueAutosaveAttempt();
+}
+window.addEventListener('blur', flushPendingAutosave);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushPendingAutosave();
+});
 
 /** Schedule a debounced journal write for the SINGLE-DOC session.
  *  Multi-doc records run their own per-pane journal scheduling
@@ -9197,10 +9336,11 @@ function captureActiveDocCleanToken(): () => boolean {
 async function runAutosaveAttempt(): Promise<void> {
   if (!settings.get('autosaveEnabled')) return;
   const file = activeFile();
-  // Autosave only saves `.cmir` files. The toDocx path is too
-  // expensive for background firing; users keep manual control
-  // over when docx files hit disk.
-  if (file.format !== 'cmir' || !file.handle) return;
+  const format = file.format;
+  // No file yet, or a `.docx` whose live links a write would flatten
+  // (the user was told so in a modal; manual Save still asks).
+  if (!format || autosaveEffect({ format, handle: file.handle, doc: view?.state.doc }) !== 'effective') return;
+  if (!file.handle) return;
   if (!getHost().supportsInPlaceSave) return;
   // A recovered draft may only be written by a MANUAL save until its first
   // one lands — the stale-overwrite confirmation lives on the manual path,
@@ -9211,18 +9351,9 @@ async function runAutosaveAttempt(): Promise<void> {
     // Capture before serializing — keystrokes during the write are not
     // in the saved bytes and must keep the doc dirty + journaled.
     const commitClean = captureActiveDocCleanToken();
-    const bytes = await serializeForSave(
-      'cmir',
-      {
-        includeComments: true,
-        includeAnalytics: true,
-        includeUndertags: true,
-        readMode: false,
-      },
-      // Preserve the doc's identity on autosave (a saved .cmir already
-      // has one; without this the autosave write would strip it).
-      activeSavedDocId(),
-    );
+    // Same bytes as a manual Save. Preserve the doc's identity (a saved
+    // file already has one; without it the autosave write would strip it).
+    const bytes = await serializeActiveForSave(format, activeSavedDocId() ?? null);
     // Same pre-write snapshot as the manual save path (see there).
     maybeSnapshotVersion(activeSavedDocId(), bytes, 'auto');
     // Watchdog without the dialog — never a modal mid-typing; the
@@ -9237,7 +9368,7 @@ async function runAutosaveAttempt(): Promise<void> {
       // write is non-destructive now, and a paused autosave would leave
       // edits unsaved for as long as the user failed to notice.
       if (!isFileChangedOnDiskError(err) || typeof file.handle !== 'string') throw err;
-      if (!(await keepBothForActiveFile({ handle: file.handle, filename: file.filename, format: 'cmir' }, bytes))) {
+      if (!(await keepBothForActiveFile({ handle: file.handle, filename: file.filename, format }, bytes))) {
         throw err;
       }
     }
@@ -9325,16 +9456,18 @@ function refreshAutosaveBtn(): void {
     autosaveBtn.dataset['autosaveEffective'] = 'false';
   } else {
     const file = activeFile();
-    const effective = file.format === 'cmir' && !!file.handle;
-    autosaveBtn.dataset['autosaveEffective'] = effective ? 'true' : 'false';
-    if (effective) {
-      label = 'Autosave is on — saves to .cmir every few seconds after edits';
-    } else if (file.format === 'docx') {
+    const effect = autosaveEffect({ format: file.format, handle: file.handle, doc: view?.state.doc });
+    autosaveBtn.dataset['autosaveEffective'] = effect === 'effective' ? 'true' : 'false';
+    if (effect === 'docx-live-links') {
       label =
-        'Autosave is on, but only fires for .cmir files (this doc is .docx). ' +
-        'Save As to .cmir to enable.';
-    } else {
+        'Autosave is on, but paused: this Word doc has live views or linked copies, ' +
+        'which a .docx save would flatten. Save As to .cmir to keep them and autosave.';
+    } else if (effect === 'unsaved') {
       label = 'Autosave is on, but this doc has not been saved yet. Save once to enable.';
+    } else if (file.format === 'docx') {
+      label = 'Autosave is on — saves to .docx when you pause editing, leave the window, or close';
+    } else {
+      label = 'Autosave is on — saves to .cmir every few seconds after edits';
     }
   }
   if (autosaveFailureActive) {
@@ -9348,13 +9481,7 @@ function refreshAutosaveBtn(): void {
 
 if (autosaveBtn) {
   autosaveBtn.addEventListener('mousedown', (e) => e.preventDefault());
-  autosaveBtn.addEventListener('click', () => {
-    if (multiDocActive && multiDocToggleAutosave) {
-      multiDocToggleAutosave();
-      return;
-    }
-    settings.set('autosaveEnabled', !settings.get('autosaveEnabled'));
-  });
+  autosaveBtn.addEventListener('click', () => ribbonContext.toggleAutosave());
   // Initial state + live updates as the setting / focused doc changes.
   refreshAutosaveBtn();
   settings.subscribe(() => refreshAutosaveBtn());
@@ -9573,6 +9700,11 @@ async function handleUserCloseRequestInner(
     // 'run-normal' → fall through to the dirty/save flow below.
   }
   if (!currentDocDirty) {
+    await electronHost.closeSelf();
+    return;
+  }
+  // Autosave on: save instead of asking (the prompt below only on failure).
+  if (await saveSingleDocOnCloseIfAutosaving()) {
     await electronHost.closeSelf();
     return;
   }
