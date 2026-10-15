@@ -39,7 +39,7 @@ manual; [`PRIVACY.md`](./PRIVACY.md) for how CardMirror handles your data;
 [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design;
 [`PROJECT.md`](./PROJECT.md) for project orientation.
 
-(Federated Versions) Go to [`relay/FEDERATION.md`](./relay/FEDERATION.md) for details on federation (Federated branches ONLY).
+(Federated Versions) Go to [`relay/FEDERATION.md`](https://github.com/Jaydewg/cardmirror/blob/server-federation/relay/FEDERATION.md) for details on federation (Federated branches ONLY).
 
 You can find a video walkthrough of CardMirror's basic functions [here](https://www.youtube.com/playlist?list=PLXM5iwKNQkSs). 
 
