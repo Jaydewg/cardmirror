@@ -8,8 +8,8 @@ Everything here is **additive and opt-in**:
 
 - A relay federates only when its operator sets `RELAY_FEDERATION=on`
   and `RELAY_PUBLIC_URL`. Otherwise none of the routes, features, or
-  capability fields below exist, and the relay behaves byte-for-byte as
-  before for every client.
+  capability fields below exist, and the relay behaves nearly exactly like previous clients before. This ensures backwards compatibility. 
+  - As a side note, 
 - An app federates only when its own relay advertises it. Against an
   older relay (no `/relay/capabilities`, or no `federation` block) a new
   app behaves exactly like the old one.
