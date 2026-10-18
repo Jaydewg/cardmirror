@@ -1417,6 +1417,7 @@ export interface Settings {
   /** When true, "Create Reference" (Card menu) emits its body text
    *  in Gray-50% (#808080) instead of black. Heading line stays
    *  black either way. */
+  standardizeLockedHighlightsColor: string; // The color to change to locked highlights.
   forReferenceUseGray50: boolean;
   /** When true (default), the Create Reference excerpt starts with
    *  the `<<CITE FOR REFERENCE>>` heading line. Off copies just the
@@ -2012,6 +2013,7 @@ const DEFAULTS: Settings = {
   standardizeShadingException: 'FFFF00',
   defaultHighlightColor: 'yellow',
   defaultShadingColor: 'C0C0C0',
+  standardizeLockedHighlightsColor: 'lightGray',
   forReferenceUseGray50: false,
   createReferenceIncludeHeading: true,
   createReferenceDelimiter: '<<',
@@ -2211,6 +2213,7 @@ export interface SettingMeta {
     | 'standardizeShadingException'
     | 'defaultHighlightColor'
     | 'defaultShadingColor'
+    | 'standardizeLockedHighlightsColor'
     | 'acronymPatterns'
     | 'createReferenceHighlightMode'
     | 'createReferenceDelimiter'
@@ -3991,6 +3994,17 @@ export const SETTING_METADATA: SettingMeta[] = [
     aliases: ['default background color', 'default shading', 'reset background color'],
   },
   {
+    key: 'standardizeLockedHighlightsColor',
+    label: 'Locked highlights trigger color',
+    description:
+      'The color that Turn __ into Locked Highlighting turns into Locked Highlighting. Any highlight color works.',
+    kind: 'standardizeLockedHighlightsColor',
+    category: 'editing',
+    section: 'Trigger colors',
+    aliases: ['locked highlight color']
+
+  },
+  {
     key: 'acronymPatterns',
     label: 'Custom acronym letters',
     description:
@@ -5176,6 +5190,9 @@ function sanitize(s: Settings): Settings {
     defaultShadingColor: isHex6(s.defaultShadingColor)
       ? String(s.defaultShadingColor).toUpperCase()
       : DEFAULTS.defaultShadingColor,
+    standardizeLockedHighlightsColor : isWordHighlightName(String(s.standardizeLockedHighlightsColor ?? ''))
+      ? String(s.standardizeLockedHighlightsColor)
+      : DEFAULTS.standardizeLockedHighlightsColor,  
     createReferenceIncludeHeading:
       s.createReferenceIncludeHeading === undefined
         ? DEFAULTS.createReferenceIncludeHeading

@@ -2752,6 +2752,12 @@ if (docMenuBtn) {
             commandId: 'standardizeShadingExcept',
             run: () => runRibbon('standardizeShadingExcept'),
           },
+          // This is yet again rebuilt, because this must also show the live conversion color from Settings.
+          {
+            label: `Turn ${highlightColorLabel(settings.get('standardizeLockedHighlightsColor'))} into Locked Highlighting`,
+            commandId: 'standardizeLockedHighlights',
+            run: () => runRibbon('standardizeLockedHighlights')
+          }
         ],
       },
       {
