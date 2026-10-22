@@ -2,6 +2,19 @@
   <img src="./logo.png" alt="CardMirror" width="280" />
 </p>
 
+## This is not the original Cardmirror!
+
+The [original Cardmirror](https://github.com/ant981228/cardmirror) is located at the link. This is a modified version of Cardmirror forked to add in new organization-specific features.
+
+There exist some long-lived forks here. `server-federation` is a fork containing code for a *federated* version of Cardmirror,
+i.e. one that adds ability for different servers to connect together, eliminating cross-server disconnectivity.
+
+There are also bugfixes hosted here.
+
+To report bugs with a modified Cardmirror sourced from here, report issues [**here**](https://github.com/Jaydewg/cardmirror/issues) first.
+
+To put feature requests, if I don't know you, report suggestions for enhancements [**upstream**](https://github.com/ant981228/cardmirror/issues) first.
+
 # CardMirror
 
 CardMirror is a debate text editor focused on high school and college
@@ -448,10 +461,10 @@ and the bridge protocol — lives in
 ## Acknowledgements
 
 The [original Cardmirror](https://github.com/ant981228/cardmirror) was built 
-by **Anthony Trufanov and the contributers**, the people who made the base which this fork is 
+by **Anthony Trufanov and the contributors**, the people who made the base which this fork is 
 built off of. They have made many of Cardmirror's core decisions, features, and things that have
 made it truly useful, including read mode, the original contributing framework, as well as 
-making an astonishing number of QOL improvements.
+making an astonishing number of QoL improvements.
 
 Thank you to these wonderful people for making this awesome application for debate for me and much of the debate community.
 
