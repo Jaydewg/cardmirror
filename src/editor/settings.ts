@@ -895,6 +895,10 @@ export interface Settings {
   /** Word-style smart quotes: as you type a straight ' or ", curl it to the
    *  right direction based on the preceding character. Off by default. */
   smartQuotes: boolean;
+  /** With Smart quotes on: a digit typed right after an opening ‘ flips it
+   *  to an apostrophe (’24, ’10-13). Diverges from Word, which curls '90s
+   *  open; a single-quoted number loses its opening quote. On by default. */
+  smartQuoteDatesAsApostrophes: boolean;
   /** Link a web address the moment a space or Enter follows it (autolink.ts).
    *  Off by default; the Link URLs command covers what is already written. */
   autoLinkUrls: boolean;
@@ -1905,6 +1909,7 @@ const DEFAULTS: Settings = {
   flashcardDueDot: true,
   editorSpellcheck: false,
   smartQuotes: false,
+  smartQuoteDatesAsApostrophes: true,
   autoLinkUrls: false,
   autoCapitalizeSentences: false,
   customAutocorrectEnabled: false,
@@ -3611,6 +3616,17 @@ export const SETTING_METADATA: SettingMeta[] = [
     aliases: ['curly quotes', 'smart quotes', 'autocorrect quotes', 'typographic quotes'],
   },
   {
+    key: 'smartQuoteDatesAsApostrophes',
+    label: "Curl '24 as an apostrophe",
+    description:
+      "With Smart quotes on, a digit typed right after an opening ‘ flips it to an apostrophe, so cite dates like '24 and '10-13 come out ’24 and ’10-13. Unlike Word, which curls them open. A single-quoted number (‘24 hours’) loses its opening quote; Backspace right after the digit restores it. On by default.",
+    kind: 'toggle',
+    category: 'editing',
+    section: 'Typing',
+    dependsOn: 'smartQuotes',
+    aliases: ['apostrophe digit', 'cite year apostrophe', 'elision'],
+  },
+  {
     key: 'autoLinkUrls',
     label: 'Link URLs as you type',
     description:
@@ -4965,6 +4981,10 @@ function sanitize(s: Settings): Settings {
     editorSpellcheck: !!s.editorSpellcheck,
     copyPreviousCiteNearestOnly: s.copyPreviousCiteNearestOnly === false ? false : true,
     smartQuotes: !!s.smartQuotes,
+    smartQuoteDatesAsApostrophes:
+      s.smartQuoteDatesAsApostrophes === undefined
+        ? DEFAULTS.smartQuoteDatesAsApostrophes
+        : !!s.smartQuoteDatesAsApostrophes,
     autoLinkUrls: !!s.autoLinkUrls,
     autoCapitalizeSentences: !!s.autoCapitalizeSentences,
     customAutocorrectEnabled: !!s.customAutocorrectEnabled,

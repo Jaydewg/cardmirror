@@ -13,7 +13,7 @@ import { marks } from './marks.js';
 export const schema = new Schema({ nodes, marks });
 
 export { nodes } from './nodes.js';
-export { marks } from './marks.js';
+export { marks, isSafeLinkHref } from './marks.js';
 export {
   newHeadingId,
   bookmarkNameForId,

@@ -5433,7 +5433,10 @@ export const DEFAULT_RIBBON_KEYS: Record<RibbonCommandId, string | string[]> = {
   toggleItalic: 'Mod-i',
   toggleStrikethrough: '',
   toggleSuperscript: 'Mod-Shift-=',
-  toggleSubscript: 'Mod-=',
+  // Unbound: Mod-= is Zoom In (browser convention, and the later-registered
+  // binding won the collision anyway, so the chord never reached Subscript).
+  // Bind it in Settings → Keyboard shortcuts.
+  toggleSubscript: '',
   applyCite: 'F8',
   applyUnderline: ['F9'],
   toggleUnderlineTyping: 'Mod-u',

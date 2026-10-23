@@ -1261,9 +1261,16 @@ export function reparseClipboardStructuralSlice(event: ClipboardEvent): Slice | 
   if (typeof document === 'undefined') return null;
   const html = event.clipboardData?.getData('text/html') ?? '';
   if (!html) return null;
-  const wrap = document.createElement('div');
-  wrap.innerHTML = html;
-  const parsed = PMDOMParser.fromSchema(schema).parseSlice(wrap);
+  // Parse in an INERT document, never the live one: `innerHTML` on an
+  // element of the live page runs `<img onerror=…>` handlers from the
+  // clipboard HTML (verified in Chromium and Electron), and a web page can
+  // put arbitrary HTML on the clipboard in its copy handler. An inert
+  // document has no browsing context, so nothing executes — the same
+  // pattern prosemirror-view's own clipboard parser and external-insert.ts
+  // use. (Security report 2026-10-08.)
+  const inert = document.implementation.createHTMLDocument('paste');
+  inert.body.innerHTML = html;
+  const parsed = PMDOMParser.fromSchema(schema).parseSlice(inert.body);
   if (parsed.content.childCount === 0) return null;
   return freshHeadingIds(unwrapSingleCellTables(parsed));
 }

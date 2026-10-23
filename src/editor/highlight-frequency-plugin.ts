@@ -269,6 +269,12 @@ export const highlightFrequencyPlugin = new Plugin<FreqState>({
   view(view) {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let lastRenderedGeneration = -1;
+    // One stylesheet PER VIEW, scoped by a data attribute on the view's
+    // DOM: with several panes open each used to rewrite one shared sheet
+    // (last writer's ranking recolored every pane) and a destroyed pane
+    // blanked it for the survivors (audit 23).
+    const scopeId = `f${Math.random().toString(36).slice(2, 10)}`;
+    view.dom.setAttribute('data-pmd-freq', scopeId);
     // Set in destroy() so the deferred mount scan below skips a view that
     // was torn down before its microtask ran (e.g. a fast re-mount).
     let disposed = false;
@@ -278,6 +284,7 @@ export const highlightFrequencyPlugin = new Plugin<FreqState>({
       const cur = highlightFreqKey.getState(view.state);
       if (!cur) return;
       writeFrequencyStylesheet(
+        scopeId,
         cur.highlight,
         cur.shading,
         settings.get('overrideHighlightSlots'),
@@ -396,17 +403,8 @@ export const highlightFrequencyPlugin = new Plugin<FreqState>({
         disposed = true;
         if (timer !== null) clearTimeout(timer);
         unsubSettings();
-        // Tear down the stylesheet so a destroyed view doesn't
-        // leave behind stale per-color rules (multi-pane reuses
-        // the singleton stylesheet across views).
-        writeFrequencyStylesheet(
-          new Map(),
-          new Map(),
-          settings.get('overrideHighlightSlots'),
-          settings.get('overrideShadingSlots'),
-          false,
-          false,
-        );
+        // Tear down THIS view's stylesheet; other panes keep theirs.
+        document.getElementById(`pmd-freq-overrides-${scopeId}`)?.remove();
       },
     };
   },
@@ -414,11 +412,12 @@ export const highlightFrequencyPlugin = new Plugin<FreqState>({
 
 /** Singleton style element holding the per-color override rules.
  *  Created on first use; reused across recomputes. */
-function getOrCreateStylesheet(): HTMLStyleElement {
-  let el = document.getElementById('pmd-freq-overrides') as HTMLStyleElement | null;
+function getOrCreateStylesheet(scopeId: string): HTMLStyleElement {
+  const id = `pmd-freq-overrides-${scopeId}`;
+  let el = document.getElementById(id) as HTMLStyleElement | null;
   if (el) return el;
   el = document.createElement('style');
-  el.id = 'pmd-freq-overrides';
+  el.id = id;
   document.head.appendChild(el);
   return el;
 }
@@ -428,6 +427,7 @@ function getOrCreateStylesheet(): HTMLStyleElement {
  *  — cheap (< 1KB string) and avoids the bookkeeping of patching
  *  individual rules. */
 function writeFrequencyStylesheet(
+  scopeId: string,
   highlightCounts: Map<string, number>,
   shadingCounts: Map<string, number>,
   highlightSlots: string[],
@@ -435,22 +435,24 @@ function writeFrequencyStylesheet(
   highlightOn: boolean,
   shadingOn: boolean,
 ): void {
-  const sheet = getOrCreateStylesheet();
+  const sheet = getOrCreateStylesheet(scopeId);
   const lines: string[] = [];
   if (highlightOn) {
-    lines.push(...buildRules('highlight', highlightCounts, highlightSlots));
+    lines.push(...buildRules(scopeId, 'highlight', highlightCounts, highlightSlots));
   }
   if (shadingOn) {
-    lines.push(...buildRules('shading', shadingCounts, shadingSlots));
+    lines.push(...buildRules(scopeId, 'shading', shadingCounts, shadingSlots));
   }
   sheet.textContent = lines.join('\n');
 }
 
 function buildRules(
+  scopeId: string,
   kind: 'highlight' | 'shading',
   counts: Map<string, number>,
   slots: string[],
 ): string[] {
+  const scope = `[data-pmd-freq=${JSON.stringify(scopeId)}]`;
   if (slots.length <= 1) return []; // single-slot handled by static rule
   // Sort colors by count, descending. Tie-break alphabetically so
   // ordering is deterministic.
@@ -470,12 +472,12 @@ function buildRules(
       // Highlight uses data-highlight="<name>" (OOXML name like "yellow").
       // Quoting protects against unexpected characters.
       out.push(
-        `body.pmd-override-highlight .pmd-highlight[data-highlight=${JSON.stringify(color)}] { background: ${value} !important; }`,
+        `body.pmd-override-highlight ${scope} .pmd-highlight[data-highlight=${JSON.stringify(color)}] { background: ${value} !important; }`,
       );
     } else {
       // Shading uses data-shading="<rrggbb>" (no leading #).
       out.push(
-        `body.pmd-override-shading [data-shading=${JSON.stringify(color)}] { background-color: ${value} !important; }`,
+        `body.pmd-override-shading ${scope} [data-shading=${JSON.stringify(color)}] { background-color: ${value} !important; }`,
       );
     }
   }

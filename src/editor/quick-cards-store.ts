@@ -190,9 +190,26 @@ class QuickCardsStore {
     if (electron) {
       await electron.quickCardsUpsert(card);
     } else {
-      void webLibrary.save(this.cards);
+      await this.webMutate((cur) => [...cur.filter((c) => c.id !== card.id), card]);
     }
     this.fire();
+  }
+
+  /** Web write: read-apply-write under a Web Lock, so two tabs mutating
+   *  back to back can't clobber each other's whole-library writes (the
+   *  BroadcastChannel resync alone left a millisecond race, audit 15).
+   *  The in-memory list adopts the merged result. */
+  private async webMutate(apply: (current: QuickCard[]) => QuickCard[]): Promise<void> {
+    const run = async (): Promise<void> => {
+      const current = sanitizeCards(await webLibrary.load());
+      this.cards = apply(current);
+      await webLibrary.save(this.cards);
+    };
+    if (typeof navigator !== 'undefined' && typeof navigator.locks?.request === 'function') {
+      await navigator.locks.request('pmd-quick-cards', run);
+    } else {
+      await run();
+    }
   }
 
   /** Bulk add-or-replace (import). One write / one broadcast. */
@@ -203,7 +220,7 @@ class QuickCardsStore {
     if (electron) {
       await electron.quickCardsBulkUpsert(cards);
     } else {
-      void webLibrary.save(this.cards);
+      await this.webMutate((cur) => [...cur.filter((c) => !incoming.has(c.id)), ...cards]);
     }
     this.fire();
   }
@@ -214,7 +231,7 @@ class QuickCardsStore {
     if (electron) {
       await electron.quickCardsRemove(id);
     } else {
-      void webLibrary.save(this.cards);
+      await this.webMutate((cur) => cur.filter((c) => c.id !== id));
     }
     this.fire();
   }
@@ -225,7 +242,7 @@ class QuickCardsStore {
     if (electron) {
       await electron.quickCardsClear();
     } else {
-      void webLibrary.save(this.cards);
+      await this.webMutate(() => []);
     }
     this.fire();
   }
@@ -256,12 +273,25 @@ function sanitizeCards(raw: QuickCard[] | null): QuickCard[] {
 async function loadWebCards(): Promise<QuickCard[]> {
   const stored = sanitizeCards(await webLibrary.load());
   if (stored.length > 0) return stored;
+  // Migrate from localStorage ONCE. Without the marker an emptied library
+  // (every card deleted) looked like "never migrated" and the old cards
+  // came back on the next load (audit item 28).
+  if (legacyMigrated()) return [];
   const legacy = readLegacyLocalCards();
   if (legacy.length > 0) {
     void webLibrary.save(legacy); // persist into IndexedDB from here on
     // localStorage is left intact as a safe fallback.
   }
+  markLegacyMigrated();
   return legacy;
+}
+
+const MIGRATED_KEY = `${STORAGE_KEY}:migrated-to-idb`;
+function legacyMigrated(): boolean {
+  try { return localStorage.getItem(MIGRATED_KEY) === '1'; } catch { return false; }
+}
+function markLegacyMigrated(): void {
+  try { localStorage.setItem(MIGRATED_KEY, '1'); } catch { /* storage unavailable: re-check next load */ }
 }
 
 /** Legacy localStorage backend — read only for migration, never written. */

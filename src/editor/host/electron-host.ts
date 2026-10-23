@@ -232,6 +232,7 @@ interface ElectronAPI {
   listWindows?(): Promise<WindowListEntry[]>;
   focusWindow?(windowId: number): Promise<boolean>;
   syncLibraryRoots?(roots: string[]): Promise<void>;
+  syncWriteFolders?(folders: string[]): Promise<void>;
   grantLegacyRecents?(paths: string[]): Promise<boolean>;
   readFileAtPath(filePath: string): Promise<{
     name: string;
@@ -795,6 +796,10 @@ export class ElectronHost implements Host {
   /** Read-scope plumbing — no-ops gracefully on an older preload. */
   async syncLibraryRoots(roots: string[]): Promise<void> {
     await api().syncLibraryRoots?.(roots);
+  }
+  /** Write-scope plumbing (main's isWriteAllowed) — same graceful no-op. */
+  async syncWriteFolders(folders: string[]): Promise<void> {
+    await api().syncWriteFolders?.(folders);
   }
   async grantLegacyRecents(paths: string[]): Promise<boolean> {
     return (await api().grantLegacyRecents?.(paths)) ?? false;

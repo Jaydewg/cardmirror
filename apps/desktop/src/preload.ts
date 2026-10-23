@@ -218,6 +218,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
    *  scoped `readFileAtPath` keeps serving them. */
   syncLibraryRoots: (roots: string[]): Promise<void> =>
     ipcRenderer.invoke('host:sync-library-roots', roots),
+  /** Write-scope plumbing: the folders `writeFileAtPath` may write into
+   *  without a dialog (the speech-doc auto-save folder). */
+  syncWriteFolders: (folders: string[]): Promise<void> =>
+    ipcRenderer.invoke('host:sync-write-folders', folders),
   grantLegacyRecents: (paths: string[]): Promise<boolean> =>
     ipcRenderer.invoke('host:grant-legacy-recents', paths),
   readFileAtPath: (filePath: string) =>

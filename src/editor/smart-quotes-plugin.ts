@@ -7,8 +7,10 @@
  * a closing curl otherwise — including after an inline atom such as a footnote
  * marker, which counts as word-like closing context (same as Word). The closing
  * single quote doubles as the apostrophe, so `don't` / `John's` fall out for
- * free. (Leading elisions like `'tis` / `'90s` curl as opening quotes — same as
- * Word; use the Flip Quote Direction command to fix those.)
+ * free. Leading elisions before a digit (`'90s`, cite dates like `'24` /
+ * `'10-13`) fix themselves: typing a digit right after an opening `‘` flips it
+ * to `’`. Word-led elisions (`'tis`) still curl open, same as Word; use the
+ * Flip Quote Direction command for those.
  *
  * Conversion mechanics + the Backspace-revert window live in the shared
  * autocorrect engine (autocorrect.ts) — this module is just the rule.
@@ -53,6 +55,17 @@ const smartQuotesRule: AutocorrectRule = {
   },
 };
 
+/** `‘` + digit is an elided year/date (`’24`, `’10-13`), never an opening
+ *  quote in practice. Backspace restores the `‘`. */
+const digitElisionRule: AutocorrectRule = {
+  triggers: (text) => text.length === 1 && text >= '0' && text <= '9',
+  enabled: () => settings.get('smartQuotes') && settings.get('smartQuoteDatesAsApostrophes'),
+  match(state, from, to, text) {
+    if (from !== to || from < 1 || state.doc.textBetween(from - 1, from) !== '‘') return null;
+    return { replaceFrom: from - 1, insert: '’' + text, revertTo: '‘' + text };
+  },
+};
+
 export function smartQuotesPlugin(): Plugin<AutocorrectState> {
-  return makeAutocorrectPlugin(smartQuotesKey, [smartQuotesRule]);
+  return makeAutocorrectPlugin(smartQuotesKey, [smartQuotesRule, digitElisionRule]);
 }

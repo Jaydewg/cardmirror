@@ -81,7 +81,7 @@ import {
 import { setIcon } from './icons';
 import { isMobileShellActive } from './mobile-plugin.js';
 import { createNumberGlyph, numberingDisplaySig } from './numbering-plugin.js';
-import { computeNumbering } from './numbering.js';
+import { computeNumbering, type NumberLabel } from './numbering.js';
 import { isRightClickContextMenu } from './context-menu-gate.js';
 
 /** Minimum nav-pane width — must fit the 4 level buttons + the
@@ -258,6 +258,13 @@ export class NavigationPanel {
 
   // ---- Drag-and-drop state ----
   private liEntries: Map<HTMLLIElement, HeadingEntry> = new Map();
+  /** Everything the last list build rendered, as one string, plus the
+   *  entry index behind each rendered row (render order). `update()`
+   *  skips the DOM rebuild when the key is unchanged — typing in a card
+   *  body changes no row, and the rebuild cost ~22ms per pause on a
+   *  9,600-heading file. */
+  private lastRenderKey: string | null = null;
+  private renderedEntryIdx: number[] = [];
   private dragStartX = 0;
   private dragStartY = 0;
   private dragStartLi: HTMLLIElement | null = null;
@@ -847,7 +854,8 @@ export class NavigationPanel {
   update(doc: PMNode): void {
     if (this.destroyed) return; // a late debounced call must not re-pin the doc
     this.currentDoc = doc;
-    this.render(doc);
+    this.renderList(doc, true);
+    if (dragController.isActive()) this.restoreDragChrome();
   }
 
   /** Map the cached heading positions forward through a doc change so they stay
@@ -1019,7 +1027,7 @@ export class NavigationPanel {
     }
   }
 
-  private renderList(doc: PMNode): void {
+  private renderList(doc: PMNode, skipIfUnchanged = false): void {
     const entries = collectOutlineWithWindows(doc);
 
     // Refresh the `lastSeenIds` set so `applyMaxLevelToNewHeadings`
@@ -1049,10 +1057,66 @@ export class NavigationPanel {
     // display toggle. O(top-level children) — cheap next to the DOM
     // rebuild below.
     const numberLabels = settings.get('showCardNumbering') ? computeNumbering(doc).cards : null;
+    // Per-entry card number label. Windowed (live-view projection) rows
+    // carry the mirrored card's REAL position precomputed at projection
+    // time — computeNumbering keys a live view's cards by those positions
+    // (host-contextual, the same numbers the editor renders in the
+    // window), so projected rows number like everything else. Only the
+    // wrapper's FIRST heading row carries a label, matching the editor,
+    // which decorates the tag line. A heading at `pos` is its wrapper's
+    // first child exactly when a wrapper starts at `pos - 1`, so look that
+    // key up directly: `doc.resolve` scans the top-level children
+    // linearly, ~85ms for every tag of a 9,600-section file.
+    const labels: (NumberLabel | undefined)[] = entries.map((entry) => {
+      if (!numberLabels || (entry.type !== 'tag' && entry.type !== 'analytic')) return undefined;
+      const cardPos = entry.windowed ? (entry.windowCardPos ?? null) : entry.pos - 1;
+      return cardPos != null ? numberLabels.get(cardPos) : undefined;
+    });
 
-    // Clear and re-build. For doc sizes we care about (max ~600 headings
-    // in the example corpus) this is fine; if profiling shows it's hot,
-    // diff against the previous render.
+    // Search: matches (and their ancestors, `keep`) are revealed even under
+    // a collapsed parent or past the level filter; "Hide non-matches"
+    // shows ONLY those rows.
+    const search = this.currentSearch(doc, entries);
+    const hideNonMatches = search != null && settings.get('navSearchHideNonMatches');
+
+    // Everything the rows below read, minus positions (an edit shifts
+    // every later heading's pos without changing any row). Zones are
+    // keyed by ordinal for the same reason.
+    const showCite = settings.get('showCitePreview');
+    const parts: string[] = [
+      `${[...this.collapsed].join(',')}|${this.selectedWindowPos}|${showCite}|${hideNonMatches}|${this.searchActiveIndex}`,
+    ];
+    let zoneOrd = 0;
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i]!;
+      if (e.zonePos != null && entries[i - 1]?.zonePos !== e.zonePos) zoneOrd++;
+      parts.push(
+        `${e.type}\u0001${e.level}\u0001${e.id}\u0001${e.text}\u0001${e.cite}\u0001${e.zonePos == null ? '' : zoneOrd}` +
+          `\u0001${e.windowed ? 1 : 0}\u0001${labels[i] ? `${labels[i]!.kind}:${labels[i]!.text}` : ''}\u0001${hitEntryIndices.has(i) ? 1 : 0}` +
+          `\u0001${e.zonePos != null && divergedZones.has(e.zonePos) ? 1 : 0}` +
+          `\u0001${search?.matchAt.get(i) ?? ''}\u0001${search?.keep.has(i) ? 1 : 0}`,
+      );
+    }
+    const key = parts.join('\u0002');
+    if (skipIfUnchanged && key === this.lastRenderKey) {
+      // Same rows: refresh the rendered entries in place (pos, zonePos,
+      // windowCardPos shift with edits; the row listeners hold these
+      // same objects) instead of rebuilding.
+      const rows = [...this.liEntries];
+      for (let r = 0; r < rows.length; r++) {
+        const [li, old] = rows[r]!;
+        Object.assign(old, entries[this.renderedEntryIdx[r]!]);
+        // Usually already current (remapPositions runs per edit); an
+        // attribute write invalidates style even when the value is equal.
+        const p = String(old.pos);
+        if (li.dataset['pos'] !== p) li.dataset['pos'] = p;
+      }
+      return;
+    }
+    this.lastRenderKey = key;
+    this.renderedEntryIdx = [];
+
+    // Clear and re-build.
     this.listEl.innerHTML = '';
     this.liEntries.clear();
     this.collapsibleIds.clear();
@@ -1066,12 +1130,7 @@ export class NavigationPanel {
     this.emptyEl.style.display = 'none';
     this.listEl.style.display = '';
 
-    // Search: matches (and their ancestors, `keep`) are revealed even under
-    // a collapsed parent or past the level filter; "Hide non-matches"
-    // shows ONLY those rows.
-    const search = this.currentSearch(doc, entries);
     this.renderedSearchResults = search != null;
-    const hideNonMatches = search != null && settings.get('navSearchHideNonMatches');
     this.searchHitRows = [];
     this.searchStatusEl.textContent = !search
       ? ''
@@ -1157,28 +1216,13 @@ export class NavigationPanel {
       li.appendChild(chevron);
 
       // Card number glyph — the editor's computed label for this row's
-      // wrapping card/analytic_unit. Only the wrapper's FIRST heading
-      // row carries it (parentOffset 0), matching the editor, which
-      // decorates the tag line — an in-card analytic under a numbered
-      // tag stays bare. Windowed (live-view projection) rows carry the
-      // mirrored card's REAL position precomputed at projection time —
-      // computeNumbering keys a live view's cards by those positions
-      // (host-contextual, the same numbers the editor renders in the
-      // window), so projected rows number like everything else.
-      if (numberLabels && (entry.type === 'tag' || entry.type === 'analytic')) {
-        let cardPos: number | null = null;
-        if (entry.windowed) {
-          cardPos = entry.windowCardPos ?? null;
-        } else {
-          const $pos = doc.resolve(entry.pos);
-          if ($pos.parentOffset === 0) cardPos = $pos.before();
-        }
-        const numLabel = cardPos != null ? numberLabels.get(cardPos) : undefined;
-        if (numLabel) {
-          const glyph = createNumberGlyph(numLabel);
-          glyph.classList.add('pmd-nav-card-number');
-          li.appendChild(glyph);
-        }
+      // wrapping card/analytic_unit (an in-card analytic under a
+      // numbered tag stays bare; see `labels` above).
+      const numLabel = labels[i];
+      if (numLabel) {
+        const glyph = createNumberGlyph(numLabel);
+        glyph.classList.add('pmd-nav-card-number');
+        li.appendChild(glyph);
       }
 
       const label = document.createElement('span');
@@ -1241,6 +1285,7 @@ export class NavigationPanel {
       }
 
       this.liEntries.set(li, entry);
+      this.renderedEntryIdx.push(i);
       this.listEl.appendChild(li);
     }
     this.syncSearchActiveRow(false);

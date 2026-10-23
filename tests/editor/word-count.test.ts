@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Node as PMNode } from 'prosemirror-model';
+import { Transform } from 'prosemirror-transform';
 import { schema } from '../../src/schema/index.js';
 import {
   countReadAloudSplit,
@@ -64,6 +65,16 @@ describe('countReadAloudSplit', () => {
     expect(counts).toEqual({ body: 7, other: 10 }); // other: 3 tag + 2 cite + 5 analytic
     expect(totalWords(counts)).toBe(17);
     expect(countReadAloudWords(fixtureDoc())).toBe(17); // total wrapper agrees
+  });
+
+  it('a whole-doc recount after an edit reflects it (per-child cache)', () => {
+    const doc = fixtureDoc();
+    expect(countReadAloudSplit(doc)).toEqual({ body: 7, other: 10 });
+    // Append 2 highlighted words to the card body; the analytic child is reused.
+    const bodyEnd = doc.child(0).nodeSize - 2;
+    const edited = new Transform(doc).insert(bodyEnd, schema.text(' two more', [m['highlight']!.create()])).doc;
+    expect(countReadAloudSplit(edited)).toEqual({ body: 9, other: 10 });
+    expect(countReadAloudSplit(edited)).toEqual(countReadAloudSplit(edited, 0, edited.content.size));
   });
 
   it('empty range counts nothing', () => {

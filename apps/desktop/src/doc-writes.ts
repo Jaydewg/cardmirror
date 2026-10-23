@@ -294,12 +294,33 @@ async function writeAtomic(
           throw err;
         }
         await sleep(RENAME_RETRY_DELAYS_MS[attempt]!);
+        // The backoff is exactly when a sync service is busy with this
+        // file; a version it drops during the wait must not be replaced
+        // by our rename (audit 13). Re-run the freshness check each time.
+        if (beforeRename) {
+          try {
+            await beforeRename();
+          } catch (checkErr) {
+            await fs.unlink(tmpPath).catch(() => {});
+            throw checkErr;
+          }
+        }
       }
     }
   } catch (err) {
     if (!isTransientRenameCode(err)) {
       await fs.unlink(tmpPath).catch(() => {});
       throw err;
+    }
+    // Same freshness check before the in-place fallback — it overwrites
+    // the target directly, so a stale write here is unrecoverable.
+    if (beforeRename) {
+      try {
+        await beforeRename();
+      } catch (checkErr) {
+        await fs.unlink(tmpPath).catch(() => {});
+        throw checkErr;
+      }
     }
     try {
       // `mode` only applies if the overwrite has to CREATE the target

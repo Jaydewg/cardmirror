@@ -421,7 +421,7 @@ below say which fallback applies where it matters.
 | **Bold / Italic** | Mod-B / Mod-I | Standard direct formatting. With nothing selected, toggles it for the text you're about to type; while italic typing is on, the cursor tilts to match. Tags and headings are bold by default, so **Bold inside a tag un-bolds** the selected words (press it again to restore) — and .docx files with un-bolded words in tags now show that correctly. |
 
 Super/subscript and strikethrough live in the **Format** menu (super and
-subscript also have shortcuts: **Mod-Shift-=** and **Mod-=**).
+subscript: superscript has a shortcut, **Mod-Shift-=**; subscript is unbound by default, since **Mod-=** is Zoom In — give it a key in Settings → Keyboard shortcuts if you use it).
 
 <a id="paste-text-f2"></a>
 ### Paste Text (F2)
@@ -509,7 +509,10 @@ every conversion is reversible with **Backspace** right after it fires.
 - **Smart quotes** (Settings → Editing → "Smart quotes") curl a straight `'` or
   `"` to the right direction as you type — opening after a space, dash, bracket,
   or the start of a line; closing (and the apostrophe) otherwise — so `don't`
-  and `(he said "hi")` come out right.
+  and `(he said "hi")` come out right. A digit typed right after an opening
+  `‘` flips it to an apostrophe, so cite dates like `'24` and `'10-13` come
+  out as `’24` and `’10-13` (the "Curl '24 as an apostrophe" toggle beside
+  it, on by default; turn it off if you single-quote numbers).
 
 - **Link URLs as you type** (Settings → Editing → "Link URLs as you type", off
   by default) turns a web address into a link the moment you type a space or
@@ -547,7 +550,7 @@ every conversion is reversible with **Backspace** right after it fires.
 - **Flip Quote Direction** (a command, unbound by default) flips every curly
   quote in your selection to its opposite direction, keeping the formatting.
   It's the manual fix for the cases smart quotes — like Word — guess wrong, such
-  as a leading apostrophe in `'tis` or `'90s` that should curl the other way.
+  as a leading apostrophe in `'tis` that should curl the other way.
 
 ### Shrink (Mod-8)
 
@@ -3226,7 +3229,7 @@ All defaults; rebind any of them in **Settings → Keyboard shortcuts**.
 | Mod-F11 | Background color |
 | Mod-Z / Mod-Y | Undo / Redo (Mod-Shift-Z also redoes) |
 | Mod-B / Mod-I | Bold / Italic |
-| Mod-Shift-= / Mod-= | Superscript / Subscript |
+| Mod-Shift-= | Superscript (Subscript is unbound by default; Mod-= is Zoom In) |
 | F12 | Clear formatting |
 | F2 | Paste Text |
 | F3 / Alt-F3 / Mod-Alt-F3 | Condense / no integrity / with pilcrows |

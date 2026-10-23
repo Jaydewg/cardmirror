@@ -90,6 +90,7 @@ import re
 import threading
 import time
 import uuid
+import zlib
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator, Optional
@@ -185,6 +186,33 @@ def get_db():
 
 MAX_BYTES = 25 * 1024 * 1024  # decompressed payload cap
 MAX_COMPRESSED_BYTES = 30 * 1024 * 1024  # gzip-bomb guard
+
+
+def gunzip_bounded(raw: bytes, max_bytes: int) -> bytes:
+    """Inflate `raw` but stop as soon as the output would exceed `max_bytes`.
+
+    gzip.decompress() inflates the whole body before any size check runs, so a
+    30 MiB upload could expand toward ~30 GiB (gzip's ~1032:1 ceiling) in
+    process memory first. Streaming through zlib with a running cap bounds the
+    memory a malicious body can take to max_bytes + one chunk.
+    (Security report 2026-10-08.)
+    """
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)  # gzip framing
+    out = bytearray()
+    view = memoryview(raw)
+    step = 256 * 1024
+    for i in range(0, len(view), step):
+        out += d.decompress(view[i:i + step], max_bytes + 1 - len(out))
+        if len(out) > max_bytes:
+            raise ValueError("decompressed payload too large")
+        # Input the decompressor held back because of the output cap means
+        # the body is bigger than allowed; don't keep feeding it.
+        if d.unconsumed_tail:
+            raise ValueError("decompressed payload too large")
+    out += d.flush()
+    if len(out) > max_bytes:
+        raise ValueError("decompressed payload too large")
+    return bytes(out)
 TTL = timedelta(hours=3)
 MAX_PER_POLL = 100
 HEARTBEAT_SECONDS = 25
@@ -451,7 +479,9 @@ def post_message(
 
     if "gzip" in (content_encoding or "").lower():
         try:
-            data = gzip.decompress(raw)
+            data = gunzip_bounded(raw, MAX_BYTES)
+        except ValueError:
+            raise HTTPException(413, "payload too large")
         except Exception:
             raise HTTPException(400, "invalid gzip body")
     else:
@@ -581,8 +611,17 @@ def delete_message(msg_id: str, db: Session = Depends(get_db)) -> Response:
 # ── Rooms (collaboration sessions) ───────────────────────────────────
 
 
-def _room_or_error(db: Session, room_id: str) -> RelayRoom:
-    room = db.get(RelayRoom, room_id)
+def _room_or_error(db: Session, room_id: str, *, for_update: bool = False, for_share: bool = False) -> RelayRoom:
+    """Load the room. `for_update` takes the row lock that serializes writers
+    (compaction vs. compaction, compaction vs. the bytes_used updates);
+    `for_share` lets readers see snapshot + tail from one consistent point
+    rather than straddling a compaction commit. (sqlite ignores both.)"""
+    q = db.query(RelayRoom).filter(RelayRoom.id == room_id)
+    if for_update:
+        q = q.with_for_update()
+    elif for_share:
+        q = q.with_for_update(read=True)
+    room = q.one_or_none()
     if room is None:
         raise HTTPException(404, "no such room")
     if room.tombstoned:
@@ -650,7 +689,10 @@ def get_room_updates(
     have_snap: Optional[int] = Query(None, alias="haveSnap", ge=0),
     db: Session = Depends(get_db),
 ) -> Response:
-    _room_or_error(db, room_id)
+    # Share lock on the room row: a compaction committing between the
+    # snapshot read and the tail read would hand the client an old snapshot
+    # plus a tail that starts after the NEW covers — a gap it can't fill.
+    _room_or_error(db, room_id, for_share=True)
     out: dict = {}
     snap = db.get(RelayRoomSnapshot, room_id)
     floor = after
@@ -701,17 +743,29 @@ def post_room_snapshot(
         raise HTTPException(400, "expected {blob, coversThroughSeq}")
     if len(blob) > MAX_UPDATE_BYTES * 8:
         raise HTTPException(413, "snapshot too large")
-    room = _room_or_error(db, room_id)
-    existing = db.get(RelayRoomSnapshot, room_id)
-    if existing is not None and covers <= existing.covers_through_seq:
+    # Row lock: two overlapping compactions (a slow uplink can let the host
+    # start the next before the last lands) otherwise race read-then-write,
+    # and the OLDER one could roll covers_through_seq back after the newer
+    # already deleted its updates — a permanent hole in the log.
+    room = _room_or_error(db, room_id, for_update=True)
+    existing_covers = (
+        db.query(RelayRoomSnapshot.covers_through_seq)
+        .filter(RelayRoomSnapshot.room_id == room_id)
+        .scalar()
+    )
+    if existing_covers is not None and covers <= existing_covers:
         # Stale or duplicate compaction (another client got there first).
         return Response(status_code=204)
-    if existing is None:
+    if existing_covers is None:
         db.add(RelayRoomSnapshot(room_id=room_id, blob=blob, covers_through_seq=covers))
     else:
-        existing.blob = blob
-        existing.covers_through_seq = covers
-        existing.created_at = datetime.utcnow()
+        db.query(RelayRoomSnapshot).filter(
+            RelayRoomSnapshot.room_id == room_id,
+            RelayRoomSnapshot.covers_through_seq < covers,
+        ).update(
+            {"blob": blob, "covers_through_seq": covers, "created_at": datetime.utcnow()},
+            synchronize_session=False,
+        )
     db.query(RelayRoomUpdate).filter(
         RelayRoomUpdate.room_id == room_id, RelayRoomUpdate.id <= covers
     ).delete(synchronize_session=False)

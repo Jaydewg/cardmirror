@@ -21,6 +21,7 @@ import { schema, newHeadingId } from '../schema/index.js';
 import { toDocx, serializeNative, serializeNativeAsync, parseNative, parseNativeSalvage, NativeDamagedError, readDocIdFromBytes, stampDocId, setSaveHealListener } from '../index.js';
 import { openDocxOffThread } from './docx-open.js';
 import { transformForExport, countMarkedCards, bakesUnreadRedOnSave } from '../export/transform-for-export.js';
+import { nativeBytesToDocx } from './native-to-docx.js';
 import type { Thread, Comment } from './comments-plugin.js';
 import type { LocalComment } from './learn-store.js';
 import { NavigationPanel } from './nav-panel.js';
@@ -156,6 +157,7 @@ import { isAutosaveOnForPath, setAutosaveForPath } from './autosave-prefs-store.
 import {
   autosaveDelayFor,
   autosaveEffect,
+  autosaveMaxWaitFor,
   explainAutosaveBlockedOnCreate,
   explainAutosaveBlockedOnToggle,
   hasLiveLinks,
@@ -1128,6 +1130,13 @@ let multiDocSetFocusedFile:
   | null = null;
 /** Set the focused DocRecord's Learn docId (minted/forked lazily). */
 let multiDocSetFocusedDocId: ((docId: string) => void) | null = null;
+/** uid-targeted twins of setFocusedFile / setFocusedDocId: a save commits
+ *  to the doc it was saved FROM, not whichever pane is focused when the
+ *  (slow) write finishes. */
+let multiDocSetFileForUid:
+  | ((uid: string, file: { filename: string; handle: unknown | null; format: 'cmir' | 'docx' | null }) => void)
+  | null = null;
+let multiDocSetDocIdForUid: ((uid: string, docId: string) => void) | null = null;
 /** Find the live view of any pane in this window (focused or not) whose
  *  DocRecord carries `docId`, else null. Backs the inbound-jump host and
  *  the plugin API's local-first jump, so a doc open in an unfocused pane
@@ -1137,6 +1146,9 @@ let multiDocFindViewForDocId: ((docId: string) => EditorView | null) | null = nu
  *  successful save in multi-doc mode. The shell knows the
  *  DocRecord's uid; the editor only knows it has a focused doc. */
 let multiDocCaptureFocusedCleanToken: (() => (() => boolean) | null) | null = null;
+/** Web unload hooks: any unsaved pane, and flush pending journals now. */
+let multiDocAnyDirty: (() => boolean) | null = null;
+let multiDocFlushJournals: (() => void) | null = null;
 /** Mode-switch hook: journal every open DocRecord across every
  *  slot's stack so the auto-recover-on-reload flow can rebuild
  *  the workspace in the new layout. Returns each doc's uid +
@@ -1212,7 +1224,11 @@ export function enableMultiDocMode(opts: {
     dirty?: boolean;
   } | null;
   setFocusedFile?: (file: { filename: string; handle: unknown | null; format: 'cmir' | 'docx' | null }) => void;
+  setFileForUid?: (uid: string, file: { filename: string; handle: unknown | null; format: 'cmir' | 'docx' | null }) => void;
   setFocusedDocId?: (docId: string) => void;
+  setDocIdForUid?: (uid: string, docId: string) => void;
+  anyDirty?: () => boolean;
+  flushJournals?: () => void;
   /** Live view of any pane holding `docId` (focused or background), or null. */
   findViewForDocId?: (docId: string) => EditorView | null;
   getAllFilenames?: () => (string | null)[];
@@ -1276,7 +1292,9 @@ export function enableMultiDocMode(opts: {
   multiDocSetFocusedFilename = opts.setFocusedFilename ?? null;
   multiDocGetFocusedFile = opts.getFocusedFile ?? null;
   multiDocSetFocusedFile = opts.setFocusedFile ?? null;
+  multiDocSetFileForUid = opts.setFileForUid ?? null;
   multiDocSetFocusedDocId = opts.setFocusedDocId ?? null;
+  multiDocSetDocIdForUid = opts.setDocIdForUid ?? null;
   multiDocFindViewForDocId = opts.findViewForDocId ?? null;
   multiDocGetAllFilenames = opts.getAllFilenames ?? null;
   multiDocGetFilenameForUid = opts.getFilenameForUid ?? null;
@@ -1285,6 +1303,8 @@ export function enableMultiDocMode(opts: {
   multiDocSetFilenameForUid = opts.setFilenameForUid ?? null;
   multiDocPromptSaveAllForQuit = opts.promptSaveAllForQuit ?? null;
   multiDocCaptureFocusedCleanToken = opts.captureFocusedCleanToken ?? null;
+  multiDocAnyDirty = opts.anyDirty ?? null;
+  multiDocFlushJournals = opts.flushJournals ?? null;
   multiDocOnRecoveredDoc = opts.onRecoveredDoc ?? null;
   multiDocJournalAll = opts.journalAll ?? null;
   multiDocReduceToFocused = opts.reduceToFocusedForModeSwitch ?? null;
@@ -3050,6 +3070,40 @@ function refreshFlashcardDueDot(): void {
   manageFlashcardsBtn.classList.toggle('pmd-ribbon-due-dot', show);
 }
 learnStore.subscribe(refreshFlashcardDueDot);
+// Web edition only: the desktop app's main process owns quit/close (its own
+// save prompt and journal handling via pagehide). In a browser tab nothing
+// stood between "close tab" and losing everything since the last 3 s quiet
+// gap (audit 18): ask before unloading with unsaved edits, and when the page
+// is hidden or unloading, fire any pending journal write immediately instead
+// of waiting out the debounce.
+if (!getElectronHost()) {
+  const anyDirty = (): boolean =>
+    multiDocActive ? (multiDocAnyDirty?.() ?? false) : currentDocDirty;
+  const flushJournals = (): void => {
+    if (multiDocActive) {
+      multiDocFlushJournals?.();
+      return;
+    }
+    if (journalTimer === null) return;
+    window.clearTimeout(journalTimer);
+    journalTimer = null;
+    journalWriteChain = journalWriteChain
+      .then(() => runJournalWrite())
+      .then(() => undefined)
+      .catch((err) => console.warn('Journal write crashed:', err));
+  };
+  window.addEventListener('beforeunload', (e) => {
+    if (!anyDirty()) return;
+    e.preventDefault();
+    // Legacy browsers read the return value; modern ones show their own text.
+    e.returnValue = '';
+  });
+  window.addEventListener('pagehide', flushJournals);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushJournals();
+  });
+}
+
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') refreshFlashcardDueDot();
 });
@@ -6454,6 +6508,16 @@ function setActiveDocId(docId: string): void {
   currentDocId = docId;
 }
 
+/** Like setActiveDocId, but for the doc identified by `uid` (captured
+ *  before an await) rather than whatever is focused now. */
+function setDocIdFor(uid: string, docId: string): void {
+  if (multiDocActive) {
+    if (multiDocSetDocIdForUid) multiDocSetDocIdForUid(uid, docId);
+    return;
+  }
+  if (uid === currentDocUid) currentDocId = docId;
+}
+
 /** The docId to ground new annotations against right now — the persistent
  *  docId once saved, else the session uid (rekeyed onto the real docId at
  *  first save). Used by Create Flashcard / Ask AI. */
@@ -6900,9 +6964,10 @@ async function routeOpenedFile(opened: OpenedFile): Promise<void> {
       await host.spawnWindow({
         filename: src.name,
         bytes: src.bytes,
-        // spawnWindow is Electron-only (canSpawnWindow); its handle is a path
-        // string. A web FileSystemFileHandle can't cross to a new window.
-        handle: typeof src.handle === 'string' ? src.handle : null,
+        // Electron: a path string. Web PWA: the FileSystemFileHandle rides
+        // along (IndexedDB hand-off = structured clone), so the new window
+        // can save in place.
+        handle: typeof src.handle === 'string' || (src.handle != null && typeof src.handle === 'object') ? (src.handle as string | FileSystemFileHandle) : null,
         format,
         uid: null,
       });
@@ -7972,21 +8037,35 @@ function activeFile(): { filename: string | null; handle: unknown | null; format
 /** Apply a save result back into the active file's record — chip
  *  label, in-place-save handle, and format all update together. */
 function commitSaveResult(filename: string, handle: unknown | null, format: 'cmir' | 'docx'): void {
-  if (multiDocActive && multiDocSetFocusedFile) {
-    multiDocSetFocusedFile({ filename, handle, format });
-  } else {
+  commitSaveResultFor(activeDocIdentity().sessionUid, filename, handle, format);
+}
+
+/** Commit a save result to the doc with session uid `uid` — captured by
+ *  the caller BEFORE its awaits. Save As serializes, shows a dialog and
+ *  writes (seconds on a big doc or a cloud folder) while the user can
+ *  click another pane; committing to "the focused doc" at that point gave
+ *  pane B pane A's new file, and B's next save overwrote it. In single-doc
+ *  mode a uid that no longer matches means the doc was swapped out; the
+ *  write already happened, so only the identity update is skipped. */
+function commitSaveResultFor(uid: string, filename: string, handle: unknown | null, format: 'cmir' | 'docx'): void {
+  if (multiDocActive) {
+    if (multiDocSetFileForUid) multiDocSetFileForUid(uid, { filename, handle, format });
+    else multiDocSetFocusedFile?.({ filename, handle, format });
+  } else if (uid === currentDocUid) {
     currentDocFilename = filename;
     setCurrentDocHandle(handle);
     currentDocFormat = format;
+  } else {
+    console.warn('[save] result for a doc no longer mounted; identity not updated');
   }
   // A (re)named doc that owns a live session republishes its title to
   // the room — a session started on an untitled doc gets its name the
   // moment the host saves, and joiners adopt it via the meta watcher.
   // `?.` on the module promise: never force-loads collab for a plain save.
-  void collabUiModule?.then((m) => m.republishSessionTitle(activeDocIdentity().sessionUid));
+  void collabUiModule?.then((m) => m.republishSessionTitle(uid));
   // A committed save (e.g. Save-As of a recovered draft) writes the content
   // to a real file, so it's no longer a stale-recovery-overwrite candidate.
-  clearRecoveredDraftMark(activeDocIdentity().sessionUid);
+  clearRecoveredDraftMark(uid);
   updateWindowTitle();
   // Format/handle may have changed (e.g., Save-As from unsaved →
   // .cmir-with-handle), which flips the autosave button between
@@ -8290,6 +8369,9 @@ export async function runSaveAsFlow(opts?: { defaultFormat?: 'cmir' | 'docx' }):
 
 async function runSaveAsFlowInner(opts?: { defaultFormat?: 'cmir' | 'docx' }): Promise<boolean> {
   const file = activeFile();
+  // The doc this save is FOR, fixed now: every later step commits to it
+  // by uid, whatever is focused when the awaits return.
+  const { docId: srcDocId, sessionUid } = activeDocIdentity();
   const suggestedName = basenameWithoutExt(file.filename ?? 'untitled');
   // A caller's explicit format wins (the autosave live-links modal's
   // "Save as .cmir"); then the existing on-disk handle's (preserves the
@@ -8359,17 +8441,13 @@ async function runSaveAsFlowInner(opts?: { defaultFormat?: 'cmir' | 'docx' }): P
     });
     if (!result) return false;
     if (isFullSave) {
-      // Read the pre-fork identity before committing the new file
-      // (commitSaveResult leaves docId untouched, but read first to be
-      // explicit about which doc we're forking FROM).
-      const { docId: srcDocId, sessionUid } = activeDocIdentity();
       // Did this doc have a real on-disk original? (file.handle is the
       // PRE-save handle.) A never-saved doc has no original to preserve,
       // so its annotations MOVE to the new file rather than copy —
       // otherwise an in-doc flashcard's minted docId would linger as a
       // phantom "Untitled" group.
       const hadOnDiskOriginal = file.handle != null;
-      commitSaveResult(result.name, result.handle ?? null, choice.format);
+      commitSaveResultFor(sessionUid, result.name, result.handle ?? null, choice.format);
       if (forkDocId) {
         if (srcDocId && hadOnDiskOriginal) {
           // Real file → fork: the original keeps its cards; the copy
@@ -8384,7 +8462,7 @@ async function runSaveAsFlowInner(opts?: { defaultFormat?: 'cmir' | 'docx' }): P
           // session uid.
           learnStore.rekeyDoc(sessionUid, forkDocId);
         }
-        setActiveDocId(forkDocId);
+        setDocIdFor(sessionUid, forkDocId);
         learnStore.registerDoc({
           docId: forkDocId,
           path: typeof result.handle === 'string' ? result.handle : null,
@@ -8719,6 +8797,9 @@ export async function runSaveFlow(opts?: { awaitFailureAlert?: boolean }): Promi
 async function keepBothForActiveFile(
   file: { handle: string; filename: string | null; format: 'cmir' | 'docx' },
   bytes: Uint8Array,
+  /** Session uid of the doc the bytes came from, captured by the caller
+   *  BEFORE it serialized (same discipline as Save As). */
+  sessionUid: string,
   /** Collects the failure alert for a caller that waits on it (runSaveFlow). */
   alerts?: Promise<void>[],
 ): Promise<boolean> {
@@ -8729,7 +8810,7 @@ async function keepBothForActiveFile(
     // Mark the copy BEFORE the identity switch registers it, so the
     // registration keeps the kept-copy state.
     noteKeptCopy(copy.handle, file.handle);
-    commitSaveResult(copy.name, copy.handle, file.format);
+    commitSaveResultFor(sessionUid, copy.name, copy.handle, file.format);
     // No chip or toast: the pill's "Conflicted copy" state is the announcement.
     return true;
   } catch (err) {
@@ -8767,11 +8848,13 @@ export function serializeWorkingCopy(
 /** Badge action: "Keep mine as a copy" without a prior refused save. */
 async function saveActiveAsConflictedCopy(): Promise<void> {
   const file = activeFile();
+  // Captured before any await: a keep-both copy commits to THIS doc.
+  const saveUid = activeDocIdentity().sessionUid;
   if (typeof file.handle !== 'string' || !file.handle || !file.format) return;
   const docId = ensureActiveDocId();
   const commitClean = captureActiveDocCleanToken();
   const bytes = await serializeActiveForSave(file.format, docId);
-  if (!(await keepBothForActiveFile({ handle: file.handle, filename: file.filename, format: file.format }, bytes))) return;
+  if (!(await keepBothForActiveFile({ handle: file.handle, filename: file.filename, format: file.format }, bytes, saveUid))) return;
   commitClean();
   flashSaveSuccess();
   reportAutosaveSuccess();
@@ -8882,6 +8965,8 @@ function ensureDiskBadge(): void {
 
 async function runSaveFlowInner(alerts: Promise<void>[]): Promise<boolean> {
   const file = activeFile();
+  // Captured before any await: a keep-both copy commits to THIS doc.
+  const saveUid = activeDocIdentity().sessionUid;
   if (!file.handle || !file.format || !getHost().supportsInPlaceSave) {
     return runSaveAsFlow();
   }
@@ -8968,7 +9053,7 @@ async function runSaveFlowInner(alerts: Promise<void>[]): Promise<boolean> {
       // becomes a conflicted copy beside the original and this window
       // switches to the copy. No dialog; the chip + badge say so.
       if (!isFileChangedOnDiskError(err) || typeof file.handle !== 'string') throw err;
-      if (!(await keepBothForActiveFile({ handle: file.handle, filename: file.filename, format: file.format }, bytes, alerts))) {
+      if (!(await keepBothForActiveFile({ handle: file.handle, filename: file.filename, format: file.format }, bytes, saveUid, alerts))) {
         return false;
       }
     }
@@ -9119,6 +9204,13 @@ function flashSaveSuccess(): void {
 // on successful save / explicit close. Drives the recovery modal
 // on startup.
 
+/** Debounces are pure trailing: every edit (a co-editing partner's too)
+ *  pushed the write back, so a busy stretch could go minutes with no
+ *  autosave or crash journal. Past this much pending time the next edit
+ *  fires the write immediately instead of re-arming the delay. */
+const PENDING_WRITE_MAX_WAIT_MS = 30_000;
+let autosavePendingSince: number | null = null;
+let journalPendingSince: number | null = null;
 const JOURNAL_DELAY_MS = 3000;
 let autosaveTimer: number | null = null;
 let journalTimer: number | null = null;
@@ -9138,13 +9230,18 @@ export function notifyEditForAutosave(): void {
   scheduleJournalWrite();
   if (!settings.get('autosaveEnabled')) return;
   if (autosaveTimer !== null) window.clearTimeout(autosaveTimer);
+  const now = Date.now();
+  if (autosavePendingSince === null) autosavePendingSince = now;
+  const maxWait = autosaveMaxWaitFor(activeFile().format);
+  const overdue = maxWait !== null && now - autosavePendingSince >= maxWait;
   autosaveTimer = window.setTimeout(() => {
     autosaveTimer = null;
     queueAutosaveAttempt();
-  }, autosaveDelayFor(activeFile().format));
+  }, overdue ? 0 : autosaveDelayFor(activeFile().format));
 }
 
 function queueAutosaveAttempt(): void {
+  autosavePendingSince = null;
   // .catch keeps the chain FULFILLED: runAutosaveAttempt handles its own
   // write errors, but a throw from its guard lines (before its try) used
   // to reject the chain — after which every later .then silently skipped
@@ -9282,42 +9379,65 @@ function scheduleJournalWrite(): void {
   if (!getHost().journalsSupported) return;
   if (multiDocActive) return;
   if (journalTimer !== null) window.clearTimeout(journalTimer);
+  const now = Date.now();
+  if (journalPendingSince === null) journalPendingSince = now;
+  const overdue = now - journalPendingSince >= PENDING_WRITE_MAX_WAIT_MS;
   journalTimer = window.setTimeout(() => {
     journalTimer = null;
+    journalPendingSince = null;
     // .catch keeps the chain alive — a guard-line throw must not end
     // crash-recovery journaling for the whole session.
     journalWriteChain = journalWriteChain
       .then(() => runJournalWrite())
+      .then(() => undefined)
       .catch((err) => console.warn('Journal write crashed:', err));
-  }, JOURNAL_DELAY_MS);
+  }, overdue ? 0 : JOURNAL_DELAY_MS);
 }
 
-async function runJournalWrite(): Promise<void> {
-  if (!view) return;
+/** Returns false when the write FAILED (logged); true when it landed or
+ *  there was nothing to do. The debounced caller ignores the result; the
+ *  mode-switch flow must not — a doc whose journal failed would silently
+ *  not reopen (or reopen stale) after the reload. */
+async function runJournalWrite(): Promise<boolean> {
+  if (!view) return true;
   const host = getHost();
-  if (!host.journalsSupported) return;
+  if (!host.journalsSupported) return true;
+  // Identity and content captured TOGETHER, before the await: a doc switch
+  // landing inside the serialize would otherwise journal doc A's content
+  // under doc B's uid / filename / handle, and an in-place recovery save
+  // would write A into B's file (audit 8).
+  const uid = currentDocUid;
+  const filename = currentDocFilename;
+  const handle = currentDocHandle;
+  const format = currentDocFormat;
+  const docId = currentDocId;
   try {
     const bytes = await serializeNativeAsync(view.state.doc, {
       threads: Array.from(getCommentsState(view.state).threads.values()),
-      ...(currentDocId ? { docId: currentDocId } : {}),
+      ...(docId ? { docId } : {}),
     });
+    // The doc was swapped out while we serialized: these bytes belong to a
+    // session that is over, and its journal was cleared by the switch.
+    if (uid !== currentDocUid) return true;
     // A recovered-but-not-yet-saved draft carries its ORIGINAL journal
     // savedAt forward, so the stale-overwrite guard survives relaunches and
     // mode switches even though this write stamps savedAt = now.
-    const recoveredFrom = recoveredDraftJournalSavedAt(currentDocUid);
+    const recoveredFrom = recoveredDraftJournalSavedAt(uid);
     await host.writeJournal({
-      uid: currentDocUid,
-      filename: currentDocFilename ?? 'Untitled',
+      uid,
+      filename: filename ?? 'Untitled',
       // Keep the handle as-is: Electron path string OR the browser's
       // FileSystemFileHandle (both survive the journal round-trip).
-      handle: currentDocHandle,
-      format: currentDocFormat,
+      handle,
+      format,
       savedAt: new Date().toISOString(),
       ...(recoveredFrom ? { recoveredFromSavedAt: recoveredFrom } : {}),
       bytes,
     });
+    return true;
   } catch (err) {
     console.warn('Journal write failed:', err);
+    return false;
   }
 }
 
@@ -9365,6 +9485,8 @@ async function runAutosaveAttempt(): Promise<void> {
   // a file nobody edited (for a `.docx`, a full re-export through our writer).
   if (!activeDocDirty()) return;
   const file = activeFile();
+  // Captured before any await: a keep-both copy commits to THIS doc.
+  const saveUid = activeDocIdentity().sessionUid;
   const format = file.format;
   // No file yet, or a `.docx` whose live links a write would flatten
   // (the user was told so in a modal; manual Save still asks).
@@ -9397,7 +9519,7 @@ async function runAutosaveAttempt(): Promise<void> {
       // write is non-destructive now, and a paused autosave would leave
       // edits unsaved for as long as the user failed to notice.
       if (!isFileChangedOnDiskError(err) || typeof file.handle !== 'string') throw err;
-      if (!(await keepBothForActiveFile({ handle: file.handle, filename: file.filename, format }, bytes))) {
+      if (!(await keepBothForActiveFile({ handle: file.handle, filename: file.filename, format }, bytes, saveUid))) {
         throw err;
       }
     }
@@ -10222,11 +10344,24 @@ installPluginCommunityGate();
   if (eh) {
     let lastRoots = settings.get('fileSearchRoots');
     void eh.syncLibraryRoots(lastRoots);
+    // Write scope: the speech-doc auto-save folder is the one place the
+    // renderer writes by path without a dialog, so main must know it.
+    const writeFolders = (): string[] => {
+      const f = settings.get('defaultSpeechDocFolder').trim();
+      return f ? [f] : [];
+    };
+    let lastWriteFolders = writeFolders().join('\n');
+    void eh.syncWriteFolders(writeFolders());
     settings.subscribe(() => {
       const roots = settings.get('fileSearchRoots');
       if (roots !== lastRoots) {
         lastRoots = roots;
         void eh.syncLibraryRoots(roots);
+      }
+      const wf = writeFolders();
+      if (wf.join('\n') !== lastWriteFolders) {
+        lastWriteFolders = wf.join('\n');
+        void eh.syncWriteFolders(wf);
       }
     });
     void eh.grantLegacyRecents(
@@ -10983,7 +11118,11 @@ async function journalAllForModeSwitch(): Promise<ModeSwitchDoc[]> {
     window.clearTimeout(journalTimer);
     journalTimer = null;
   }
-  await runJournalWrite();
+  // A failed journal must abort the switch (the caller's catch reverts
+  // and tells the user) instead of reloading as if the doc were safe.
+  if (!(await runJournalWrite())) {
+    throw new Error(`the recovery copy of "${currentDocFilename ?? 'Untitled'}" could not be written`);
+  }
   return [{ uid: currentDocUid, dirty: currentDocDirty }];
 }
 
@@ -11255,8 +11394,9 @@ async function saveRecoveryEntry(entry: JournalEntry): Promise<boolean> {
 
 /** Convert a journal entry's stored cmir bytes into the requested
  *  on-disk format. cmir → cmir is a passthrough (the journal
- *  already stores cmir); cmir → docx parses the journal and runs
- *  the export pipeline. */
+ *  already stores cmir); cmir → docx runs the shared export pipeline
+ *  (native-to-docx.ts: live views flattened, unread red never baked —
+ *  this is the user's working file). */
 async function reserializeJournalAs(
   entry: JournalEntry,
   format: 'cmir' | 'docx',
@@ -11267,18 +11407,9 @@ async function reserializeJournalAs(
       ? entry.bytes
       : new Uint8Array(entry.bytes as ArrayBufferLike);
   }
-  const parsed = parseNative(entry.bytes);
-  const exportDoc = transformForExport(parsed.doc, {
-    includeComments: true,
-    includeAnalytics: true,
-    includeUndertags: true,
-    readMode: false,
-    markedCardsOnly: false,
+  return nativeBytesToDocx(entry.bytes, {
+    bodyFont: settings.get('bodyFont'),
     markUnreadAfterMarker: settings.get('markUnreadAfterMarker'),
-  });
-  return toDocx(exportDoc, {
-    ...(parsed.threads.length > 0 ? { threads: parsed.threads } : {}),
-    defaultFont: settings.get('bodyFont'),
     generator: DOCX_GENERATOR,
   });
 }

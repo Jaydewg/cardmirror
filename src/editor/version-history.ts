@@ -30,6 +30,7 @@ import { isTopOverlay, popOverlay, pushOverlay } from './overlay-stack.js';
 import { settings } from './settings.js';
 import { showToast } from './toast.js';
 import { parseNative } from '../native/index.js';
+import { fromDocxFull } from '../import/index.js';
 import { countReadAloudWords } from './word-count.js';
 import { NavigationPanel } from './nav-panel.js';
 import { isBackdropClick } from './backdrop-click.js';
@@ -398,7 +399,12 @@ export async function openVersionSnapshotDialog(
     const bytes = await host.historyRead(docId, id);
     if (!bytes) return null;
     try {
-      return { doc: parseNative(bytes).doc, bytes };
+      // A manual save of a .docx working file snapshots .docx bytes (zip
+      // magic "PK\x03\x04"); parse those as Word so the preview and
+      // stats work — "Open a copy" already sniffed the format.
+      const isDocx = bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+      const doc = isDocx ? (await fromDocxFull(bytes)).doc : parseNative(bytes).doc;
+      return { doc, bytes };
     } catch {
       return null;
     }

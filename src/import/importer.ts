@@ -653,6 +653,20 @@ function collectInlines(node: XmlNode, ctx: ImportContext, out: PMNode[]): void 
   } else if ('w:del' in node || 'w:moveFrom' in node) {
     // Intentionally no-op: deletion / move-source content is dropped.
   }
+  // Transparent inline wrappers whose text used to be dropped (audit 12):
+  // smart tags, inline content controls (citation managers, templates),
+  // custom XML markup, and simple fields (the <w:r> children ARE the
+  // field's cached result). Recurse into their content.
+  else if ('w:smartTag' in node) {
+    for (const c of childrenOf(node, 'w:smartTag')) collectInlines(c, ctx, out);
+  } else if ('w:customXml' in node) {
+    for (const c of childrenOf(node, 'w:customXml')) collectInlines(c, ctx, out);
+  } else if ('w:fldSimple' in node) {
+    for (const c of childrenOf(node, 'w:fldSimple')) collectInlines(c, ctx, out);
+  } else if ('w:sdt' in node) {
+    const content = findChild(childrenOf(node, 'w:sdt'), 'w:sdtContent');
+    if (content) for (const c of childrenOf(content, 'w:sdtContent')) collectInlines(c, ctx, out);
+  }
   // Comment range brackets. These live as siblings of `<w:r>` at
   // the paragraph level (and can span paragraphs — the stack on
   // ImportContext is doc-wide so cross-paragraph ranges work).
@@ -773,6 +787,24 @@ function parseRun(rNode: XmlNode, ctx: ImportContext, out: PMNode[]): void {
     else if ('w:br' in c) {
       try { out.push(schema.text('\n', currentMarks())); } catch (_) { /* */ }
     }
+    // <w:cr/>: a carriage return — same treatment as a line break.
+    else if ('w:cr' in c) {
+      try { out.push(schema.text('\n', currentMarks())); } catch (_) { /* */ }
+    }
+    // <w:sym w:char="F0B7" w:font="Symbol"/>: a symbol-font glyph. Codes in
+    // the F000–F0FF private range are the font's own byte; the low byte is
+    // the nearest plain character we can keep (a bullet, a dash). Anything
+    // else is a real code point.
+    else if ('w:sym' in c) {
+      const hex = attrsOf(c)['w:char'] ?? '';
+      const code = parseInt(hex, 16);
+      if (Number.isFinite(code) && code > 0) {
+        const cp = code >= 0xf000 && code <= 0xf0ff ? code - 0xf000 : code;
+        if (cp >= 0x20) {
+          try { out.push(schema.text(String.fromCodePoint(cp), currentMarks())); } catch (_) { /* */ }
+        }
+      }
+    }
     // Word-internal hyphen elements: non-breaking hyphen and soft
     // (optional/discretionary) hyphen. Round-trip as the corresponding
     // Unicode characters so they survive editing.
@@ -806,8 +838,11 @@ function parseRun(rNode: XmlNode, ctx: ImportContext, out: PMNode[]): void {
     // <w:drawing><wp:anchor>…. Both wrap a picture referenced via
     // r:embed on an <a:blip>. Without media-parts access we can't
     // round-trip the image bytes, so the drawing is silently dropped.
-    else if ('w:drawing' in c) {
-      let imgNode = parseDrawing(c, ctx);
+    // <mc:AlternateContent>: a drawing wrapped for older readers — the
+    // <w:drawing> sits inside mc:Choice (or mc:Fallback). <w:pict>: legacy
+    // VML image. Both import through the same media lookup.
+    else if ('mc:AlternateContent' in c || 'w:pict' in c || 'w:drawing' in c) {
+      let imgNode = 'w:drawing' in c ? parseDrawing(c, ctx) : parseWrappedImage(c, ctx);
       if (imgNode) {
         // Apply any open comment ranges to the image so a comment
         // anchored on a picture survives the docx round-trip — the text
@@ -835,6 +870,58 @@ function parseRun(rNode: XmlNode, ctx: ImportContext, out: PMNode[]): void {
  * lookup, the media file in the zip, etc. — so a drawing we can't
  * round-trip cleanly is dropped.
  */
+/** Image inside <mc:AlternateContent> (find the <w:drawing> in any branch)
+ *  or legacy VML <w:pict> (<v:imagedata r:id> with a style-declared size). */
+function parseWrappedImage(node: XmlNode, ctx: ImportContext): PMNode | null {
+  const drawing = findFirstNode(node, 'w:drawing');
+  if (drawing) return parseDrawing(drawing, ctx);
+  const relId = findFirstAttr(node, 'v:imagedata', 'r:id') ?? findFirstAttr(node, 'v:imagedata', 'r:href');
+  if (!relId) return null;
+  // VML sizes live in the shape's CSS style: "width:120pt;height:80pt".
+  const style = findFirstAttr(node, 'v:shape', 'style') ?? '';
+  const pt = (k: string): number => {
+    const m = new RegExp(`${k}:\\s*([0-9.]+)pt`).exec(style);
+    return m ? Math.round(parseFloat(m[1]!) * 12700) : 0;
+  };
+  return imageFromRel(relId, pt('width'), pt('height'), findFirstAttr(node, 'v:shape', 'alt') ?? '', ctx);
+}
+
+/** First descendant element named `tagName`, wrapped as a one-key node. */
+function findFirstNode(root: XmlNode, tagName: string): XmlNode | null {
+  const stack: XmlNode[] = [root];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    for (const key of Object.keys(node)) {
+      if (key === ':@') continue;
+      if (key === tagName) return node;
+      const children = (node as Record<string, unknown>)[key];
+      if (Array.isArray(children)) for (const ch of children) if (ch && typeof ch === 'object') stack.push(ch as XmlNode);
+    }
+  }
+  return null;
+}
+
+/** Build an image node from a relationship id + EMU size, via the media parts. */
+function imageFromRel(relId: string, cx: number, cy: number, alt: string, ctx: ImportContext): PMNode | null {
+  if (!ctx.mediaParts) return null;
+  const target = ctx.rels[relId];
+  if (!target) return null;
+  const zipPath = target.startsWith('/') ? target.slice(1) : `word/${target}`;
+  const part = ctx.mediaParts.get(zipPath);
+  if (!part) return null;
+  try {
+    return schema.nodes['image']!.createChecked({
+      data: bytesToBase64(part.bytes),
+      contentType: part.contentType,
+      widthEmu: Number.isFinite(cx) && cx > 0 ? cx : 0,
+      heightEmu: Number.isFinite(cy) && cy > 0 ? cy : 0,
+      alt,
+    });
+  } catch {
+    return null;
+  }
+}
+
 function parseDrawing(drawingNode: XmlNode, ctx: ImportContext): PMNode | null {
   if (!ctx.mediaParts) return null;
 

@@ -52,8 +52,34 @@ export interface ReaderRates {
  * tag/analytic/cite. When `from`/`to` are omitted, counts the whole doc.
  */
 export function countReadAloudSplit(doc: PMNode, from?: number, to?: number): ReadAloudCounts {
-  const lo = from ?? 0;
-  const hi = to ?? doc.content.size;
+  if (from === undefined && to === undefined) return countWholeDoc(doc);
+  return countRange(doc, from ?? 0, to ?? doc.content.size);
+}
+
+/** Per-top-level-child counts. PM nodes are immutable and an edit
+ *  reuses every untouched child, so a whole-doc recount after a
+ *  keystroke re-walks only the edited child (~40ms -> <1ms on a
+ *  25M-character file). */
+const childCounts = new WeakMap<PMNode, ReadAloudCounts>();
+
+function countWholeDoc(doc: PMNode): ReadAloudCounts {
+  // A textblock's children are text runs whose bucket depends on this
+  // node, so count it directly (also covers callers passing one child).
+  if (doc.inlineContent) return countRange(doc, 0, doc.content.size);
+  const counts: ReadAloudCounts = { body: 0, other: 0 };
+  doc.forEach((child) => {
+    let c = childCounts.get(child);
+    if (!c) {
+      c = countRange(child, 0, child.content.size);
+      childCounts.set(child, c);
+    }
+    counts.body += c.body;
+    counts.other += c.other;
+  });
+  return counts;
+}
+
+function countRange(doc: PMNode, lo: number, hi: number): ReadAloudCounts {
   const counts: ReadAloudCounts = { body: 0, other: 0 };
   if (lo >= hi) return counts;
   // A formatting change inside a word splits it across two text runs;
