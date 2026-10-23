@@ -23,7 +23,7 @@ describe('Default colors settings', () => {
     expect(settings.get('lastShadingColor'), 'the picker starts on the same gray').toBe('C0C0C0');
   });
 
-  it('sit in their own Editing section between Standardize exceptions and Acronym marking', () => {
+  it('sit in their own Editing section between Standardize exceptions and Trigger colors', () => {
     const editing = SETTING_METADATA.filter((m) => m.category === 'editing');
     const sections: string[] = [];
     for (const m of editing) {
@@ -33,7 +33,7 @@ describe('Default colors settings', () => {
     const i = sections.indexOf('Default colors');
     expect(i).toBeGreaterThan(0);
     expect(sections[i - 1] ?? '').toBe('Standardize exceptions');
-    expect(sections[i + 1] ?? '').toBe('Acronym marking');
+    expect(sections[i + 1] ?? '').toBe('Trigger colors');
     expect(editing.filter((m) => m.section === 'Default colors').map((m) => m.key)).toEqual(['defaultHighlightColor', 'defaultShadingColor']);
   });
 

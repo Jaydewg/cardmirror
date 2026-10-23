@@ -1114,6 +1114,9 @@ class SettingsModal {
       row.appendChild(text);
       row.appendChild(buildShadingHexEditor('standardizeShadingException'));
       return row;
+    } else if (meta.kind === 'standardizeLockedHighlightsColor') {
+      row.appendChild(text);
+      row.appendChild(buildHighlightNameEditor('standardizeLockedHighlightsColor'));
     } else if (meta.kind === 'defaultHighlightColor') {
       row.appendChild(text);
       row.appendChild(buildHighlightNameEditor('defaultHighlightColor'));
@@ -4781,7 +4784,7 @@ function buildColorEditor(key: string): HTMLElement {
  *  highlight color): a swatch row of Word's 15 named highlight colors
  *  (highlight marks can only be one of these) plus a label naming the
  *  current pick. Stores the OOXML color name under `key`. */
-function buildHighlightNameEditor(key: 'standardizeHighlightException' | 'defaultHighlightColor'): HTMLElement {
+function buildHighlightNameEditor(key: 'standardizeHighlightException' | 'defaultHighlightColor' | 'standardizeLockedHighlightsColor'): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'pmd-color-editor';
 

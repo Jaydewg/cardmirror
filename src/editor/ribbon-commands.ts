@@ -64,7 +64,7 @@ import {
   type HeadingMode,
 } from './condense.js';
 import { applyPlainPasteFromText, togglePlainPaste } from './paste-plugin.js';
-import { lockHighlighting } from './create-reference.js';
+import { lockHighlighting, REFERENCE_SHADING_HEX } from './create-reference.js';
 import { showToast } from './toast.js';
 import { surfaceError } from './error-surface.js';
 import { TYPE_TO_LEVEL, TYPE_LABEL } from './headings.js';
@@ -2342,7 +2342,61 @@ export function uniShade(
 ): Command {
   return runUniColor('shading', activeColor, scope, true, except);
 }
+/**
+ * "Turn <color> into Locked Highlighting": Lock Highlighting filtered
+ * to one highlight color. Every `highlight` run in `target()`'s color
+ * becomes the locked gray shading; existing shading is left alone,
+ * matching lockHighlighting. Other highlight colors are untouched.
+ *
+ * `scope` works like `uniHighlight`'s: `'document'` walks the whole
+ * doc, `'selection'` only the current selection (no-op when empty).
+ * Returns false when nothing in scope matches.
+ * 
+ * The function follows the exact same REFERENCE_SHADING_HEX color that lockHighlighting does.
+ */
+export function lockHighlightColor(
+  scope: 'document' | 'selection',
+  target: () => string,
+): Command {
+  return (state, dispatch) => {
+    const highlightType = schema.marks['highlight'];
+    const shadingType = schema.marks['shading'];
+    if (!highlightType || !shadingType) return false;
 
+    let from = 0;
+    let to = state.doc.content.size;
+    if (scope === 'selection') {
+      if (state.selection.empty) return false;
+      const [trimmed] = trimRangesForFormatting(state.doc, [
+        { from: state.selection.from, to: state.selection.to },
+      ]);
+      from = trimmed!.from;
+      to = trimmed!.to;
+    }
+
+    const color = target();
+    const tr = state.tr;
+    let changed = false;
+    state.doc.nodesBetween(from, to, (node, pos) => {
+      if (!node.isText) return true;
+      const mark = highlightType.isInSet(node.marks);
+      if (!mark || mark.attrs['color'] !== color) return true;
+      const start = Math.max(from, pos);
+      const end = Math.min(to, pos + node.nodeSize);
+      if (start >= end) return true;
+      tr.removeMark(start, end, highlightType);
+      if (!shadingType.isInSet(node.marks)) {
+        tr.addMark(start, end, shadingType.create({ color: REFERENCE_SHADING_HEX }));
+      }
+      changed = true;
+      return true;
+    });
+
+    if (!changed) return false;
+    if (dispatch) dispatch(tr);
+    return true;
+  };
+}
 /** Word's 15 named highlight colors with their canonical OOXML RGB
  *  values. Used to bridge between the `highlight` mark (which
  *  stores a name) and the `shading` mark (which stores hex RGB). */
@@ -4585,6 +4639,7 @@ export type RibbonCommandId =
   | 'standardizeShading'
   | 'standardizeHighlightExcept'
   | 'standardizeShadingExcept'
+  | 'standardizeLockedHighlights'
   | 'convertCardsToReadMode'
   | 'toggleReadMode'
   | 'toggleReaderView'
@@ -4854,6 +4909,7 @@ export const RIBBON_COMMAND_IDS: RibbonCommandId[] = [
   'standardizeShading',
   'standardizeHighlightExcept',
   'standardizeShadingExcept',
+  'standardizeLockedHighlights',
   'convertCardsToReadMode',
   'toggleReadMode',
   'toggleReaderView',
@@ -5068,6 +5124,7 @@ export const RIBBON_COMMAND_LABELS: Record<RibbonCommandId, string> = {
   standardizeShading: 'Standardize Background Color',
   standardizeHighlightExcept: 'Standardize Highlighting (with Exception)',
   standardizeShadingExcept: 'Standardize Background Color (with Exception)',
+  standardizeLockedHighlights: 'Convert Specific Colored Highlights to Locked Highlighting',
   convertCardsToReadMode: 'Convert Cards to Read Mode',
   toggleReadMode: 'Toggle Read Mode',
   toggleReaderView: 'Toggle Reading View',
@@ -5286,6 +5343,7 @@ export const RIBBON_COMMAND_ALIASES: Partial<Record<RibbonCommandId, readonly st
   lockHighlighting: ['lock highlights', 'grey highlights', 'gray highlights', 'rehighlight'],
   standardizeHighlightExcept: ['standardize except', 'standardize highlighting except', 'exception highlight'],
   standardizeShadingExcept: ['standardize background except', 'standardize shading except', 'exception shading'],
+  standardizeLockedHighlights: ['lock highlighting of specific highlight', 'lock highlighting full doc'],
   regrow: ['unshrink', 'regrow', 'restore text size', 'unshrink card text'],
   smartShrink: ['smart shrink', 'deep shrink'],
   condenseAndShrink: ['fast condense', 'condense and shrink', 'condense shrink'],
@@ -5473,6 +5531,7 @@ export const DEFAULT_RIBBON_KEYS: Record<RibbonCommandId, string | string[]> = {
   standardizeShading: '',
   standardizeHighlightExcept: '',
   standardizeShadingExcept: '',
+  standardizeLockedHighlights: '',
   convertCardsToReadMode: '',
   toggleReadMode: '',
   toggleReaderView: '',
@@ -6244,6 +6303,12 @@ function commandFor(id: RibbonCommandId, ctx: RibbonContext): Command {
           ctx.shadingColor,
           state.selection.empty ? 'document' : 'selection',
           () => settings.get('standardizeShadingException'),
+        )(state, dispatch, view);
+    case 'standardizeLockedHighlights':
+      return (state, dispatch, view) =>
+        lockHighlightColor(
+          state.selection.empty ? 'document' : 'selection',
+          () => settings.get('standardizeLockedHighlightsColor'),
         )(state, dispatch, view);
     case 'convertCardsToReadMode':
       return convertCardsToReadMode;

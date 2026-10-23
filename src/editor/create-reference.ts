@@ -44,7 +44,8 @@ import {
 } from './settings.js';
 
 /** Light gray for highlight → shading conversion in references. */
-const REFERENCE_SHADING_HEX = 'C0C0C0';
+export const REFERENCE_SHADING_HEX = 'C0C0C0'; // It's done this way because of helper functions in ribbon-commands.ts
+
 
 interface CardBodySelection {
   paragraphs: { node: PMNode; pos: number }[];
