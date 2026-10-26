@@ -83,6 +83,9 @@ update.
 - That relay doesn't support spectators yet (the view-code and view-link
   buttons stay hidden), and seats up to 10 editors per session.
 - Web join links don't cross servers.
+- There is no CardMirror Lite edition of this pre-release: Lite removes
+  the relay connection that everything here depends on. Lite installers
+  come with the stable 1.16.1 release.
 
 ## 1.16.1 — 2026-10-26
 

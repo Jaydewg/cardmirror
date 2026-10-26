@@ -27,6 +27,12 @@ displays `1.16.1-f` (flags are de-duplicated, so not `-f-f`). Caveat: a
 offered a later stable release (≥ 1.16.1, without federation) if one is
 published to the same repo.
 
+No Lite build: `release.yml` on this branch drops the "Build and upload
+CardMirror Lite installer" step. Lite (`src/editor/lite.ts`) removes
+collaboration, sharing and the relay, so a federation Lite would only be
+the plain Lite under a `-f` version. Lite installers come from main's
+stable releases. MANUAL's CardMirror Lite section says so.
+
 ### Changed: upstream 1.16 spectators alongside federation
 
 Upstream's spectators (view codes, view passes) and federation's

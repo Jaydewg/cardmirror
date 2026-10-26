@@ -111,6 +111,10 @@ version ("CardMirror Lite" installers on the releases page) blocks
 network requests at the application level and installs alongside a
 standard copy without touching it.
 
+Federation pre-releases (versions ending in `-f`) have **no Lite
+edition**: everything they add runs through a relay server, which Lite
+removes. Lite installers come with the stable releases.
+
 Everything in this manual applies to Lite **except** the sections on
 AI features, collaboration, plugins, and updates. Documents move
 freely between Lite and the standard edition — if your school uses
