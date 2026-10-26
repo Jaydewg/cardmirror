@@ -41,6 +41,13 @@ import {
   togglePrepShownSide,
   isStopwatch,
 } from './timer-state.js';
+import {
+  lastSpeechSummary,
+  subscribeRemoteSpeechSummary,
+  subscribeSession,
+  type SpeechSummary,
+} from './dynamic-speech/session.js';
+import { STATUS_CLASSES, speechSourceTitle, speechStatusClass, speechStatusParts } from './dynamic-speech/display.js';
 
 /** Format ms as MM:SS, clamping to 0 and rounding upward to whole
  *  seconds so a running clock doesn't visually flash 0:00 a half-
@@ -128,6 +135,7 @@ export function mountTimerUI(opts?: { popout?: boolean }): void {
             aria-label="Prep"><span class="pmd-timer-prep-prefix">A:</span><span class="pmd-timer-prep-time" id="timer-prep-single-time">10:00</span></button>
     <button id="timer-prep-switch-btn" class="pmd-timer-prep-switch" type="button"
             title="Switch prep side" aria-label="Switch between affirmative and negative prep">⇄</button>
+    <div id="timer-speech-status" class="pmd-timer-speech" aria-live="off" hidden></div>
   `;
   if (isPopout) panel.classList.add('pmd-timer-panel-popout');
 
@@ -192,6 +200,31 @@ export function mountTimerUI(opts?: { popout?: boolean }): void {
     const b = document.getElementById(`timer-preset-${i + 1}-btn`) as HTMLButtonElement;
     presetBtns.push(b);
   }
+
+  // ─── Dynamic speech readout ──────────────────────────────────
+  // Fed by this window's session and, over the shared channel, by the
+  // armed window's (the pop-out never has a session of its own).
+  const speechEl = document.getElementById('timer-speech-status') as HTMLDivElement;
+  function paintSpeech(summary: SpeechSummary): void {
+    const parts = speechStatusParts(summary, settings.get('dynamicSpeechTimerItems'));
+    speechEl.replaceChildren(
+      ...parts.map((text) => {
+        const line = document.createElement('div');
+        line.textContent = text;
+        return line;
+      }),
+    );
+    speechEl.hidden = parts.length === 0;
+    speechEl.title = parts.length ? speechSourceTitle(summary) : '';
+    const cls = settings.get('dynamicSpeechTimerItems').includes('finish') ? speechStatusClass(summary) : null;
+    for (const c of STATUS_CLASSES) {
+      speechEl.classList.toggle(c, c === cls);
+      display.classList.toggle(c, c === cls);
+    }
+  }
+  let lastSpeech = lastSpeechSummary();
+  subscribeSession((summary) => paintSpeech((lastSpeech = summary)));
+  subscribeRemoteSpeechSummary((summary) => paintSpeech((lastSpeech = summary)));
 
   // ─── Click wiring ────────────────────────────────────────────
   startBtn.addEventListener('click', () => {
@@ -380,6 +413,7 @@ export function mountTimerUI(opts?: { popout?: boolean }): void {
   applyChrome();
   settings.subscribe(() => {
     applyChrome();
+    paintSpeech(lastSpeech);
     // Keep the prep-total cache in state in sync with the setting.
     configurePrepTotal(settings.get('timerPrepMinutes') * 60 * 1000);
     render();

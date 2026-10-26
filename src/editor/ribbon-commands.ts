@@ -103,6 +103,14 @@ import {
   startTimer,
 } from './timer-state.js';
 import {
+  armDynamicSpeech,
+  endDynamicSpeech,
+  isSpeechArmed,
+  speechSkipOrClip,
+  speechTimeMark,
+  speechUndo,
+} from './dynamic-speech/session.js';
+import {
   selectSimilar,
   getOperatingRanges,
   META_OPERATING_ON_SHADOW,
@@ -4853,7 +4861,15 @@ export type RibbonCommandId =
   | 'timerPreset3'
   | 'timerStartAffPrep'
   | 'timerStartNegPrep'
-  | 'timerReset';
+  | 'timerReset'
+  // Dynamic speech (dynamic-speech/session.ts). The in-speech keys
+  // themselves are bound only while a session runs (editor-plugin.ts).
+  | 'armDynamicSpeech'
+  | 'endDynamicSpeech'
+  | 'speechTimeMark'
+  | 'speechSkipOrClip'
+  | 'speechUndoMark'
+  | 'openSpeechHistory';
 
 export const STRUCTURAL_RIBBON_COMMAND_IDS: StructuralRibbonCommandId[] = [
   'setPocket',
@@ -5072,6 +5088,12 @@ export const RIBBON_COMMAND_IDS: RibbonCommandId[] = [
   'timerStartAffPrep',
   'timerStartNegPrep',
   'timerReset',
+  'armDynamicSpeech',
+  'endDynamicSpeech',
+  'speechTimeMark',
+  'speechSkipOrClip',
+  'speechUndoMark',
+  'openSpeechHistory',
 ];
 
 export const RIBBON_COMMAND_LABELS: Record<RibbonCommandId, string> = {
@@ -5286,6 +5308,12 @@ export const RIBBON_COMMAND_LABELS: Record<RibbonCommandId, string> = {
   timerStartAffPrep: 'Timer: Start Aff Prep',
   timerStartNegPrep: 'Timer: Start Neg Prep',
   timerReset: 'Timer: Reset',
+  armDynamicSpeech: 'Dynamic Speech: Start',
+  endDynamicSpeech: 'Dynamic Speech: End',
+  speechTimeMark: 'Dynamic Speech: Done With Card',
+  speechSkipOrClip: 'Dynamic Speech: Skip / Clip Card',
+  speechUndoMark: 'Dynamic Speech: Undo Last Mark',
+  openSpeechHistory: 'Speech History',
 };
 
 /**
@@ -5429,6 +5457,12 @@ export const RIBBON_COMMAND_ALIASES: Partial<Record<RibbonCommandId, readonly st
   timerStartAffPrep: ['aff prep', 'affirmative prep', 'prep timer'],
   timerStartNegPrep: ['neg prep', 'negative prep', 'prep timer'],
   timerReset: ['reset timer', 'reset prep'],
+  armDynamicSpeech: ['live wpm', 'speech pace', 'arm speech', 'dynamic speech timer'],
+  endDynamicSpeech: ['stop dynamic speech', 'disarm speech'],
+  speechTimeMark: ['time mark', 'speech marker', 'log position'],
+  speechSkipOrClip: ['skip card', 'clip card', 'skip rest'],
+  speechUndoMark: ['undo time mark', 'undo skip'],
+  openSpeechHistory: ['past speeches', 'average wpm', 'speaking speed history'],
   flipQuoteDirection: ['flip quotes', 'curly quotes', 'reverse quote direction', 'smart quote direction', 'fix apostrophe', 'quote direction'],
   deleteCurrentHeading: ['delete card', 'delete heading', 'delete current card'], // "remove …" via the delete/remove synonym group
   nextPocket: ['jump to next pocket', 'next heading', 'navigate'],
@@ -5746,6 +5780,12 @@ export const DEFAULT_RIBBON_KEYS: Record<RibbonCommandId, string | string[]> = {
   timerStartAffPrep: '',
   timerStartNegPrep: '',
   timerReset: '',
+  armDynamicSpeech: '',
+  endDynamicSpeech: '',
+  speechTimeMark: '',
+  speechSkipOrClip: '',
+  speechUndoMark: '',
+  openSpeechHistory: '',
 };
 
 /**
@@ -7061,6 +7101,28 @@ function commandFor(id: RibbonCommandId, ctx: RibbonContext): Command {
       });
     case 'timerReset':
       return timerCommand(() => resetTimer());
+    case 'armDynamicSpeech':
+      return (_state, dispatch) => {
+        if (!dispatch) return true;
+        return armDynamicSpeech();
+      };
+    case 'endDynamicSpeech':
+      return (_state, dispatch) => {
+        if (!isSpeechArmed()) return false;
+        if (dispatch) endDynamicSpeech();
+        return true;
+      };
+    case 'speechTimeMark':
+      return (_state, dispatch) => (dispatch ? speechTimeMark() : isSpeechArmed());
+    case 'speechSkipOrClip':
+      return (_state, dispatch) => (dispatch ? speechSkipOrClip() : isSpeechArmed());
+    case 'speechUndoMark':
+      return (_state, dispatch) => (dispatch ? speechUndo() : isSpeechArmed());
+    case 'openSpeechHistory':
+      return (_state, dispatch) => {
+        if (dispatch) void import('./dynamic-speech/history-ui.js').then((m) => m.openSpeechHistory());
+        return true;
+      };
     case 'flipQuoteDirection':
       return flipQuoteDirection;
     case 'toggleParagraphIntegrity':

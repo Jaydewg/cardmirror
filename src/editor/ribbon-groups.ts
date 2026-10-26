@@ -212,6 +212,17 @@ export const RIBBON_GROUPS: RibbonGroup[] = [
     ],
   },
   {
+    title: 'Dynamic speech',
+    commands: [
+      'armDynamicSpeech',
+      'endDynamicSpeech',
+      'speechTimeMark',
+      'speechSkipOrClip',
+      'speechUndoMark',
+      'openSpeechHistory',
+    ],
+  },
+  {
     title: 'Zoom & scale',
     commands: [
       'zoomIn',

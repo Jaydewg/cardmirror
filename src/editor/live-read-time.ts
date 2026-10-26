@@ -47,7 +47,7 @@
 
 import type { EditorState } from 'prosemirror-state';
 import type { Node as PMNode } from 'prosemirror-model';
-import { settings } from './settings.js';
+import { settings, type ReaderConfig } from './settings.js';
 import {
   countReadAloudSplit,
   totalWords,
@@ -132,6 +132,22 @@ export {
   type WordCountSegmentId,
 } from './word-count-order.js';
 
+/** Dynamic speech's "Live" reader for a doc whose session is armed
+ *  (installed by the editor so this module needn't import the session). */
+let liveReaderFor: (state: EditorState) => ReaderConfig | null = () => null;
+
+export function setLiveReaderProvider(fn: (state: EditorState) => ReaderConfig | null): void {
+  liveReaderFor = fn;
+}
+
+/** The readers a segment shows: the first two configured, behind the
+ *  Live reader while one applies. */
+function segmentReaders(state: EditorState | undefined): ReaderConfig[] {
+  const readers = settings.get('readers').slice(0, 2);
+  const live = state ? liveReaderFor(state) : null;
+  return live ? [live, ...readers] : readers;
+}
+
 /** The bar's FIRST segment: the whole document — or, with
  *  `liveSelectionWordCount` on and a range selected, the selection.
  *  Null when the whole-doc readout is turned off (`liveDocWordCount`)
@@ -142,7 +158,7 @@ export {
  *  pre-feature bare number. */
 export function primaryReadSegment(
   counts: ReadAloudCounts,
-  opts: { selection: boolean; selectionLabel: 'Selection' | 'Sel' },
+  opts: { selection: boolean; selectionLabel: 'Selection' | 'Sel'; state?: EditorState },
 ): string | null {
   if (!opts.selection && !settings.get('liveDocWordCount')) return null;
   const words = formatNumber(totalWords(counts));
@@ -152,7 +168,7 @@ export function primaryReadSegment(
       ? `Doc: ${words}`
       : words;
   const parts = [head];
-  for (const r of settings.get('readers').slice(0, 2)) {
+  for (const r of segmentReaders(opts.state)) {
     parts.push(`${r.name}: ${formatReadTimeFor(counts, r)}`);
   }
   return parts.join(' · ');
@@ -175,14 +191,14 @@ export function liveContainerSegment(state: EditorState): string | null {
     label = container.label;
     counts = countCached(state.doc, container.from, container.to);
   }
-  return formatSegment(label, counts);
+  return formatSegment(label, counts, state);
 }
 
 /** One segment's text: the labelled word count plus the first two
  *  readers' times, exactly as the primary readout formats its own. */
-function formatSegment(label: string, counts: ReadAloudCounts): string {
+function formatSegment(label: string, counts: ReadAloudCounts, state?: EditorState): string {
   const parts = [`${label}: ${formatNumber(totalWords(counts))}`];
-  for (const r of settings.get('readers').slice(0, 2)) {
+  for (const r of segmentReaders(state)) {
     parts.push(`${r.name}: ${formatReadTimeFor(counts, r)}`);
   }
   return parts.join(' · ');
@@ -235,9 +251,22 @@ function suffixTable(doc: PMNode): SuffixTable {
   return table;
 }
 
+/** Read-aloud counts of the whole doc, off the suffix table (built now
+ *  if this doc hasn't been seen — dynamic speech warms it on arm). */
+export function countWholeDocCached(doc: PMNode): ReadAloudCounts {
+  return { ...suffixTable(doc).suffix[0]! };
+}
+
+/** Read-aloud counts before `pos`: the whole doc minus what's left. */
+export function countBefore(doc: PMNode, pos: number): ReadAloudCounts {
+  const all = suffixTable(doc).suffix[0]!;
+  const rest = countRemaining(doc, pos);
+  return { body: all.body - rest.body, other: all.other - rest.other };
+}
+
 /** Read-aloud counts from `pos` to the end of the doc. O(depth) plus
  *  one count of the single top-level child holding `pos`. */
-function countRemaining(doc: PMNode, pos: number): ReadAloudCounts {
+export function countRemaining(doc: PMNode, pos: number): ReadAloudCounts {
   const table = suffixTable(doc);
   const n = doc.childCount;
   // `index(0)` is the number of top-level children entirely before
@@ -267,5 +296,5 @@ export function remainingReadSegment(state: EditorState): string | null {
   // the furthest point the user has accounted for, so a selection reads
   // as "I've gone through this much" and what's left starts after it.
   // With a bare cursor the two coincide.
-  return formatSegment('Left', countRemaining(state.doc, state.selection.to));
+  return formatSegment('Left', countRemaining(state.doc, state.selection.to), state);
 }

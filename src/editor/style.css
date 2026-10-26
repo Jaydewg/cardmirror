@@ -16558,3 +16558,59 @@ body.pmd-multi-doc #collab-chip {
   pointer-events: none;
   z-index: 4;
 }
+
+/* ---- Dynamic speech (dynamic-speech/) ----
+ * Ticks at time marks, dimming over skipped / clipped text, and the
+ * status readouts (word count, pane footers, timer panel). Nothing here
+ * applies until a session is armed. */
+.pmd-ds-tick {
+  display: inline-block;
+  width: 2px;
+  height: 0.9em;
+  margin: 0 1px;
+  vertical-align: -0.1em;
+  border-radius: 1px;
+  background: var(--pmd-c-accent);
+  pointer-events: none;
+}
+.pmd-ds-tick-clip {
+  background: var(--pmd-c-warning);
+}
+.pmd-ds-excluded {
+  opacity: 0.35;
+}
+.pmd-ds-status {
+  flex: 0 0 auto;
+  margin-left: 0.6em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.pmd-ds-status[hidden] { display: none; }
+.pmd-ds-ahead { color: var(--pmd-c-success); }
+.pmd-ds-tight { color: var(--pmd-c-warning); }
+.pmd-ds-over { color: var(--pmd-c-error); }
+/* Timer panel: its own column, spanning both rows; auto-placed after
+   whichever columns the expanded / compact layout fills. */
+.pmd-timer-speech {
+  grid-row: 1 / span 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 0.3rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--pmd-c-text-secondary);
+}
+.pmd-timer-speech[hidden] { display: none; }
+.pmd-timer-speech.pmd-ds-ahead { color: var(--pmd-c-success); }
+.pmd-timer-speech.pmd-ds-tight { color: var(--pmd-c-warning); }
+.pmd-timer-speech.pmd-ds-over { color: var(--pmd-c-error); }
+/* The countdown box takes a strong tint of the status, readable at a
+   glance mid-speech. The ran-out red and the alert flash still win. */
+.pmd-timer-display.pmd-ds-ahead { color: var(--pmd-c-text); background: color-mix(in srgb, var(--pmd-c-success) 40%, var(--pmd-c-bg)); }
+.pmd-timer-display.pmd-ds-tight { color: var(--pmd-c-text); background: color-mix(in srgb, var(--pmd-c-warning) 40%, var(--pmd-c-bg)); }
+.pmd-timer-display.pmd-ds-over { color: var(--pmd-c-text); background: color-mix(in srgb, var(--pmd-c-error) 40%, var(--pmd-c-bg)); }

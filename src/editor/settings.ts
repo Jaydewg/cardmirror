@@ -87,6 +87,11 @@ export interface ReaderConfig {
   tagWpm?: number;
 }
 
+export type DynamicSpeechAction = 'timeMark' | 'skipClip' | 'undo';
+export type DynamicSpeechKeys = Record<DynamicSpeechAction, string>;
+export const DYNAMIC_SPEECH_ITEMS = ['wpm', 'measured', 'finish', 'live'] as const;
+export type DynamicSpeechItem = (typeof DYNAMIC_SPEECH_ITEMS)[number];
+
 /** A paired machine you can send cards to. `code` is that machine's
  *  shareable pairing code (its relay address); `name` is your local
  *  nickname for it, used to disambiguate in the send picker and to label
@@ -783,6 +788,28 @@ export interface Settings {
   /** Per-side prep total in minutes. Reset refills both prep
    *  clocks to this value. */
   timerPrepMinutes: number;
+  /** Dynamic speech (dynamic-speech/): starting the speech clock arms
+   *  a session against the focused doc. */
+  dynamicSpeechAutoArm: boolean;
+  /** Arming turns Read Mode on. */
+  dynamicSpeechEnterReadMode: boolean;
+  /** The in-speech keys (`dynamicSpeechKeys`) are live while armed. */
+  dynamicSpeechKeysEnabled: boolean;
+  /** The time-mark key also drops a red reading marker. */
+  dynamicSpeechSpaceAlsoMarks: boolean;
+  /** Ignore an in-speech key while the cursor is scrolled out of view. */
+  dynamicSpeechRequireCursorVisible: boolean;
+  /** A repeat press of the same in-speech key within this is ignored. */
+  dynamicSpeechDebounceMs: number;
+  /** Keys bound only while a session is armed. */
+  dynamicSpeechKeys: DynamicSpeechKeys;
+  /** What the timer panel shows during a session. */
+  dynamicSpeechTimerItems: DynamicSpeechItem[];
+  /** What the word-count bar shows during a session. */
+  dynamicSpeechWordCountItems: DynamicSpeechItem[];
+  /** Outside a session, the read times add a "Dynamic" reader at the
+   *  rate your recent speeches predict. */
+  dynamicSpeechIdleReadTimes: boolean;
   /** When the speech timer's remaining time crosses one of the
    *  configured `timerFlashSeconds`, the display flashes red.
    *  Off → no flashing regardless of remaining. */
@@ -1884,6 +1911,16 @@ const DEFAULTS: Settings = {
   timerSpeechPresets: [3, 6, 9, 12],
   timerShowFourthPreset: false,
   timerPrepMinutes: 10,
+  dynamicSpeechAutoArm: true,
+  dynamicSpeechEnterReadMode: true,
+  dynamicSpeechKeysEnabled: true,
+  dynamicSpeechSpaceAlsoMarks: false,
+  dynamicSpeechRequireCursorVisible: true,
+  dynamicSpeechDebounceMs: 1000,
+  dynamicSpeechKeys: { timeMark: 'Space', skipClip: 'Shift-Space', undo: 'Backspace' },
+  dynamicSpeechTimerItems: ['wpm', 'measured', 'finish'],
+  dynamicSpeechWordCountItems: ['wpm', 'measured', 'finish', 'live'],
+  dynamicSpeechIdleReadTimes: false,
   timerFlashEnabled: true,
   timerFlashSeconds: [5, 3, 1],
   timerSoundEnabled: false,
@@ -2258,6 +2295,7 @@ export interface SettingMeta {
     | 'timerFlashSeconds'
     | 'timerPrepLabel'
     | 'timerPosition'
+    | 'speechItems'
     | 'enterAfterStyle'
     | 'wordCountOrder'
     | 'arrangeSpeechSide'
@@ -2669,6 +2707,86 @@ export const SETTING_METADATA: SettingMeta[] = [
     category: 'general',
     section: 'Timer',
     aliases: ['fourth preset', 'four presets', 'preset 4'],
+  },
+  {
+    key: 'dynamicSpeechAutoArm',
+    label: 'Start a dynamic speech with the speech timer',
+    description:
+      'Starting the speech clock arms a dynamic speech on the focused document: press Space as you read to log your pace, and the timer and word count show your live speed and whether you will finish in time. Ends (and is saved to Speech History) when you reset the timer or load a preset.',
+    kind: 'toggle',
+    category: 'general',
+    section: 'Dynamic speech',
+    aliases: ['dynamic speech', 'live wpm', 'speech pace', 'finish in time'],
+  },
+  {
+    key: 'dynamicSpeechEnterReadMode',
+    label: 'Turn on Read Mode when a dynamic speech starts',
+    kind: 'toggle',
+    category: 'general',
+    section: 'Dynamic speech',
+  },
+  {
+    key: 'dynamicSpeechKeysEnabled',
+    label: 'In-speech keys',
+    description:
+      'While a dynamic speech runs: Space means "done with this card" (it logs the time and moves the cursor to the next card), Shift+Space skips the card (on a tag) or clips the rest of it (in the body) and moves on, and Backspace undoes the last one and moves the cursor back. Click anywhere to put the cursor somewhere else. Change the keys in Keyboard shortcuts.',
+    kind: 'toggle',
+    category: 'general',
+    section: 'Dynamic speech',
+    aliases: ['skip card', 'clip card', 'time marker'],
+  },
+  {
+    key: 'dynamicSpeechSpaceAlsoMarks',
+    label: 'Space also drops a reading marker',
+    description: 'Each Space also leaves a red "Marked h:mm" reading marker at the end of the card you just finished. Off by default.',
+    kind: 'toggle',
+    category: 'general',
+    section: 'Dynamic speech',
+    dependsOn: 'dynamicSpeechKeysEnabled',
+  },
+  {
+    key: 'dynamicSpeechRequireCursorVisible',
+    label: 'Ignore in-speech keys while the cursor is off-screen',
+    description: 'Keeps a stray press from logging a position you have scrolled away from.',
+    kind: 'toggle',
+    category: 'general',
+    section: 'Dynamic speech',
+    dependsOn: 'dynamicSpeechKeysEnabled',
+  },
+  {
+    key: 'dynamicSpeechDebounceMs',
+    label: 'Ignore repeat presses within (ms)',
+    description: 'A second press of the same in-speech key this soon after the first does nothing. Default 1000.',
+    kind: 'number',
+    category: 'general',
+    section: 'Dynamic speech',
+    dependsOn: 'dynamicSpeechKeysEnabled',
+  },
+  {
+    key: 'dynamicSpeechTimerItems',
+    label: 'Show in the timer',
+    kind: 'speechItems',
+    category: 'general',
+    section: 'Dynamic speech',
+  },
+  {
+    key: 'dynamicSpeechWordCountItems',
+    label: 'Show in the word count',
+    description:
+      'Live WPM blends this speech\'s measured rate with your recent speeches and Reader 1\'s WPM (hover the readout for the breakdown). Live read times add a "Live" reader to the word count\'s times.',
+    kind: 'speechItems',
+    category: 'general',
+    section: 'Dynamic speech',
+  },
+  {
+    key: 'dynamicSpeechIdleReadTimes',
+    label: 'Read times from your speech history',
+    description:
+      'Outside a dynamic speech, the word count adds a "Dynamic" reader timed at the rate your saved speeches predict (the last 3 hours; if you haven\'t spoken in 8 hours, around this time yesterday; otherwise the morning of your last day with speeches), blended with Reader 1\'s WPM. Off by default.',
+    kind: 'toggle',
+    category: 'general',
+    section: 'Dynamic speech',
+    aliases: ['dynamic read time', 'history wpm', 'predicted read time'],
   },
   {
     key: 'showOnboardingStarter',
@@ -4800,6 +4918,21 @@ function sanitizeCustomAutocorrects(raw: unknown): Array<{ from: string; to: str
   return out;
 }
 
+function sanitizeDynamicSpeechKeys(raw: unknown): DynamicSpeechKeys {
+  const out = { ...DEFAULTS.dynamicSpeechKeys };
+  if (!raw || typeof raw !== 'object') return out;
+  for (const k of Object.keys(out) as DynamicSpeechAction[]) {
+    const v = (raw as Record<string, unknown>)[k];
+    if (typeof v === 'string') out[k] = v.trim();
+  }
+  return out;
+}
+
+function sanitizeSpeechItems(raw: unknown, fallback: DynamicSpeechItem[]): DynamicSpeechItem[] {
+  if (!Array.isArray(raw)) return [...fallback];
+  return DYNAMIC_SPEECH_ITEMS.filter((i) => raw.includes(i));
+}
+
 function sanitizeNumberingExport(v: unknown): NumberingExport {
   return v === 'remove' ? 'remove' : 'freeze';
 }
@@ -4956,6 +5089,19 @@ function sanitize(s: Settings): Settings {
         ? s.timerPrepLabel
         : 'both',
     timerPosition: s.timerPosition === 'right' ? 'right' : 'left',
+    dynamicSpeechAutoArm: s.dynamicSpeechAutoArm !== false,
+    dynamicSpeechEnterReadMode: s.dynamicSpeechEnterReadMode !== false,
+    dynamicSpeechKeysEnabled: s.dynamicSpeechKeysEnabled !== false,
+    dynamicSpeechSpaceAlsoMarks: s.dynamicSpeechSpaceAlsoMarks === true,
+    dynamicSpeechRequireCursorVisible: s.dynamicSpeechRequireCursorVisible !== false,
+    dynamicSpeechDebounceMs:
+      typeof s.dynamicSpeechDebounceMs === 'number' && s.dynamicSpeechDebounceMs >= 0 && s.dynamicSpeechDebounceMs <= 10_000
+        ? Math.floor(s.dynamicSpeechDebounceMs)
+        : DEFAULTS.dynamicSpeechDebounceMs,
+    dynamicSpeechKeys: sanitizeDynamicSpeechKeys(s.dynamicSpeechKeys),
+    dynamicSpeechTimerItems: sanitizeSpeechItems(s.dynamicSpeechTimerItems, DEFAULTS.dynamicSpeechTimerItems),
+    dynamicSpeechWordCountItems: sanitizeSpeechItems(s.dynamicSpeechWordCountItems, DEFAULTS.dynamicSpeechWordCountItems),
+    dynamicSpeechIdleReadTimes: s.dynamicSpeechIdleReadTimes === true,
     jumpToDocTopOnReadModeToggle: !!s.jumpToDocTopOnReadModeToggle,
     findResultsExpanded: !!s.findResultsExpanded,
     findRememberLastQuery:

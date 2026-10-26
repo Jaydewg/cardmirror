@@ -50,6 +50,7 @@ import {
   type StyleAlignments,
   type StyleAlignment,
   applyNumberingSeparator,
+  type DynamicSpeechItem,
 } from './settings.js';
 import { CATEGORY_TABS, visibleCategoryTabs, type SettingsTarget } from './settings-categories.js';
 import { compileSettingsQuery } from './settings-search.js';
@@ -1164,6 +1165,10 @@ class SettingsModal {
     } else if (meta.kind === 'timerPosition') {
       row.appendChild(text);
       row.appendChild(buildTimerPositionEditor());
+      return row;
+    } else if (meta.kind === 'speechItems') {
+      row.appendChild(text);
+      row.appendChild(buildSpeechItemsEditor(meta.key as 'dynamicSpeechTimerItems' | 'dynamicSpeechWordCountItems'));
       return row;
     } else if (meta.kind === 'enterAfterStyle') {
       row.appendChild(text);
@@ -5217,6 +5222,40 @@ function buildTimerPositionEditor(): HTMLElement {
     const cur = settings.get('timerPosition');
     for (const btn of wrap.querySelectorAll<HTMLButtonElement>('.pmd-theme-editor-btn')) {
       btn.setAttribute('aria-pressed', btn.dataset['value'] === cur ? 'true' : 'false');
+    }
+  }
+  refresh();
+  const unsub = settings.subscribe(refresh);
+  registerRowCleanup(wrap, () => unsub());
+  return wrap;
+}
+
+/** Multi-select buttons for what a dynamic-speech readout shows. */
+function buildSpeechItemsEditor(key: 'dynamicSpeechTimerItems' | 'dynamicSpeechWordCountItems'): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'pmd-theme-editor';
+  const options: { value: DynamicSpeechItem; label: string }[] = [
+    { value: 'wpm', label: 'Live WPM' },
+    { value: 'measured', label: 'Measured WPM' },
+    { value: 'finish', label: 'Finish in time' },
+    { value: 'live', label: key === 'dynamicSpeechTimerItems' ? 'Time left to read' : 'Live read times' },
+  ];
+  for (const o of options) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pmd-theme-editor-btn';
+    btn.textContent = o.label;
+    btn.dataset['value'] = o.value;
+    btn.addEventListener('click', () => {
+      const cur = settings.get(key);
+      settings.set(key, cur.includes(o.value) ? cur.filter((v) => v !== o.value) : [...cur, o.value]);
+    });
+    wrap.appendChild(btn);
+  }
+  function refresh(): void {
+    const cur = settings.get(key);
+    for (const btn of wrap.querySelectorAll<HTMLButtonElement>('.pmd-theme-editor-btn')) {
+      btn.setAttribute('aria-pressed', cur.includes(btn.dataset['value'] as DynamicSpeechItem) ? 'true' : 'false');
     }
   }
   refresh();

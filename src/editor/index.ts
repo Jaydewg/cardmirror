@@ -27,6 +27,10 @@ import type { LocalComment } from './learn-store.js';
 import { NavigationPanel } from './nav-panel.js';
 import { initUpdateChip } from './update-chip.js';
 import { mountTimerUI } from './timer-ui.js';
+import { dynamicSpeechPlugin } from './dynamic-speech/editor-plugin.js';
+import { configureDynamicSpeech, installDynamicSpeech, subscribeSession } from './dynamic-speech/session.js';
+import { subscribeSpeechSessions } from './dynamic-speech/history-store.js';
+import { liveReaderFor, paintSpeechStatus, wordCountItems } from './dynamic-speech/display.js';
 import { initTimerAudio } from './timer-audio.js';
 import {
   getTimerState as getTimerStateNow,
@@ -371,7 +375,7 @@ import {
   formatNumber,
   type ReadAloudCounts,
 } from './word-count.js';
-import { liveContainerSegment, orderWordCountSegments, primaryReadSegment, remainingReadSegment } from './live-read-time.js';
+import { liveContainerSegment, orderWordCountSegments, primaryReadSegment, remainingReadSegment, setLiveReaderProvider } from './live-read-time.js';
 import { getHost, getElectronHost, isWindowsHost, isSameOpenHandle, type OpenedFile, type JournalEntry } from './host/index.js';
 import {
   installGlobalErrorSurface,
@@ -4387,6 +4391,30 @@ applyPillVisibility(); // default-off dropzone pill + quick-card cluster, at boo
 // stays hidden in the DOM until the user toggles ⏱ in the
 // ribbon.
 mountTimerUI();
+setLiveReaderProvider(liveReaderFor);
+configureDynamicSpeech({
+  activeView: () => view,
+  enterReadMode: (v) => {
+    if (!readModePlugin.getState(v.state)?.on) runRibbon('toggleReadMode');
+  },
+  docName: () => activeFile().filename,
+});
+installDynamicSpeech();
+{
+  const speechStatusEl = document.getElementById('speech-status');
+  let liveWpm: number | null = null;
+  subscribeSession((s) => {
+    if (speechStatusEl) paintSpeechStatus(speechStatusEl, s, multiDocActive ? [] : wordCountItems());
+    // The Live reader in the bar follows the rate, not the clock.
+    const next = s.active && s.wpm !== null ? Math.round(s.wpm) : null;
+    if (next !== liveWpm) {
+      liveWpm = next;
+      refreshWordCount({ selectionOnly: true });
+    }
+  });
+  // The idle "Dynamic" reader follows saved speeches.
+  subscribeSpeechSessions(() => refreshWordCount({ selectionOnly: true }));
+}
 // Audible timer alerts — this window competes for the shared audio-
 // owner lock (the pop-out wins while it exists). No-op while the
 // setting is off.
@@ -5259,6 +5287,7 @@ function refreshWordCount(opts?: { selectionOnly?: boolean }): void {
     primary = primaryReadSegment(countReadAloudSplit(view.state.doc, sel.from, sel.to), {
       selection: true,
       selectionLabel: 'Selection',
+      state: view.state,
     });
   } else if (settings.get('liveDocWordCount')) {
     let counts: ReadAloudCounts;
@@ -5271,7 +5300,7 @@ function refreshWordCount(opts?: { selectionOnly?: boolean }): void {
       counts = countReadAloudSplit(view.state.doc);
       lastWholeDocWords = counts;
     }
-    primary = primaryReadSegment(counts, { selection: false, selectionLabel: 'Selection' });
+    primary = primaryReadSegment(counts, { selection: false, selectionLabel: 'Selection', state: view.state });
   } else {
     // Whole-doc readout off and nothing selected: no O(doc) walk at all —
     // the bar belongs to whichever of the other segments are on. Drop the
@@ -5722,6 +5751,10 @@ export function buildEditorPlugins(targetUid?: string | null): Plugin[] {
     // mobile shell; a no-op everywhere else (the active flag is set
     // once at boot, before any view mounts).
     mobilePlugin,
+    // Dynamic speech's in-speech keys (Space / Shift+Space / Backspace
+    // while a session runs) — ahead of read mode's Space-drops-a-marker
+    // and of Repeat's recorder. Inert with no session armed.
+    dynamicSpeechPlugin,
     // Word-style Repeat's recorder — ahead of every keymap and the paste
     // plugin so its hooks see typing, Backspace/Delete and paste first
     // (they record and return false). Inert unless `repeatWithModY`.

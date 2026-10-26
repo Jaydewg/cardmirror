@@ -76,6 +76,9 @@ import {
   type ReadAloudCounts,
 } from './word-count.js';
 import { liveContainerSegment, orderWordCountSegments, primaryReadSegment, remainingReadSegment } from './live-read-time.js';
+import { isSpeechArmed, subscribeSession, type SpeechSummary } from './dynamic-speech/session.js';
+import { subscribeSpeechSessions } from './dynamic-speech/history-store.js';
+import { paintSpeechStatus, wordCountItems } from './dynamic-speech/display.js';
 import { openWordCount } from './word-count-ui.js';
 import { isAutosaveOnForPath, setAutosaveForPath } from './autosave-prefs-store.js';
 import {
@@ -698,6 +701,9 @@ class Slot {
   private bodyEl: HTMLElement;
   /** Footer word count. */
   private wcEl: HTMLElement;
+  /** Footer dynamic-speech readout; shown only while this slot's
+   *  visible doc is the armed one. */
+  private speechEl: HTMLElement;
   /** Footer co-editing indicator — status text + presence dots for THIS slot's
    *  visible doc's session. Hidden when that doc has no live session. */
   private copresenceEl: HTMLElement;
@@ -860,6 +866,10 @@ class Slot {
     this.wcEl.className = 'pmd-pane-wc';
     this.wcEl.textContent = '—';
     footer.appendChild(this.wcEl);
+    this.speechEl = document.createElement('span');
+    this.speechEl.className = 'pmd-ds-status';
+    this.speechEl.hidden = true;
+    footer.appendChild(this.speechEl);
     // Per-slot co-editing indicator (this doc's session status + who's here).
     // Empty/hidden until the slot's visible doc joins a session.
     this.copresenceEl = document.createElement('span');
@@ -1357,6 +1367,21 @@ class Slot {
    *  suffices; the doc reference distinguishes stacked docs too). */
   private wcDocCache: { doc: PMNode; counts: ReadAloudCounts } | null = null;
 
+  /** Repaint the dynamic-speech readout; a change in the rate also
+   *  refreshes the word count's Live reader. */
+  paintSpeech(s: SpeechSummary): void {
+    const rec = this.visible;
+    const armed = !!rec && isSpeechArmed(rec.view);
+    paintSpeechStatus(this.speechEl, armed ? s : { ...s, active: false }, wordCountItems());
+    const live = armed && s.wpm !== null ? Math.round(s.wpm) : null;
+    if (live !== this.speechLiveWpm) {
+      this.speechLiveWpm = live;
+      this.refreshWordCount();
+    }
+  }
+
+  private speechLiveWpm: number | null = null;
+
   /** Recompute and display the visible doc's word count + read times
    *  for the first two configured readers. */
   refreshWordCount(): void {
@@ -1376,6 +1401,7 @@ class Slot {
       primary = primaryReadSegment(countReadAloudSplit(rec.view.state.doc, sel.from, sel.to), {
         selection: true,
         selectionLabel: 'Sel',
+        state: rec.view.state,
       });
     } else if (settings.get('liveDocWordCount')) {
       let counts: ReadAloudCounts;
@@ -1385,7 +1411,7 @@ class Slot {
         counts = countReadAloudSplit(rec.view.state.doc);
         this.wcDocCache = { doc: rec.view.state.doc, counts };
       }
-      primary = primaryReadSegment(counts, { selection: false, selectionLabel: 'Sel' });
+      primary = primaryReadSegment(counts, { selection: false, selectionLabel: 'Sel', state: rec.view.state });
     }
     // Whole-doc readout off and nothing selected: no doc walk, the
     // footer belongs to the other segments (mirroring single-pane).
@@ -1583,6 +1609,7 @@ class MultiPaneShell {
    *  button again to restore the normal multi-pane layout. */
   private expandedSlot: Slot | null = null;
   private unsubscribeSettings: (() => void) | null = null;
+  private unsubscribeSpeech: (() => void) | null = null;
   /** Doc-switcher overlay — the Alt+Tab-style list that opens
    *  when the user presses Ctrl+Tab while the focused slot has
    *  2+ docs. Created in the constructor. */
@@ -1657,6 +1684,12 @@ class MultiPaneShell {
       for (const id of SLOT_IDS) this.slots[id].navHidden = true;
     }
 
+    this.unsubscribeSpeech = subscribeSession((s) => {
+      for (const id of SLOT_IDS) this.slots[id].paintSpeech(s);
+    });
+    subscribeSpeechSessions(() => {
+      for (const id of SLOT_IDS) this.slots[id].refreshWordCount();
+    });
     this.unsubscribeSettings = settings.subscribe((s) => {
       if (s.multiDocLayoutMode !== this.layoutMode) {
         this.layoutMode = s.multiDocLayoutMode;

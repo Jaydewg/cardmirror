@@ -39,7 +39,7 @@ import {
 import { pluginCommandIds } from './plugin-registry.js';
 import { RIBBON_GROUPS } from './ribbon-groups.js';
 import { isRibbonCommandAvailable } from './ribbon-availability.js';
-import { settings, type KeyboardMacro } from './settings.js';
+import { settings, type DynamicSpeechAction, type KeyboardMacro } from './settings.js';
 import { setIcon } from './icons';
 
 function getOverrides(): Partial<Record<string, string | string[]>> {
@@ -180,6 +180,12 @@ function validateKey(key: string, raw: KeyboardEvent): string | null {
   }
   return null;
 }
+
+const SPEECH_ACTIONS: { id: DynamicSpeechAction; label: string; defaultKey: string }[] = [
+  { id: 'timeMark', label: 'Done with this card (log the time, go to the next)', defaultKey: 'Space' },
+  { id: 'skipClip', label: 'Skip card (on a tag) / clip the rest (in the body), then go on', defaultKey: 'Shift-Space' },
+  { id: 'undo', label: 'Undo the last one and go back', defaultKey: 'Backspace' },
+];
 
 export function buildKeybindingsEditor(): HTMLElement {
   const wrap = document.createElement('div');
@@ -496,6 +502,126 @@ export function buildKeybindingsEditor(): HTMLElement {
     return row;
   }
 
+  // The in-speech keys: bound only while a dynamic speech runs, so bare
+  // keys (Space, Backspace, letters) are fair game here.
+  function startSpeechKeyCapture(action: DynamicSpeechAction, row: HTMLElement): void {
+    if (activeCapture) exitCapture();
+    const addBtn = row.querySelector<HTMLButtonElement>('.pmd-keybinding-add');
+    const capturePill = row.querySelector<HTMLElement>('.pmd-keybinding-capture');
+    if (!addBtn || !capturePill) return;
+    addBtn.style.display = 'none';
+    capturePill.style.display = '';
+    capturePill.textContent = 'Press a key… (Esc cancels)';
+    row.classList.add('pmd-keybinding-row-capturing');
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        exitCapture();
+        return;
+      }
+      if (e.key === 'Control' || e.key === 'Shift' || e.key === 'Alt' || e.key === 'Meta') return;
+      e.preventDefault();
+      e.stopPropagation();
+      const key = ribbonKeyStringFor(e);
+      const next = { ...settings.get('dynamicSpeechKeys') };
+      for (const a of SPEECH_ACTIONS) {
+        if (a.id !== action && foldKeyString(next[a.id]) === foldKeyString(key)) next[a.id] = '';
+      }
+      next[action] = key;
+      exitCapture();
+      settings.set('dynamicSpeechKeys', next);
+    };
+    document.addEventListener('keydown', onKey, true);
+    activeCapture = {
+      row,
+      cleanup: () => {
+        document.removeEventListener('keydown', onKey, true);
+        addBtn.style.display = '';
+        capturePill.style.display = 'none';
+        row.classList.remove('pmd-keybinding-row-capturing');
+      },
+    };
+  }
+
+  function renderSpeechKeysSection(): HTMLElement {
+    const section = document.createElement('section');
+    section.className = 'pmd-keybindings-macros';
+    section.dataset['anchor'] = 'dynamic-speech-keys';
+    const headBlock = document.createElement('div');
+    headBlock.className = 'pmd-settings-row-text';
+    const head = document.createElement('span');
+    head.className = 'pmd-settings-row-title';
+    head.textContent = 'During a dynamic speech';
+    headBlock.appendChild(head);
+    const desc = document.createElement('span');
+    desc.className = 'pmd-settings-row-desc';
+    desc.textContent =
+      'These keys act only while a dynamic speech is running, and take priority over everything else then (including Read Mode\u2019s Space).';
+    headBlock.appendChild(desc);
+    section.appendChild(headBlock);
+
+    const list = document.createElement('div');
+    list.className = 'pmd-keybindings-list pmd-macro-list';
+    const keys = settings.get('dynamicSpeechKeys');
+    for (const a of SPEECH_ACTIONS) {
+      const row = document.createElement('div');
+      row.className = 'pmd-keybinding-row';
+      const label = document.createElement('span');
+      label.className = 'pmd-keybinding-label';
+      label.textContent = a.label;
+      row.appendChild(label);
+      const chips = document.createElement('span');
+      chips.className = 'pmd-keybinding-chips';
+      const key = keys[a.id];
+      if (!key) {
+        const empty = document.createElement('span');
+        empty.className = 'pmd-keybinding-empty';
+        empty.textContent = '—';
+        chips.appendChild(empty);
+      } else {
+        const chip = document.createElement('span');
+        chip.className = 'pmd-keybinding-chip';
+        const txt = document.createElement('span');
+        txt.textContent = formatKeyForDisplay(key);
+        chip.appendChild(txt);
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'pmd-keybinding-chip-remove';
+        setIcon(remove, 'close');
+        remove.title = 'Remove this binding';
+        remove.addEventListener('click', () =>
+          settings.set('dynamicSpeechKeys', { ...settings.get('dynamicSpeechKeys'), [a.id]: '' }),
+        );
+        chip.appendChild(remove);
+        chips.appendChild(chip);
+      }
+      row.appendChild(chips);
+      const addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'pmd-keybinding-add';
+      addBtn.textContent = '+';
+      addBtn.title = 'Set the key';
+      addBtn.addEventListener('click', () => startSpeechKeyCapture(a.id, row));
+      row.appendChild(addBtn);
+      const capturePill = document.createElement('span');
+      capturePill.className = 'pmd-keybinding-capture';
+      capturePill.style.display = 'none';
+      row.appendChild(capturePill);
+      const resetBtn = document.createElement('button');
+      resetBtn.type = 'button';
+      resetBtn.className = 'pmd-keybinding-reset';
+      setIcon(resetBtn, 'reset');
+      resetBtn.title = 'Restore the default key';
+      resetBtn.addEventListener('click', () =>
+        settings.set('dynamicSpeechKeys', { ...settings.get('dynamicSpeechKeys'), [a.id]: a.defaultKey }),
+      );
+      row.appendChild(resetBtn);
+      list.appendChild(row);
+    }
+    section.appendChild(list);
+    return section;
+  }
+
   function renderMacrosSection(): HTMLElement {
     const section = document.createElement('section');
     section.className = 'pmd-keybindings-macros';
@@ -628,6 +754,8 @@ export function buildKeybindingsEditor(): HTMLElement {
     footer.appendChild(restoreAll);
     wrap.appendChild(footer);
 
+    wrap.appendChild(renderSpeechKeysSection());
+
     // Keyboard macros — their own section below all the shortcuts.
     wrap.appendChild(renderMacrosSection());
 
@@ -646,10 +774,16 @@ export function buildKeybindingsEditor(): HTMLElement {
   // capture all flow through settings.set, which fires this subscriber).
   let lastOverrides = getOverrides();
   let lastMacros = getMacros();
+  let lastSpeechKeys = settings.get('dynamicSpeechKeys');
   const unsubscribe = settings.subscribe((s) => {
-    if (s.ribbonKeyOverrides !== lastOverrides || s.keyboardMacros !== lastMacros) {
+    if (
+      s.ribbonKeyOverrides !== lastOverrides ||
+      s.keyboardMacros !== lastMacros ||
+      s.dynamicSpeechKeys !== lastSpeechKeys
+    ) {
       lastOverrides = s.ribbonKeyOverrides;
       lastMacros = s.keyboardMacros;
+      lastSpeechKeys = s.dynamicSpeechKeys;
       render();
     }
   });
