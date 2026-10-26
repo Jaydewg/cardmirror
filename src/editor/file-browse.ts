@@ -8,9 +8,12 @@
  * Two views over one directory:
  *   - empty query → the navigation view: this directory's immediate
  *     subfolders (A→Z), then its direct files ranked by the tiebreak;
- *   - a query → search-this-folder: subfolders whose NAME matches every
- *     token, then every file beneath the directory (any depth) ranked by
- *     the shared file matcher, each carrying the sub-path it lives in.
+ *   - a query → search-this-folder: folders at ANY depth beneath the
+ *     directory whose NAME matches every token (shallowest first, then
+ *     A→Z, each carrying the sub-path it lives in — 2026-10-24: they used
+ *     to be the immediate subfolders only), then every file beneath the
+ *     directory (any depth) ranked by the shared file matcher, each
+ *     carrying its sub-path.
  * Pinned files float above the rest in both views, as `f`-mode does.
  */
 
@@ -62,7 +65,7 @@ export function deriveBrowse(input: BrowseInput): FileBrowseResult {
   const tokens = tokenizeQuery(input.query);
   const pins = new Set(input.pins);
 
-  const folders = new Map<string, { name: string; relativeDirectory: string }>();
+  const folders = new Map<string, { name: string; relativeDirectory: string; subPath: string; depth: number }>();
   const candidates: Array<{ entry: FileEntry; subPath: string }> = [];
   let anyBelow = false;
   for (const entry of entries) {
@@ -73,9 +76,22 @@ export function deriveBrowse(input: BrowseInput): FileBrowseResult {
       candidates.push({ entry, subPath: '' });
       continue;
     }
-    const name = parts[0]!;
-    if (!folders.has(name)) {
-      folders.set(name, { name, relativeDirectory: relDir ? relDir + sep + name : name });
+    // Every directory on the file's path below relDir is a folder; the
+    // navigation view shows only the immediate ones, the search view any
+    // depth (keyed by its full relative directory, so two "Politics"
+    // folders under different parents are two rows).
+    const depthLimit = tokens.length > 0 ? parts.length - 1 : 1;
+    for (let d = 1; d <= depthLimit; d++) {
+      const below = parts.slice(0, d).join(sep);
+      const relativeDirectory = relDir ? relDir + sep + below : below;
+      if (!folders.has(relativeDirectory)) {
+        folders.set(relativeDirectory, {
+          name: parts[d - 1]!,
+          relativeDirectory,
+          subPath: parts.slice(0, d - 1).join(sep),
+          depth: d,
+        });
+      }
     }
     // Only the search view reaches past the immediate children.
     if (tokens.length > 0) candidates.push({ entry, subPath: parts.slice(0, -1).join(sep) });
@@ -86,8 +102,13 @@ export function deriveBrowse(input: BrowseInput): FileBrowseResult {
 
   const folderRows: FileBrowseRow[] = [...folders.values()]
     .filter((f) => tokens.length === 0 || matchesAllTokens(f.name.toLowerCase(), '', tokens))
-    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-    .map((f) => ({ kind: 'folder' as const, name: f.name, relativeDirectory: f.relativeDirectory }));
+    .sort(
+      (a, b) =>
+        a.depth - b.depth ||
+        a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) ||
+        a.relativeDirectory.localeCompare(b.relativeDirectory, undefined, { sensitivity: 'base' }),
+    )
+    .map((f) => ({ kind: 'folder' as const, name: f.name, relativeDirectory: f.relativeDirectory, subPath: f.subPath }));
 
   const subPathOf = new Map(candidates.map((c) => [c.entry.path, c.subPath]));
   const ranked = searchFiles(candidates.map((c) => c.entry), input.query, tiebreak, input.folderPriority);
@@ -125,4 +146,26 @@ export function locateInRoots(
   if (!best) return null;
   const at = best.rel.lastIndexOf(sep);
   return { root: best.root, relativeDirectory: at < 0 ? '' : best.rel.slice(0, at) };
+}
+
+/**
+ * The ROOTS-level search: `deriveBrowse` over every root with the root as
+ * the directory, rows tagged with their root, folders (all roots) before
+ * files (all roots), roots in the configured order. An empty query yields
+ * nothing — the palette lists the roots itself for the navigation view.
+ */
+export function deriveBrowseAcrossRoots(
+  roots: readonly string[],
+  entriesFor: (root: string) => readonly FileEntry[],
+  input: Omit<BrowseInput, 'entries' | 'relDir'>,
+): FileBrowseResult {
+  if (tokenizeQuery(input.query).length === 0) return { rows: [], total: 0, valid: true };
+  const folderRows: FileBrowseRow[] = [];
+  const fileRows: FileBrowseRow[] = [];
+  for (const root of roots) {
+    const r = deriveBrowse({ ...input, entries: entriesFor(root), relDir: '', limit: Number.MAX_SAFE_INTEGER });
+    for (const row of r.rows) (row.kind === 'folder' ? folderRows : fileRows).push({ ...row, root });
+  }
+  const rows = [...folderRows, ...fileRows];
+  return { rows: rows.slice(0, Math.max(0, input.limit)), total: rows.length, valid: true };
 }

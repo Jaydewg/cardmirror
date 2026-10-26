@@ -49,6 +49,8 @@ export const RIBBON_GROUPS: RibbonGroup[] = [
       'collabCopyInviteLink',
       'collabCopyCrossServerCode',
       'collabReviewJoinRequests',
+      'collabCopyViewCode',
+      'collabCopyViewLink',
       'collabInviteStarred',
       'collabEndSession',
       'recoverPreviousVersion',
@@ -119,6 +121,7 @@ export const RIBBON_GROUPS: RibbonGroup[] = [
       'smartShrink',
       'regrow',
       'copyPreviousCite',
+      'extractCard',
       'convertCardsToReadMode',
       'createReference',
       'extractUndertag',
@@ -150,6 +153,7 @@ export const RIBBON_GROUPS: RibbonGroup[] = [
       'highlightToShading',
       'shadingToHighlight',
       'lockHighlighting',
+      'standardizeLockedHighlights',
       'togglePaintbrushHighlight',
       'togglePaintbrushShading',
     ],
@@ -188,6 +192,41 @@ export const RIBBON_GROUPS: RibbonGroup[] = [
       'setNavDepth2',
       'setNavDepth3',
       'setNavDepth4',
+
+      'alphabetizeSelectedHeadings',
+
+
+      'aiCitePromptDefault',
+
+
+      'aiCitePromptPreset1',
+
+
+      'aiCitePromptPreset2',
+
+
+      'aiCitePromptPreset3',
+
+
+      'aiCitePromptPreset4',
+
+
+      'aiCitePromptPreset5',
+
+
+      'aiCitePromptPreset6',
+
+
+      'aiCitePromptPreset7',
+
+
+      'aiCitePromptPreset8',
+
+
+      'aiCitePromptPreset9',
+
+
+      'aiCitePromptPreset10',
       'toggleMorphMode',
       'wordCountSelection',
       'openSettings',

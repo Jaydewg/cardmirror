@@ -100,6 +100,15 @@ export function relayClientWithGuestPass(pass: string): RoomsClient | null {
   });
 }
 
+/** A rooms client authenticating with a SPECTATOR (view) pass. Every
+ *  spectator uses one — even a desktop install with its own credentials
+ *  — because the pass is what makes the relay refuse the session's
+ *  writes; own credentials would be a (silent) editor seat. Same
+ *  immutable, room-scoped shape as a guest pass. */
+export function relayClientWithViewPass(pass: string): RoomsClient | null {
+  return relayClientWithGuestPass(pass);
+}
+
 /** Resolve the CURRENT credential + its paired routing code. Called
  *  per request (see relayClient) — never snapshot the result into a
  *  long-lived closure: entitlements expire after ~72h and renew in the

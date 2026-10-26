@@ -238,7 +238,27 @@ async function fetchWithTimeout(
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
   try {
-    return await fetch(url, { ...init, signal: ctl.signal });
+    const res = await fetch(url, { ...init, signal: ctl.signal });
+    // Read the BODY under the same timer: `fetch` resolves on headers, and a
+    // connection that stalls mid-body would otherwise never time out — the
+    // spinner ran until TCP gave up and Repair kept its edit lease (audit
+    // item 22). Hand back a Response holding the buffered body so the
+    // callers' `res.json()` / `res.status` / headers work unchanged.
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (e) {
+      // Only a timeout is ours to report; any other body problem (already
+      // consumed, not readable) goes back to the caller's own handling.
+      if ((e as { name?: string } | null)?.name === 'AbortError') throw e;
+      return res;
+    }
+    const bodiless = res.status === 204 || res.status === 205 || res.status === 304;
+    return new Response(bodiless ? null : text, {
+      status: res.status,
+      statusText: res.statusText,
+      headers: res.headers,
+    });
   } catch (e) {
     // Shape-check rather than instanceof: DOMException doesn't inherit
     // Error in every runtime (same lesson as `isFileGoneError`).

@@ -30,6 +30,14 @@ export function autosaveDelayFor(format: AutosaveFormat): number {
   return format === 'docx' ? DOCX_AUTOSAVE_IDLE_MS : AUTOSAVE_DELAY_MS;
 }
 
+export const CMIR_AUTOSAVE_MAX_WAIT_MS = 30_000;
+/** null = no cap (idle-based only); set a number to cap `.docx` too. */
+export const DOCX_AUTOSAVE_MAX_WAIT_MS: number | null = null;
+
+export function autosaveMaxWaitFor(format: AutosaveFormat): number | null {
+  return format === 'docx' ? DOCX_AUTOSAVE_MAX_WAIT_MS : CMIR_AUTOSAVE_MAX_WAIT_MS;
+}
+
 /** Live views (`self_ref`) + linked copies (`transclusion_ref`) in `doc`.
  *  The schema only admits both at the doc's top level (and inside each
  *  other, which isn't a separately-droppable link), so a top-level scan

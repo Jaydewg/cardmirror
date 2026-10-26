@@ -534,11 +534,11 @@ class HomeScreen {
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'pmd-home-session-open';
-    row.title = 'Resume this collaboration session';
+    row.title = record.role === 'spectator' ? 'Watch this session again' : 'Resume this collaboration session';
 
     const chip = document.createElement('span');
     chip.className = 'pmd-home-recent-format pmd-home-session-role';
-    chip.textContent = record.role === 'host' ? 'HOST' : 'JOINED';
+    chip.textContent = record.role === 'host' ? 'HOST' : record.role === 'spectator' ? 'WATCHING' : 'JOINED';
     row.appendChild(chip);
 
     const name = document.createElement('span');

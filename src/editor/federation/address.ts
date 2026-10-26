@@ -84,7 +84,8 @@ export function relayHome64(url: string): string {
 }
 
 export interface CodePrefix {
-  kind: 'cmk' | 'cmshare';
+  /** `cmview` is the spectator twin of `cmshare` (same room + key). */
+  kind: 'cmk' | 'cmshare' | 'cmview';
   /** The format generation upstream bumps (`cmshare3`). */
   gen: number;
   /** Feature letters on top of the generation, sorted (`f`). */
@@ -94,11 +95,11 @@ export interface CodePrefix {
 /** `cmshare2f` → {kind: 'cmshare', gen: 2, flags: 'f'}. Generation and
  *  flags are separate axes, so `cmshare3f` needs no new grammar. */
 export function parseCodePrefix(prefix: string): CodePrefix | null {
-  const m = /^(cmk|cmshare)(\d+)([a-z]*)$/.exec(prefix);
+  const m = /^(cmk|cmshare|cmview)(\d+)([a-z]*)$/.exec(prefix);
   if (!m) return null;
   const flags = [...new Set(m[3]!)].sort().join('');
   if (flags !== m[3]!) return null; // canonical spelling only: sorted, no repeats
-  return { kind: m[1] as 'cmk' | 'cmshare', gen: Number(m[2]), flags };
+  return { kind: m[1] as CodePrefix['kind'], gen: Number(m[2]), flags };
 }
 
 /** Split `body@relay-url` at the FIRST `@` (no code body can contain

@@ -58,6 +58,11 @@ export interface ChipSessionModel {
   peers: ChipPeer[];
   /** Cross-server joiners waiting for a decision. */
   pendingJoins: number;
+  /** You joined with a view code (a spectator: no edits, no cursor). */
+  spectator?: boolean;
+  /** Spectators in the room, per the relay (they post no cursor, so
+   *  they are a count, not dots). */
+  watchers?: number;
 }
 
 const LINK_TEXT: Record<ChipLink, string> = {
@@ -68,12 +73,16 @@ const LINK_TEXT: Record<ChipLink, string> = {
 };
 
 /** The words for a session state (label + tooltip / panel lines). */
-export function chipStateText(m: Pick<ChipSessionModel, 'link' | 'queued' | 'readOnly'>): string {
+export function chipStateText(
+  m: Pick<ChipSessionModel, 'link' | 'queued' | 'readOnly'> & Partial<Pick<ChipSessionModel, 'spectator' | 'watchers'>>,
+): string {
   let text = LINK_TEXT[m.link];
   if (m.queued > 0) {
     text = m.link === 'streaming' ? `Sending ${m.queued}…` : `${text} · ${m.queued} queued`;
   }
-  return m.readOnly ? `${text} · read-only` : text;
+  if (m.spectator) text = `Watching · ${text}`;
+  else if (m.readOnly) text = `${text} · read-only`;
+  return m.watchers ? `${text} · ${m.watchers} watching` : text;
 }
 
 const LINK_DETAIL: Record<ChipLink, string> = {
@@ -89,12 +98,14 @@ export function chipStateDetail(link: ChipLink): string {
 }
 
 /** Ring classes for your own dot (shared with the three-pane footers). */
-export function ringClasses(m: Pick<ChipSessionModel, 'link' | 'queued' | 'readOnly' | 'remote'>): string {
+export function ringClasses(
+  m: Pick<ChipSessionModel, 'link' | 'queued' | 'readOnly' | 'remote'> & Partial<Pick<ChipSessionModel, 'spectator'>>,
+): string {
   return [
     'pmd-presence-ring',
     `pmd-ring-${m.link}`,
     m.queued > 0 ? 'pmd-ring-queued' : '',
-    m.readOnly ? 'pmd-ring-readonly' : '',
+    m.readOnly || m.spectator ? 'pmd-ring-readonly' : '',
     m.remote ? 'pmd-ring-remote' : '',
   ]
     .filter(Boolean)

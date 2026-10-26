@@ -37,8 +37,8 @@ describe('cross-server share codes', () => {
     const v2 = encodeShareCode(ROOM, KEY, '1.0.0');
     expect(v1.startsWith('cmshare1.')).toBe(true);
     expect(v2.startsWith('cmshare2.')).toBe(true);
-    expect(decodeShareCode(v1)).toEqual({ roomId: ROOM, keyBytes: KEY });
-    expect(decodeShareCode(v2)).toEqual({ roomId: ROOM, keyBytes: KEY, minVersion: '1.0.0' });
+    expect(decodeShareCode(v1)).toEqual({ roomId: ROOM, keyBytes: KEY, view: false });
+    expect(decodeShareCode(v2)).toEqual({ roomId: ROOM, keyBytes: KEY, minVersion: '1.0.0', view: false });
     expect(encodeShareCode(ROOM, KEY, undefined, null)).toBe(v1);
   });
 
@@ -47,8 +47,8 @@ describe('cross-server share codes', () => {
     const f2 = encodeShareCode(ROOM, KEY, '1.0.0', HOME);
     expect(f1).toBe(`cmshare1f.${ROOM}.${encodeShareCode(ROOM, KEY).split('.')[2]}@${HOME}`);
     expect(f2.startsWith('cmshare2f.') && f2.endsWith(`.1.0.0@${HOME}`)).toBe(true);
-    expect(decodeShareCode(f1)).toEqual({ roomId: ROOM, keyBytes: KEY, home: HOME });
-    expect(decodeShareCode(f2)).toEqual({ roomId: ROOM, keyBytes: KEY, minVersion: '1.0.0', home: HOME });
+    expect(decodeShareCode(f1)).toEqual({ roomId: ROOM, keyBytes: KEY, home: HOME, view: false });
+    expect(decodeShareCode(f2)).toEqual({ roomId: ROOM, keyBytes: KEY, minVersion: '1.0.0', home: HOME, view: false });
     // Home canonicalized on read.
     expect(decodeShareCode(f1.replace(HOME, 'HTTPS://Relay-A.example:443/relay/'))?.home).toBe(HOME);
     expect(stripShareCodeHome(f2)).toBe(encodeShareCode(ROOM, KEY, '1.0.0'));
@@ -63,6 +63,9 @@ describe('cross-server share codes', () => {
     expect(decodeShareCode(f1.replace(HOME, 'ftp://x'))).toBeNull();
     expect(decodeShareCode(f1.replace('cmshare1f', 'cmshare1x'))).toBeNull();
     expect(decodeShareCode(f1.replace('cmshare1f', 'cmshare3f'))).toBeNull(); // unknown generation
+    // Cross-server view codes have no join path yet: refused, never taken
+    // for an edit join.
+    expect(decodeShareCode(f1.replace('cmshare1f', 'cmview1f'))).toBeNull();
   });
 
   it('every pre-federation parser rejects f codes (the fence)', () => {

@@ -42,11 +42,13 @@ import {
   setCollabInviteLinkGetter,
   setCollabCrossServerCodeGetter,
   setCollabClassicCodeGetter,
+  setCollabViewCodeGetter,
+  setCollabViewLinkGetter,
   collabRoomClaimKey,
 } from './collab-hooks.js';
-import { RoomsError } from './room-client.js';
+import { RoomsError, type RoomsClient } from './room-client.js';
 import { getElectronHost } from '../host/index.js';
-import { ensureBakedRelay, relayBaseUrl, relayClient, relayClientWithGuestPass, endRoomOnRelay } from './collab-relay.js';
+import { ensureBakedRelay, relayBaseUrl, relayClient, relayClientWithGuestPass, relayClientWithViewPass, endRoomOnRelay } from './collab-relay.js';
 import { buildJoinLink, parseJoinLinkHash } from './join-link.js';
 import { relayClient as pairingRelayClient } from '../pairing/relay-client.js';
 import { resolveStarredTarget } from '../pairing/send-to-starred.js';
@@ -65,6 +67,7 @@ import { installCursorPresence, type CursorsHandle } from './collab-cursors.js';
 import { collabRepairPlugin, lowestPeerIsLeader } from './collab-repair.js';
 import {
   loadSessionRecord,
+  deleteSessionRecord,
   loadPrefetch,
   deletePrefetch,
   saveRecentRoom,
@@ -72,12 +75,12 @@ import {
   loadRecentRoom,
 } from './collab-store.js';
 import { loadRejoinCandidates, pickSessionToJoin } from './rejoin-picker.js';
-import { importRoomKey, decryptBlob } from './collab-crypto.js';
+import { importRoomKey, decryptBlob, viewCodeFromShareCode } from './collab-crypto.js';
 import { resetSessionCommentIds } from '../comments-plugin.js';
 import { collabEnabled } from './collab-gate.js';
 import { decodeShareCode, encodeShareCode, stripShareCodeHome } from './collab-crypto.js';
 import { CollabSession } from './collab-session.js';
-import type { JoinMode, RoomsClient } from './room-client.js';
+import type { JoinMode } from './room-client.js';
 import {
   collabReadOnlyPlugin,
   createJoinRequestWatcher,
@@ -163,6 +166,8 @@ interface ActiveSession {
   unloadCleanup: () => void;
   /** Unsubscribe the meta-map (title) watcher installed by installSeams. */
   metaUnsub: () => void;
+  /** Spectators in the room, per the relay's last `w` frame / hello. */
+  watchers: number;
   /** Latest connection status for THIS session. The shared status-bar chip only
    *  ever reflects the focused doc's session; storing status per session lets
    *  each multi-pane slot footer render its own visible doc's state. */
@@ -240,6 +245,7 @@ setCollabCopresenceProvider((uid) => {
     peers: chipPeers(sess),
     // The status ring around your own dot in the slot footer.
     ring: ringClasses(chipModel(sess)),
+    watchers: sess.watchers,
   };
 });
 
@@ -375,6 +381,20 @@ setCollabInviteLinkGetter(() => {
   if (!s) return null;
   return buildJoinLink({ shareCode: s.shareCode, guestPass: s.session.guestPass });
 });
+// Spectator invites: the view code is the share code's twin (any
+// participant may hand it out); the view LINK also needs the room's view
+// pass, which hosts hold from create and joiners fetch at install — null
+// until then (the Send pill hides "Copy view link" meanwhile).
+setCollabViewCodeGetter(() => {
+  const s = actionSession();
+  return s ? viewCodeFromShareCode(s.shareCode) : null;
+});
+setCollabViewLinkGetter(() => {
+  const s = actionSession();
+  if (!s || !s.session.viewPass) return null;
+  const viewCode = viewCodeFromShareCode(s.shareCode);
+  return viewCode ? buildJoinLink({ shareCode: viewCode, guestPass: s.session.viewPass }) : null;
+});
 
 /** The chip's model for a session: connection state for the status
  *  ring (streaming / polling / reconnecting / credentials), queued edits,
@@ -399,10 +419,12 @@ function chipModel(
   return {
     link,
     queued: st.queuedUpdates,
-    readOnly: sess.session.readOnly,
+    readOnly: sess.session.accessReadOnly,
     remote: sess.home !== null,
     peers: chipPeers(sess),
     pendingJoins: (sess.joinWatcher?.rows() ?? []).filter((r) => r.state === 'pending').length,
+    spectator: sess.session.role === 'spectator',
+    watchers: sess.watchers,
   };
 }
 
@@ -473,7 +495,7 @@ setChipActivator((anchor) => {
     leave: () => void leaveToHome(sess),
     // Same-server participants trust each other (and the relay lets any of
     // them end the room): the way out when the host is gone / role lost.
-    ...(sess.session.role !== 'host' && !sess.home ? { endForEveryone: () => void endForEveryoneToHome(sess) } : {}),
+    ...(sess.session.role === 'participant' && !sess.home ? { endForEveryone: () => void endForEveryoneToHome(sess) } : {}),
   });
 });
 
@@ -518,7 +540,13 @@ async function leaveToHome(sess: ActiveSession): Promise<void> {
   if (!(await endOrLeaveSession(sess))) return; // couldn't end — kept live; its toast explains
   if (sess.deps.refreshPluginsForUid) sess.deps.refreshPluginsForUid(sess.ownerUid);
   else sess.deps.refreshPlugins();
-  showToast(sess.session.role === 'host' ? 'Session ended — your copy is kept' : 'Left the session — your copy is kept');
+  showToast(
+    sess.session.role === 'host'
+      ? 'Session ended — your copy is kept'
+      : sess.session.role === 'spectator'
+        ? 'Stopped watching — this copy is now yours to edit'
+        : 'Left the session — your copy is kept',
+  );
   sess.deps.goHome?.();
 }
 
@@ -662,7 +690,7 @@ function installSeams(
   // with the session's home for the other-server marker) + read-only.
   const cursors = installCursorPresence(session, ownerView, () => ({
     relay: selfRelayUrl(),
-    readOnly: session.readOnly,
+    readOnly: session.accessReadOnly,
   }));
   const unloadCleanup = installUnloadHooks(session, cursors);
   // One shared timer refreshes the focused session's chip dots AND every slot
@@ -711,6 +739,7 @@ function installSeams(
     wakeCleanup,
     unloadCleanup,
     metaUnsub,
+    watchers: 0,
     lastStatus: null,
     offlineSince: null,
     offlineTimer: null,
@@ -725,6 +754,13 @@ function installSeams(
   joinWatcher?.onChange(() => {
     if (isChipSession(ownerUid)) updateChip(null);
   });
+  // Editors fetch the room's view pass once so "Copy view link" / spectate
+  // invites work from any seat, not just the host's. Fire-and-forget: the
+  // getters read session.viewPass lazily; a relay without spectators
+  // yields null and the view-link affordances stay hidden.
+  if (session.role !== 'spectator' && !session.viewPass) {
+    void session.ensureViewPass().catch(() => {});
+  }
   // Cross-window live-session claim: while this session is live, other
   // windows' Sessions rows (and join-by-code) refuse the same room and focus
   // this window instead — same registry as the duplicate-file-open guard.
@@ -768,7 +804,7 @@ function installSeams(
       ...cursors.plugins(),
       // Federation: a read-only admission blocks local edits (remote
       // content still lands — see collab-federation.ts).
-      collabReadOnlyPlugin(() => session.readOnly),
+      collabReadOnlyPlugin(() => session.viewOnly),
     ],
     ownsUndo: () => true,
     canRedo: () => undoManager.canRedo(),
@@ -776,9 +812,9 @@ function installSeams(
     // undo transactions carry the binding meta (→ sync-origin) and would
     // otherwise sail through the read-mode lock and revert real edits.
     undo: (state, dispatch, view) =>
-      readModePlugin.getState(state)?.on || session.readOnly ? true : undoGuard.undo(state, dispatch, view),
+      readModePlugin.getState(state)?.on || session.viewOnly ? true : undoGuard.undo(state, dispatch, view),
     redo: (state, dispatch, view) =>
-      readModePlugin.getState(state)?.on || session.readOnly ? true : undoGuard.redo(state, dispatch, view),
+      readModePlugin.getState(state)?.on || session.viewOnly ? true : undoGuard.redo(state, dispatch, view),
   });
   return sess;
 }
@@ -974,6 +1010,13 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
         key: 'collab-revoked',
       });
     },
+    onWatchers: (n: number) => {
+      const sess = getSess();
+      if (!sess || sess.watchers === n) return;
+      sess.watchers = n;
+      if (isChipSession(sess.ownerUid) && sess.lastStatus) updateChip(sess.lastStatus);
+      notifyCollabCopresenceChange();
+    },
     onGuestAuthExpired: () => {
       // Terminal-cause notice for a guest whose (immutable, 7-day) pass
       // the relay refused: onEnded fires right after this and its toast
@@ -1064,10 +1107,12 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
       showToast(
         wasHost
           ? 'Collaboration session ended'
-          : 'Session ended — this copy is now yours alone',
+          : sess.session.role === 'spectator'
+            ? 'Session ended — this copy is now yours to edit'
+            : 'Session ended — this copy is now yours alone',
       );
     },
-    onFull: () => {
+    onFull: (viewPass: string | null) => {
       const sess = getSess();
       if (!sess || !sessions.has(sess.ownerUid)) {
         showToast('That session is full -- maximum number of coeditors reached');
@@ -1078,14 +1123,39 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
       // offline chip forever (audit find, 2026-07-10). Tear down but KEEP
       // the record so the user can rejoin from the Sessions list when
       // someone leaves.
+      const shareCode = sess.shareCode;
+      const ownerUid = sess.ownerUid;
       void teardownSession(sess, /* keepRecord */ true).catch((e) => surfaceError('collab teardown', e));
       refreshChipForFocus(); // repaint from live truth (a stale snapshot left ghost chips — field find, 2026-08-12)
-      if (deps.refreshPluginsForUid) deps.refreshPluginsForUid(sess.ownerUid);
+      if (deps.refreshPluginsForUid) deps.refreshPluginsForUid(ownerUid);
       else deps.refreshPlugins();
-      showToast(
-        'The session is full. Your copy is saved; rejoin from the ' +
-          'Sessions list when someone leaves.',
-      );
+      // "Watch instead": the relay handed the refused editor a spectator
+      // pass (2026-10-24+). Offer it — a full room is exactly the moment a
+      // view-only seat is worth having. The kept editor record is deleted
+      // on yes (the spectator session writes its own, and a later edit
+      // join must not resume into a view-only record or vice versa).
+      const viewCode = viewPass ? viewCodeFromShareCode(shareCode) : null;
+      if (!viewCode || !viewPass) {
+        showToast(
+          'The session is full — your copy is saved; rejoin from the ' +
+            'Sessions list when someone leaves.',
+        );
+        return;
+      }
+      void (async () => {
+        const watch = await confirmDialog(
+          'Every editing seat is taken. You can watch the document live instead — ' +
+            'you will see every edit as it happens but cannot make changes. ' +
+            'Your copy is saved either way; rejoin from the Sessions list when a seat opens.',
+          { title: 'Session is full — watch instead?', okLabel: 'Watch' },
+        );
+        if (!watch) {
+          showToast('Your copy is saved — rejoin from the Sessions list when someone leaves.');
+          return;
+        }
+        await deleteSessionRecord(decodeShareCode(shareCode)?.roomId ?? '').catch(() => {});
+        await joinSessionWithCode(deps, viewCode, { guestPass: viewPass });
+      })();
     },
   };
 }
@@ -1363,19 +1433,38 @@ async function joinSessionWithCodeInner(
     return false;
   }
   await ensureBakedRelay();
-  // Own credentials (baked token / linked account / self-host settings)
-  // outrank a guest pass — they're strictly more capable. The pass is
-  // the fallback that lets an account-less browser join at all.
-  const client =
-    relayClient() ?? (opts?.guestPass ? relayClientWithGuestPass(opts.guestPass) : null);
-  if (!client) {
-    showToast(`No relay connection — ${RELAY_FIX_PATH}`);
-    return false;
-  }
   const decoded = decodeShareCode(code);
   if (!decoded) {
     showToast('That does not look like a share code. Check that it is correct.');
     return false;
+  }
+  let client: RoomsClient | null;
+  if (decoded.view) {
+    // SPECTATOR join: authenticate with the room's view pass and NOTHING
+    // else — own credentials would be an editor seat, and the relay
+    // enforces view-only per credential. A view link carries the pass;
+    // a pasted view code gets one minted with whatever credentials this
+    // install has (the relay mints view passes for any room credential).
+    let pass = opts?.guestPass ?? null;
+    if (!pass) pass = (await relayClient()?.fetchViewPass(decoded.roomId)) ?? null;
+    client = pass ? relayClientWithViewPass(pass) : null;
+    if (!client) {
+      showToast(
+        relayClient()
+          ? 'Could not get a viewer pass for this session — ask for a fresh view link'
+          : `No relay connection — ${RELAY_FIX_PATH}`,
+      );
+      return false;
+    }
+  } else {
+    // Own credentials (baked token / linked account / self-host settings)
+    // outrank a guest pass — they're strictly more capable. The pass is
+    // the fallback that lets an account-less browser join at all.
+    client = relayClient() ?? (opts?.guestPass ? relayClientWithGuestPass(opts.guestPass) : null);
+    if (!client) {
+      showToast(`No relay connection — ${RELAY_FIX_PATH}`);
+      return false;
+    }
   }
   // v2 codes carry the room's compatibility floor. (Old builds never
   // get this far — the v2 format fails their parser above — this check
@@ -1391,7 +1480,13 @@ async function joinSessionWithCodeInner(
   // the room. A fresh join minted a second copy from the relay state, and a
   // later Leave deleted the old record, making those edits unrecoverable
   // (audit find, 2026-07-10).
-  if (await loadSessionRecord(decoded.roomId)) {
+  // …but only a record of the SAME kind: an edit code never resumes into
+  // a view-only record (that would silently keep the user a spectator), and
+  // a view code never resumes an editor record (whose seat may be the one
+  // that is full). The mismatched record is superseded by the new
+  // session's own persistence.
+  const prior = await loadSessionRecord(decoded.roomId);
+  if (prior && (prior.role === 'spectator') === decoded.view) {
     return resumeSessionFlow(deps, decoded.roomId);
   }
   // Federation: a room homed on ANOTHER server is reached through this
@@ -1441,13 +1536,18 @@ async function joinSessionWithCodeInner(
     let joinedOffline = false;
     try {
       session = await CollabSession.join({
-        ...decoded,
+        roomId: decoded.roomId,
+        keyBytes: decoded.keyBytes,
         client: joinClient,
         callbacks: sessionCallbacks(deps, () => sessRef),
-        role: rejoinRole,
+        role: decoded.view ? 'spectator' : rejoinRole,
       });
       session.setAccess(joinMode);
-      session.guestPass = opts?.guestPass ?? null;
+      // A spectator's bearer IS the view pass: persisted as the session's
+      // credential (resume authenticates the same way) and as its view
+      // pass (so it can hand out view links too).
+      session.guestPass = decoded.view ? client.opts.token() : opts?.guestPass ?? null;
+      if (decoded.view) session.viewPass = client.opts.token();
     } catch (err) {
       // An ENDED (410) or expired/GC'd (404) room is not an offline
       // condition — the seed would resume a session that no longer exists.
@@ -1464,7 +1564,7 @@ async function joinSessionWithCodeInner(
       session = await CollabSession.resume({
         roomId: decoded.roomId,
         keyBytes: decoded.keyBytes,
-        role: rejoinRole,
+        role: decoded.view ? 'spectator' : rejoinRole,
         snapshot: blobs[0]!,
         increments: blobs.slice(1),
         lastSeq: pre.lastSeq,
@@ -1514,13 +1614,17 @@ async function joinSessionWithCodeInner(
     // path the seed's content lives on in the session + its persist record).
     void deletePrefetch(decoded.roomId).catch((e) => surfaceError('collab seed cleanup', e));
     showToast(
-      joinedOffline
-        ? 'Joined from the prefetched copy — will sync when you reconnect'
-        : joinMode === 'read'
-          ? `Joined the session read-only (on ${relayLabel(remoteHome ?? '')})`
-          : remoteHome
-            ? `Joined the session on ${relayLabel(remoteHome)}`
-            : 'Joined the session',
+      decoded.view
+        ? joinedOffline
+          ? 'Watching from the prefetched copy — will catch up when you reconnect'
+          : 'Watching the session — you see every edit live; editing here is off'
+        : joinedOffline
+          ? 'Joined from the prefetched copy — will sync when you reconnect'
+          : joinMode === 'read'
+            ? `Joined the session read-only (on ${relayLabel(remoteHome ?? '')})`
+            : remoteHome
+              ? `Joined the session on ${relayLabel(remoteHome)}`
+              : 'Joined the session',
     );
     deps.getView()?.focus();
     return true;
@@ -1597,11 +1701,20 @@ async function resumeSessionFlowInner(
     return false;
   }
   await ensureBakedRelay();
+  // A spectator record resumes with its view pass ONLY (see the join flow);
+  // everyone else prefers their own credentials.
   const client =
-    relayClient() ??
-    (record.guestPass ? relayClientWithGuestPass(record.guestPass) : null);
+    record.role === 'spectator'
+      ? record.guestPass
+        ? relayClientWithViewPass(record.guestPass)
+        : null
+      : relayClient() ?? (record.guestPass ? relayClientWithGuestPass(record.guestPass) : null);
   if (!client) {
-    showToast(`No relay connection — ${RELAY_FIX_PATH}`);
+    showToast(
+      record.role === 'spectator'
+        ? 'This watched session has no viewer pass saved — ask for a fresh view link'
+        : `No relay connection — ${RELAY_FIX_PATH}`,
+    );
     return false;
   }
   const decoded = decodeShareCode(record.shareCode);
@@ -1654,6 +1767,7 @@ async function resumeSessionFlowInner(
     });
     session.setAccess(resumeMode);
     session.guestPass = record.guestPass ?? null;
+    if (record.role === 'spectator') session.viewPass = record.guestPass ?? null;
     // Host resume without a stored pass: re-mint so fresh invite links
     // stay possible (no-op 404 while the relay flip is off, and guests
     // never pass the send-auth gate on this endpoint).
@@ -1683,7 +1797,7 @@ async function resumeSessionFlowInner(
     session.start();
     sessRef.lastStatus = { connected: false, queuedUpdates: session.queuedUpdates };
     updateChip({ connected: false, queuedUpdates: session.queuedUpdates });
-    showToast('Session resumed — syncing');
+    showToast(record.role === 'spectator' ? 'Watching again — catching up' : 'Session resumed — syncing');
     deps.getView()?.focus();
     return true;
   } catch (err) {
@@ -1718,6 +1832,42 @@ export async function copyInviteLinkFlow(): Promise<void> {
     () => false,
   );
   showToast(ok ? 'Invite link copied' : 'Could not copy the invite link');
+}
+
+/** Copy the focused session's VIEW code (spectator twin of the share code). */
+export async function copyViewCodeFlow(): Promise<void> {
+  const sess = actionSession();
+  const code = sess ? viewCodeFromShareCode(sess.shareCode) : null;
+  if (!sess || !code) {
+    showToast('This document has no active session');
+    return;
+  }
+  const ok = await navigator.clipboard?.writeText(code).then(
+    () => true,
+    () => false,
+  );
+  showToast(ok ? 'View code copied — whoever joins with it watches, without editing' : 'Could not copy the view code');
+}
+
+/** Copy the focused session's VIEW link (view code + view pass). */
+export async function copyViewLinkFlow(): Promise<void> {
+  const sess = actionSession();
+  if (!sess) {
+    showToast('This document has no active session');
+    return;
+  }
+  const pass = await sess.session.ensureViewPass().catch(() => null);
+  const code = viewCodeFromShareCode(sess.shareCode);
+  if (!pass || !code) {
+    showToast('View links are not available for this session — share the view code instead');
+    return;
+  }
+  const link = buildJoinLink({ shareCode: code, guestPass: pass });
+  const ok = await navigator.clipboard?.writeText(link).then(
+    () => true,
+    () => false,
+  );
+  showToast(ok ? 'View link copied — whoever opens it watches, without editing' : 'Could not copy the view link');
 }
 
 export async function copyShareCodeFlow(): Promise<void> {
@@ -1820,7 +1970,7 @@ async function syncRemoteAccess(deps: CollabUiDeps, sess: ActiveSession): Promis
     const st = await client.joinStatus(sess.session.roomId);
     if (st.state !== 'approved' || !st.mode) return;
     noteRoomPassMode(sess.session.roomId, st.mode);
-    const current: JoinMode = sess.session.readOnly ? 'read' : 'write';
+    const current: JoinMode = sess.session.accessReadOnly ? 'read' : 'write';
     if (st.mode === current) return;
     sess.session.setAccess(st.mode);
     refreshEditable(deps.getViewForUid?.(sess.ownerUid) ?? deps.getView());
@@ -1884,6 +2034,7 @@ async function sendInviteTo(
   target: { codes: string[]; label: string; via?: string },
   shareCode: string,
   ownerUid: string | null | undefined,
+  mode: 'edit' | 'view' = 'edit',
 ): Promise<void> {
   const title = sessionDocTitle(ownerUid);
   // Movable-format rooms carry the higher floor: a pre-movable build
@@ -1893,16 +2044,24 @@ async function sendInviteTo(
   const format = active?.session.childrenFormat() ?? 'list';
   // Federation: a recipient on the room's own server gets the plain code
   // every build reads; anyone else needs the code naming the room's home
-  // (and will need a participant's OK to join).
+  // (and will need a participant's OK to join). A VIEW invite has no
+  // cross-server form yet (no `cmview1f`), so only people on the room's
+  // own server can be invited to watch.
   await refreshOwnRelayFederation();
   const self = selfRelayUrl();
   const roomHome = active?.home ?? self;
-  const crossCode = active && self ? crossServerShareCode(active) : null;
-  const plainCode = active && !active.home ? stripShareCodeHome(shareCode) : shareCode;
+  const crossCode = mode === 'edit' && active && self ? crossServerShareCode(active) : null;
+  const plainCode = mode === 'edit' && active && !active.home ? stripShareCodeHome(shareCode) : shareCode;
   const groups = new Map<string, string[]>();
+  let offServer = 0;
   for (const code of target.codes) {
     const recipientRelay = pairingCodeRelay(code) ?? self;
-    const invite = crossCode && recipientRelay !== roomHome ? crossCode : plainCode;
+    const elsewhere = recipientRelay !== roomHome;
+    if (mode === 'view' && elsewhere) {
+      offServer++;
+      continue;
+    }
+    const invite = crossCode && elsewhere ? crossCode : plainCode;
     groups.set(invite, [...(groups.get(invite) ?? []), code]);
   }
   let ok = 0;
@@ -1912,17 +2071,20 @@ async function sendInviteTo(
   for (const [invite, codes] of groups) {
     const res = await pairingRelayClient.send(codes, buildRoomInviteItem({ shareCode: invite, title }), {
       via: target.via,
-      minReceiverVersion: roomInviteFloor(format),
+      minReceiverVersion: roomInviteFloor(format, mode),
     });
     ok += res.ok;
     fail += res.fail;
     peerFail += res.peerFail ?? 0;
     peerReason ||= res.peerReason ?? '';
   }
-  if (fail === 0) showToast(`Invited ${target.label} ✓`);
+  const verb = mode === 'view' ? 'Invited to watch' : 'Invited';
+  const skipped = offServer > 0 ? ` (${offServer} on other servers skipped — watching across servers isn’t supported yet)` : '';
+  if (ok === 0 && fail === 0) showToast(`Can’t invite ${target.label} to watch — watching across servers isn’t supported yet`);
+  else if (fail === 0) showToast(`${verb} ${target.label} ✓${skipped}`);
   else if (peerFail === fail) showToast(`Your relay can't reach ${target.label}'s server${refusalWhy(peerReason)}`);
   else if (ok === 0) showToast(`Couldn't reach ${target.label}`);
-  else showToast(`Invited ${target.label} (${fail} failed)`);
+  else showToast(`${verb} ${target.label} (${fail} failed)${skipped}`);
 }
 
 /** Send a session invite to the starred partner/group. */
@@ -1958,7 +2120,7 @@ export async function inviteStarredFlow(): Promise<void> {
  *  picked partner/group; with one active, just invite. */
 export async function inviteTargetFlow(
   deps: CollabUiDeps,
-  target: { codes: string[]; label: string; via?: string },
+  target: { codes: string[]; label: string; via?: string; mode?: 'edit' | 'view' },
 ): Promise<void> {
   if (!collabEnabled()) return;
   if (!settings.get('pairingEnabled')) {
@@ -1974,6 +2136,12 @@ export async function inviteTargetFlow(
     await startSessionFlow(deps);
     sess = sessionFor(deps.getOwnerUid?.());
     if (!sess) return; // start failed/cancelled — its toast explains
+  }
+  if (target.mode === 'view') {
+    const viewCode = viewCodeFromShareCode(sess.shareCode);
+    if (!viewCode) return;
+    await sendInviteTo(target, viewCode, sess.ownerUid, 'view');
+    return;
   }
   await sendInviteTo(target, sess.shareCode, sess.ownerUid);
 }
@@ -2059,14 +2227,19 @@ export async function endSessionFlow(deps: CollabUiDeps): Promise<void> {
     return;
   }
   const isHost = sess.session.role === 'host';
+  const isSpectator = sess.session.role === 'spectator';
   // In-app overlay, NOT window.confirm: Electron's native confirm on
   // Windows/Linux never hands keyboard focus back to the renderer —
   // the editor was untypeable until a reload (field bug, 2026-07-03).
   const choice = await confirmDialog(
-    isHost ? 'Participants keep their current copy.' : 'Your copy stays as it is now.',
+    isHost
+      ? 'Participants keep their current copy.'
+      : isSpectator
+        ? 'This copy stays as it is now and becomes editable.'
+        : 'Your copy stays as it is now.',
     {
-      title: isHost ? 'End the session for everyone?' : 'Leave the session?',
-      okLabel: isHost ? 'End Session' : 'Leave Session',
+      title: isHost ? 'End the session for everyone?' : isSpectator ? 'Stop watching?' : 'Leave the session?',
+      okLabel: isHost ? 'End Session' : isSpectator ? 'Stop Watching' : 'Leave Session',
     },
   );
   if (!choice) return;
@@ -2075,7 +2248,7 @@ export async function endSessionFlow(deps: CollabUiDeps): Promise<void> {
   if (!(await endOrLeaveSession(sess))) return;
   if (deps.refreshPluginsForUid) deps.refreshPluginsForUid(sess.ownerUid);
   else deps.refreshPlugins();
-  showToast(isHost ? 'Session ended' : 'Left the session');
+  showToast(isHost ? 'Session ended' : isSpectator ? 'Stopped watching' : 'Left the session');
   deps.getView()?.focus();
 }
 

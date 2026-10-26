@@ -81,6 +81,14 @@ export const HIGHLIGHT_BAND: Record<string, 'light' | 'dark' | 'none'> = {
   none: 'none',
 };
 
+/** Link hrefs CardMirror will carry: http(s), mailto, and relative /
+ *  fragment references (no scheme). Script-bearing schemes are refused. */
+export function isSafeLinkHref(href: string): boolean {
+  const m = /^\s*([a-z][a-z0-9+.-]*):/i.exec(href);
+  if (!m) return true; // relative or fragment
+  return /^(https?|mailto)$/i.test(m[1]!);
+}
+
 export const marks: { [name: string]: MarkSpec } = {
   // -------- Outermost: per-run font size --------
   // `font_size` is listed first so it renders as the OUTERMOST DOM
@@ -322,9 +330,13 @@ export const marks: { [name: string]: MarkSpec } = {
     parseDOM: [
       {
         tag: 'a[href]',
-        getAttrs: (dom: HTMLElement) => ({
-          href: dom.getAttribute('href') ?? '',
-        }),
+        getAttrs: (dom: HTMLElement) => {
+          const href = dom.getAttribute('href') ?? '';
+          // Pasted / imported links keep only navigable schemes. A
+          // `javascript:` or `data:` href is never a real link in a
+          // debate doc; rejecting the mark keeps the text and drops it.
+          return isSafeLinkHref(href) ? { href } : false;
+        },
       },
     ],
     toDOM: (mark) => [
@@ -443,12 +455,22 @@ export const marks: { [name: string]: MarkSpec } = {
         validate: (v: unknown) =>
           typeof v === 'string' && /^[0-9a-fA-F]{6}$/.test(v),
       },
+      // 'marker' on the red `Marked h:mm` run the reading-position marker
+      // command writes (schema/reading-marker.ts); null on every other
+      // colored run. The role, not the red, is what makes a run a marker.
+      // Builds without this attr drop it on load and see plain red text.
+      // Different attrs keep a marker run from merging with adjacent red.
+      role: {
+        default: null,
+        validate: (v: unknown) => v === null || v === 'marker',
+      },
     },
     parseDOM: [
       {
         tag: 'span[data-color]',
         getAttrs: (dom: HTMLElement) => ({
           color: dom.getAttribute('data-color') ?? '000000',
+          role: dom.getAttribute('data-role') === 'marker' ? 'marker' : null,
         }),
       },
     ],
@@ -475,6 +497,7 @@ export const marks: { [name: string]: MarkSpec } = {
         'data-color': color,
         'data-color-band': colorBand(color),
       };
+      if (mark.attrs['role'] === 'marker') attrs['data-role'] = 'marker';
       if (color !== '000000') attrs['style'] = `color: #${color}`;
       return ['span', attrs, 0];
     },

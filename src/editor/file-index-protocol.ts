@@ -41,17 +41,29 @@ export type FileBrowseRow =
       kind: 'folder';
       name: string;
       relativeDirectory: string;
+      /** Directory of the folder relative to the browsed directory ('' for
+       *  an immediate subfolder) — the search view reaches any depth. */
+      subPath?: string;
+      /** The root this row belongs to — set on an all-roots search
+       *  (`location: null`), where rows come from several roots. */
+      root?: string;
     }
   | ({
       kind: 'file';
       /** Directory of the file relative to the browsed directory ('' when
        *  it sits directly inside it) — the search view reaches any depth. */
       subPath: string;
+      /** See the folder row's `root`. */
+      root?: string;
     } & FileIndexRow);
 
 export interface FileBrowseParams {
   roots: string[];
-  location: FileBrowseLocation;
+  /** The directory to browse — or null for the ROOTS level, where a query
+   *  searches every root (folders at any depth + files, each row tagged
+   *  with its `root`); an empty query there returns nothing (the palette
+   *  lists the roots itself). */
+  location: FileBrowseLocation | null;
   /** '' lists the directory (subfolders + direct files); otherwise every
    *  file beneath it is searched, plus subfolders whose name matches. */
   query: string;

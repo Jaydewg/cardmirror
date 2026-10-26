@@ -28,6 +28,7 @@ import {
 } from './self-transclusion-commands.js';
 import { registerOpenContextMenu, clearOpenContextMenu } from './context-menu-registry.js';
 import { dragController, type DragItem, type DragSurface } from './drag-controller.js';
+import { alphabetizeSlots, type SectionSlot } from './alphabetize-headings.js';
 import { isTransclusionNode, zoneIdentity } from './transclusion.js';
 import { isSelfRef, resolveSelfProjection, typesHoldingSelfRef } from './self-transclusion.js';
 import { transclusionDivergenceKey } from './transclusion-divergence-plugin.js';
@@ -81,7 +82,7 @@ import {
 import { setIcon } from './icons';
 import { isMobileShellActive } from './mobile-plugin.js';
 import { createNumberGlyph, numberingDisplaySig } from './numbering-plugin.js';
-import { computeNumbering } from './numbering.js';
+import { computeNumbering, type NumberLabel } from './numbering.js';
 import { isRightClickContextMenu } from './context-menu-gate.js';
 
 /** Minimum nav-pane width — must fit the 4 level buttons + the
@@ -202,6 +203,8 @@ export function installNavResizeHandle(host: HTMLElement): HTMLElement {
 export class NavigationPanel {
   private root: HTMLElement;
   private view: EditorView | null = null;
+  /** Removes the editor scroll listener behind `navFollowScroll`. */
+  private detachScrollFollow: (() => void) | null = null;
   private readonly readOnly: boolean = false;
   private listEl: HTMLOListElement;
   private emptyEl: HTMLElement;
@@ -258,6 +261,13 @@ export class NavigationPanel {
 
   // ---- Drag-and-drop state ----
   private liEntries: Map<HTMLLIElement, HeadingEntry> = new Map();
+  /** Everything the last list build rendered, as one string, plus the
+   *  entry index behind each rendered row (render order). `update()`
+   *  skips the DOM rebuild when the key is unchanged — typing in a card
+   *  body changes no row, and the rebuild cost ~22ms per pause on a
+   *  9,600-heading file. */
+  private lastRenderKey: string | null = null;
+  private renderedEntryIdx: number[] = [];
   private dragStartX = 0;
   private dragStartY = 0;
   private dragStartLi: HTMLLIElement | null = null;
@@ -640,6 +650,7 @@ export class NavigationPanel {
     // anyway.
     this.applyMaxLevelToCollapseState();
     this.render(this.currentDoc);
+    this.installScrollFollow(view);
 
     // Register as a drop-target surface and subscribe to drag events
     // so we render indicators regardless of which surface initiated
@@ -693,6 +704,8 @@ export class NavigationPanel {
     this.removeSearchEscapeListeners();
     if (this.searchRenderTimer !== null) clearTimeout(this.searchRenderTimer);
     this.cancelLongPress();
+    this.detachScrollFollow?.();
+    this.detachScrollFollow = null;
     this.unsubscribeSettings?.();
     this.unsubscribeSettings = null;
     this.unsubscribeDrag?.();
@@ -847,7 +860,8 @@ export class NavigationPanel {
   update(doc: PMNode): void {
     if (this.destroyed) return; // a late debounced call must not re-pin the doc
     this.currentDoc = doc;
-    this.render(doc);
+    this.renderList(doc, true);
+    if (dragController.isActive()) this.restoreDragChrome();
   }
 
   /** Map the cached heading positions forward through a doc change so they stay
@@ -1019,7 +1033,7 @@ export class NavigationPanel {
     }
   }
 
-  private renderList(doc: PMNode): void {
+  private renderList(doc: PMNode, skipIfUnchanged = false): void {
     const entries = collectOutlineWithWindows(doc);
 
     // Refresh the `lastSeenIds` set so `applyMaxLevelToNewHeadings`
@@ -1049,10 +1063,66 @@ export class NavigationPanel {
     // display toggle. O(top-level children) — cheap next to the DOM
     // rebuild below.
     const numberLabels = settings.get('showCardNumbering') ? computeNumbering(doc).cards : null;
+    // Per-entry card number label. Windowed (live-view projection) rows
+    // carry the mirrored card's REAL position precomputed at projection
+    // time — computeNumbering keys a live view's cards by those positions
+    // (host-contextual, the same numbers the editor renders in the
+    // window), so projected rows number like everything else. Only the
+    // wrapper's FIRST heading row carries a label, matching the editor,
+    // which decorates the tag line. A heading at `pos` is its wrapper's
+    // first child exactly when a wrapper starts at `pos - 1`, so look that
+    // key up directly: `doc.resolve` scans the top-level children
+    // linearly, ~85ms for every tag of a 9,600-section file.
+    const labels: (NumberLabel | undefined)[] = entries.map((entry) => {
+      if (!numberLabels || (entry.type !== 'tag' && entry.type !== 'analytic')) return undefined;
+      const cardPos = entry.windowed ? (entry.windowCardPos ?? null) : entry.pos - 1;
+      return cardPos != null ? numberLabels.get(cardPos) : undefined;
+    });
 
-    // Clear and re-build. For doc sizes we care about (max ~600 headings
-    // in the example corpus) this is fine; if profiling shows it's hot,
-    // diff against the previous render.
+    // Search: matches (and their ancestors, `keep`) are revealed even under
+    // a collapsed parent or past the level filter; "Hide non-matches"
+    // shows ONLY those rows.
+    const search = this.currentSearch(doc, entries);
+    const hideNonMatches = search != null && settings.get('navSearchHideNonMatches');
+
+    // Everything the rows below read, minus positions (an edit shifts
+    // every later heading's pos without changing any row). Zones are
+    // keyed by ordinal for the same reason.
+    const showCite = settings.get('showCitePreview');
+    const parts: string[] = [
+      `${[...this.collapsed].join(',')}|${this.selectedWindowPos}|${showCite}|${hideNonMatches}|${this.searchActiveIndex}`,
+    ];
+    let zoneOrd = 0;
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i]!;
+      if (e.zonePos != null && entries[i - 1]?.zonePos !== e.zonePos) zoneOrd++;
+      parts.push(
+        `${e.type}\u0001${e.level}\u0001${e.id}\u0001${e.text}\u0001${e.cite}\u0001${e.zonePos == null ? '' : zoneOrd}` +
+          `\u0001${e.windowed ? 1 : 0}\u0001${labels[i] ? `${labels[i]!.kind}:${labels[i]!.text}` : ''}\u0001${hitEntryIndices.has(i) ? 1 : 0}` +
+          `\u0001${e.zonePos != null && divergedZones.has(e.zonePos) ? 1 : 0}` +
+          `\u0001${search?.matchAt.get(i) ?? ''}\u0001${search?.keep.has(i) ? 1 : 0}`,
+      );
+    }
+    const key = parts.join('\u0002');
+    if (skipIfUnchanged && key === this.lastRenderKey) {
+      // Same rows: refresh the rendered entries in place (pos, zonePos,
+      // windowCardPos shift with edits; the row listeners hold these
+      // same objects) instead of rebuilding.
+      const rows = [...this.liEntries];
+      for (let r = 0; r < rows.length; r++) {
+        const [li, old] = rows[r]!;
+        Object.assign(old, entries[this.renderedEntryIdx[r]!]);
+        // Usually already current (remapPositions runs per edit); an
+        // attribute write invalidates style even when the value is equal.
+        const p = String(old.pos);
+        if (li.dataset['pos'] !== p) li.dataset['pos'] = p;
+      }
+      return;
+    }
+    this.lastRenderKey = key;
+    this.renderedEntryIdx = [];
+
+    // Clear and re-build.
     this.listEl.innerHTML = '';
     this.liEntries.clear();
     this.collapsibleIds.clear();
@@ -1066,12 +1136,7 @@ export class NavigationPanel {
     this.emptyEl.style.display = 'none';
     this.listEl.style.display = '';
 
-    // Search: matches (and their ancestors, `keep`) are revealed even under
-    // a collapsed parent or past the level filter; "Hide non-matches"
-    // shows ONLY those rows.
-    const search = this.currentSearch(doc, entries);
     this.renderedSearchResults = search != null;
-    const hideNonMatches = search != null && settings.get('navSearchHideNonMatches');
     this.searchHitRows = [];
     this.searchStatusEl.textContent = !search
       ? ''
@@ -1157,28 +1222,13 @@ export class NavigationPanel {
       li.appendChild(chevron);
 
       // Card number glyph — the editor's computed label for this row's
-      // wrapping card/analytic_unit. Only the wrapper's FIRST heading
-      // row carries it (parentOffset 0), matching the editor, which
-      // decorates the tag line — an in-card analytic under a numbered
-      // tag stays bare. Windowed (live-view projection) rows carry the
-      // mirrored card's REAL position precomputed at projection time —
-      // computeNumbering keys a live view's cards by those positions
-      // (host-contextual, the same numbers the editor renders in the
-      // window), so projected rows number like everything else.
-      if (numberLabels && (entry.type === 'tag' || entry.type === 'analytic')) {
-        let cardPos: number | null = null;
-        if (entry.windowed) {
-          cardPos = entry.windowCardPos ?? null;
-        } else {
-          const $pos = doc.resolve(entry.pos);
-          if ($pos.parentOffset === 0) cardPos = $pos.before();
-        }
-        const numLabel = cardPos != null ? numberLabels.get(cardPos) : undefined;
-        if (numLabel) {
-          const glyph = createNumberGlyph(numLabel);
-          glyph.classList.add('pmd-nav-card-number');
-          li.appendChild(glyph);
-        }
+      // wrapping card/analytic_unit (an in-card analytic under a
+      // numbered tag stays bare; see `labels` above).
+      const numLabel = labels[i];
+      if (numLabel) {
+        const glyph = createNumberGlyph(numLabel);
+        glyph.classList.add('pmd-nav-card-number');
+        li.appendChild(glyph);
       }
 
       const label = document.createElement('span');
@@ -1241,6 +1291,7 @@ export class NavigationPanel {
       }
 
       this.liEntries.set(li, entry);
+      this.renderedEntryIdx.push(i);
       this.listEl.appendChild(li);
     }
     this.syncSearchActiveRow(false);
@@ -1796,6 +1847,64 @@ export class NavigationPanel {
     if (opts?.preserveMultiSelect !== true && settings.get('navFollowCursor')) {
       this.scrollCaretRowIntoView('nearest');
     }
+  }
+
+  /**
+   * `navFollowScroll`: on editor scroll, light the section at the top of
+   * the viewport, as if the caret were there. A caret move re-lights the
+   * caret's own section through the usual `setCaretHeading` path.
+   * Skipped mid-drag and while a Shift/Ctrl multi-select stands, so
+   * scrolling never throws away a deliberate selection.
+   */
+  private installScrollFollow(view: EditorView): void {
+    this.detachScrollFollow?.();
+    this.detachScrollFollow = null;
+    // Scroll doesn't bubble, so catch it in the capture phase. Resolving
+    // the scroller up front would break in multi-pane, which mounts the
+    // editor after `attach` and moves it between slots.
+    let scroller: Element | null = null;
+    let frame = 0;
+    const sync = (): void => {
+      frame = 0;
+      if (this.view !== view || !settings.get('navFollowScroll')) return;
+      if (dragController.isActive() || this.selectedIds.size > 1) return;
+      const dom = view.dom.getBoundingClientRect();
+      const box = scroller?.getBoundingClientRect();
+      const top = Math.max(box?.top ?? 0, dom.top);
+      const bottom = Math.min(box?.bottom ?? window.innerHeight, dom.bottom);
+      // The caret wins while it's on screen: the scroll may be the editor
+      // keeping the caret in view (typing, arrowing past the bottom), and
+      // the section at the top of the window isn't the one being edited.
+      const { state } = view;
+      const caret = view.coordsAtPos(state.selection.head);
+      if (caret.bottom > top && caret.top < bottom) {
+        this.setCaretHeading(state.selection.from, selfRefSelectionPos(state));
+      } else {
+        // A few px down so a heading `scrollToHeadingId` aligned to the
+        // top edge counts as on screen.
+        const hit = view.posAtCoords({ left: dom.left + dom.width / 2, top: top + 8 });
+        if (!hit) return;
+        this.setCaretHeading(hit.pos);
+      }
+      // Pane scrolling stays `navFollowCursor`'s call: `setCaretHeading`
+      // already brings the lit row into view when that is on, and a user
+      // who turned it off asked the pane to hold still.
+    };
+    const onScroll = (e: Event): void => {
+      const t = e.target;
+      if (t instanceof Element) {
+        if (!t.contains(view.dom)) return;
+        scroller = t;
+      } else {
+        scroller = null; // document / viewport scroll
+      }
+      if (!frame) frame = requestAnimationFrame(sync);
+    };
+    document.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    this.detachScrollFollow = () => {
+      document.removeEventListener('scroll', onScroll, { capture: true });
+      if (frame) cancelAnimationFrame(frame);
+    };
   }
 
   private handleShiftClick(entry: HeadingEntry): void {
@@ -2693,6 +2802,18 @@ export class NavigationPanel {
         label: `Delete ${what} and contents`,
         action: () => this.deleteHeadingAndContents(entry),
       },
+      // Only meaningful for a multi-selection: sorts the selected sections
+      // into the slots they occupy (see `alphabetizeSelection`).
+      ...(n > 1
+        ? ([
+            { kind: 'separator' },
+            {
+              kind: 'item',
+              label: `Alphabetize ${what}`,
+              action: () => void this.alphabetizeSelection(),
+            },
+          ] as ContextMenuItem[])
+        : []),
       // Creators — deliberately NOT multi-select aware: a live view or
       // linked copy mirrors ONE section, so these always act on the
       // clicked row alone, whatever the selection is.
@@ -2899,6 +3020,29 @@ export class NavigationPanel {
   /** Delete the heading subtree(s) — all targets in ONE transaction
    *  (one undo step), applied back-to-front so earlier positions never
    *  need remapping. Undo via Cmd+Z. */
+  /**
+   * Alphabetize the multi-selected headings: their sections are sorted by
+   * heading text and written back into the slots the selection occupies
+   * (alphabetize-headings.ts) — unselected headings never move, and a
+   * discontinuous selection stays discontinuous. Needs two or more real
+   * (non-windowed) selected headings; the selection survives, now in its
+   * new order. Returns whether anything changed.
+   */
+  alphabetizeSelection(): boolean {
+    if (!this.view || this.selectedIds.size < 2) return false;
+    const doc = this.view.state.doc;
+    const slots: SectionSlot[] = [];
+    for (const e of collectHeadings(doc)) {
+      if (e.id == null || e.windowed || !this.selectedIds.has(e.id)) continue;
+      const range = computeHeadingRange(doc, e);
+      if (range) slots.push({ from: range.from, to: range.to, text: e.text });
+    }
+    const tr = this.view.state.tr;
+    if (!alphabetizeSlots(tr, slots)) return false;
+    this.view.dispatch(tr.scrollIntoView());
+    return true;
+  }
+
   private deleteHeadingAndContents(entry: HeadingEntry): void {
     if (!this.view) return;
     const ranges = this.headingRanges(this.contextTargets(entry));

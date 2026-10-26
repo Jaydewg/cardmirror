@@ -6,7 +6,7 @@
  *   outbound  editor → LoroSyncPlugin → LoroDoc → (flush timer)
  *             export update-since-lastSent → encrypt → POST /updates
  *   inbound   SSE update frame (or catch-up GET) → decrypt →
- *             importBatch → Loro events → LoroSyncPlugin → editor
+ *             importLive → Loro events → LoroSyncPlugin → editor
  *
  * Version bookkeeping invariant: everything covered by `lastSentVersion`
  * has either been queued for send or arrived from remote. `applyRemote`
@@ -33,9 +33,11 @@
 import { installRemoteStepBuilder } from './remote-steps.js';
 import { LoroDoc, VersionVector, decodeImportBlobMeta } from 'loro-crdt';
 import type { Node as PMNode } from 'prosemirror-model';
-import type { Plugin } from 'prosemirror-state';
+import { Plugin } from 'prosemirror-state';
 import { EditorState } from 'prosemirror-state';
-import { LoroSyncPlugin, updateLoroToPmState } from 'loro-prosemirror';
+import { isSyncOrigin } from '../sync-origin.js';
+import { roleCanEdit, type SessionRole } from './session-role.js';
+import { LoroSyncPlugin, updateLoroToPmState, loroSyncPluginKey, loroUndoPluginKey } from 'loro-prosemirror';
 import { appVersion } from '../install-info.js';
 import { compareAppVersions, MOVABLE_ROOMS_MIN_VERSION } from '../relay-protocol.js';
 import { schema } from '../../schema/index.js';
@@ -61,6 +63,12 @@ import {
 } from './room-client.js';
 
 type SyncDoc = Parameters<typeof LoroSyncPlugin>[0]['doc'];
+
+declare global {
+  /** loro-prosemirror patch: imports inside `fn` render as one editor transaction. */
+  // eslint-disable-next-line no-var
+  var __CM_HOLD_IMPORTS__: (<T>(doc: LoroDoc, fn: () => T) => T) | undefined;
+}
 
 /** Mirrors loro-prosemirror's configLoroTextStyle: PM `inclusive` is the
  *  local statement of Peritext expand behavior; the CRDT-level config
@@ -107,8 +115,11 @@ export interface CollabSessionCallbacks {
   onGuestAuthExpired?: () => void;
   /** The session ended (host ended it, or the room was GC'd). Terminal. */
   onEnded?: () => void;
-  /** The room is at participant capacity. Terminal for this attempt. */
-  onFull?: () => void;
+  /** The room is at participant capacity. Terminal for this attempt.
+   *  `viewPass` (2026-10-24+ relays) lets the UI offer "watch instead". */
+  onFull?: (viewPass: string | null) => void;
+  /** Spectator count in the room (hello + every change). */
+  onWatchers?: (count: number) => void;
   /** An established session's reconnects keep 409ing (seat taken past
    *  the relay's reap window). Retrying continues; the UI should explain. */
   onCrowdedOut?: () => void;
@@ -139,7 +150,7 @@ export interface CollabSessionOptions {
   client: RoomsClient;
   roomId: string;
   key: CryptoKey;
-  role: 'host' | 'participant';
+  role: SessionRole;
   callbacks?: CollabSessionCallbacks;
   /** Outbound debounce; keystrokes within a window coalesce into one
    *  wire update. */
@@ -179,6 +190,29 @@ export interface CollabSessionOptions {
   updateByteLimit?: number;
 }
 
+/** Plugin state key so the lock can be found (tests, the shell's
+ *  "is this doc view-only?" check). */
+export const SPECTATOR_LOCK_META = 'collabSpectatorLock';
+
+/** Reject every document-changing transaction except the binding's own
+ *  (sync-origin). See CollabSession.plugins(). */
+export function spectatorLockPlugin(): Plugin {
+  return new Plugin({
+    filterTransaction(tr) {
+      if (!tr.docChanged) return true;
+      // The shell's tagger stamps binding transactions sync-origin; the
+      // binding's own metas are checked too so the lock holds in any view
+      // (a pane without the tagger, a test harness) without blocking the
+      // remote updates the spectator is there to see.
+      return (
+        isSyncOrigin(tr) ||
+        tr.getMeta(loroSyncPluginKey) !== undefined ||
+        tr.getMeta(loroUndoPluginKey) !== undefined
+      );
+    },
+  });
+}
+
 function bytesEq(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
@@ -188,7 +222,11 @@ function bytesEq(a: Uint8Array, b: Uint8Array): boolean {
 export class CollabSession {
   readonly loroDoc: LoroDoc;
   readonly roomId: string;
-  readonly role: 'host' | 'participant';
+  readonly role: SessionRole;
+  /** The room's SPECTATOR credential, when this peer holds one: hosts get
+   *  it at create, joiners fetch it lazily (any room credential may), a
+   *  spectator's own bearer IS one. Null until known / on old relays. */
+  viewPass: string | null = null;
 
   private readonly client: RoomsClient;
   private readonly key: CryptoKey;
@@ -308,8 +346,31 @@ export class CollabSession {
    *  review, SC1). */
   private pendingSpans = new Map<string, { start: number; end: number }>();
 
+  /** Import relay frames into the LIVE doc one at a time, never via
+   *  `importBatch`: Loro reattaches a batch with a checkout, and the checkout
+   *  clears the session UndoManager (the next local edit misses the stack too).
+   *  A burst of partner frames used to wipe Ctrl+Z (field report 2026-10-24).
+   *  A multi-frame burst still renders as ONE editor transaction under the
+   *  binding's hold (`__CM_HOLD_IMPORTS__`, loro-prosemirror patch). Returns
+   *  whether these frames left ops waiting on missing deps. */
+  private importLive(blobs: Uint8Array[]): boolean {
+    const parkedPeers = new Set<string>();
+    const importEach = (): void => {
+      for (const blob of blobs) {
+        const status = this.loroDoc.import(blob);
+        this.notePending(status);
+        for (const peer of status.pending?.keys() ?? []) parkedPeers.add(peer);
+      }
+    };
+    const hold = globalThis.__CM_HOLD_IMPORTS__;
+    if (blobs.length > 1 && hold) hold(this.loroDoc, importEach);
+    else importEach();
+    // notePending already dropped the spans a later frame resolved.
+    return [...parkedPeers].some((peer) => this.pendingSpans.has(peer));
+  }
+
   /** Fold one import's status into the parked-span ledger and re-derive
-   *  pendingImports. Call after EVERY importBatch. */
+   *  pendingImports. Call after EVERY live import. */
   private notePending(status: { pending: Map<string, { start: number; end: number }> | null }): void {
     if (status.pending) {
       for (const [peer, span] of status.pending) {
@@ -392,7 +453,7 @@ export class CollabSession {
   }): Promise<{ session: CollabSession; shareCode: string; guestPass: string | null }> {
     const keyBytes = generateRoomKeyBytes();
     const key = await importRoomKey(keyBytes);
-    const { roomId, guestPass } = await opts.client.createRoom();
+    const { roomId, guestPass, viewPass } = await opts.client.createRoom();
 
     const loroDoc = new LoroDoc();
     configTextStyle(loroDoc);
@@ -426,6 +487,7 @@ export class CollabSession {
     const floor =
       session.childrenFormat() === 'movable' ? MOVABLE_ROOMS_MIN_VERSION : undefined;
     session.guestPass = guestPass;
+    session.viewPass = viewPass;
     return { session, shareCode: encodeShareCode(roomId, keyBytes, floor), guestPass };
   }
 
@@ -434,6 +496,12 @@ export class CollabSession {
   static async join(opts: {
     roomId: string;
     keyBytes: Uint8Array;
+    /** 'spectator' joins view-only (the client MUST authenticate with a
+     *  view pass for the relay side to hold). 'host': rejoining a session
+     *  THIS user started (the recent-rooms record says host) keeps the
+     *  host role — End for everyone, compaction — instead of coming back
+     *  as a participant who can only leave. Default 'participant'. */
+    role?: SessionRole;
     client: RoomsClient;
     callbacks?: CollabSessionCallbacks;
     flushMs?: number;
@@ -451,10 +519,6 @@ export class CollabSession {
     stallMs?: number;
     maxBackoffMs?: number;
     updateByteLimit?: number;
-    /** Rejoining a session THIS user started (the recent-rooms record says
-     *  host): keep the host role — End for everyone, compaction — instead
-     *  of coming back as a participant who can only leave. */
-    role?: 'host' | 'participant';
   }): Promise<CollabSession> {
     const key = await importRoomKey(opts.keyBytes);
     const loroDoc = new LoroDoc();
@@ -501,7 +565,7 @@ export class CollabSession {
   static async resume(opts: {
     roomId: string;
     keyBytes: Uint8Array;
-    role: 'host' | 'participant';
+    role: SessionRole;
     snapshot: Uint8Array;
     increments: Uint8Array[];
     lastSeq: number;
@@ -602,7 +666,30 @@ export class CollabSession {
   plugins(): Plugin[] {
     // Partner edits render as exact steps (see remote-steps.ts).
     installRemoteStepBuilder();
-    return [LoroSyncPlugin({ doc: this.loroDoc as SyncDoc })];
+    const sync = LoroSyncPlugin({ doc: this.loroDoc as SyncDoc });
+    // A spectator's editor admits ONLY the binding's own transactions
+    // (tagged sync-origin by the shell's tagger): typing, paste, drag,
+    // comments, markers, undo — every local document change is refused
+    // here, before the CRDT ever sees it, so nothing is queued and the
+    // relay's write refusal is a backstop rather than the gate. Selection
+    // and meta-only transactions pass (caret, read mode, decorations).
+    if (this.readOnly) return [sync, spectatorLockPlugin()];
+    return [sync];
+  }
+
+  /** True for a spectator: no local edits, no outbound writes. */
+  get readOnly(): boolean {
+    return !roleCanEdit(this.role);
+  }
+
+  /** The room's view pass, fetching it once from the relay when this
+   *  peer doesn't hold one yet (any room credential may mint it). Null
+   *  on relays without spectators or when the guest-pass feature is off. */
+  async ensureViewPass(): Promise<string | null> {
+    if (this.viewPass || this.ended) return this.viewPass;
+    const p = await this.client.fetchViewPass(this.roomId);
+    if (p && !this.viewPass) this.viewPass = p;
+    return this.viewPass;
   }
 
   start(): void {
@@ -671,8 +758,11 @@ export class CollabSession {
           this.callbacks.onAccessChanged?.(mode);
         },
         onJoinRequests: () => this.callbacks.onJoinRequests?.(),
-        onFull: () => {
-          this.callbacks.onFull?.();
+        onFull: (viewPass) => {
+          this.callbacks.onFull?.(viewPass);
+        },
+        onWatchers: (n) => {
+          this.callbacks.onWatchers?.(n);
         },
         onCrowdedOut: () => {
           this.callbacks.onCrowdedOut?.();
@@ -702,9 +792,17 @@ export class CollabSession {
     this.auditTimer = setInterval(audit, 30 * 60_000);
   }
 
-  /** True while this (remote) participant is admitted read-only. */
-  get readOnly(): boolean {
+  /** True while this (remote) participant is admitted read-only — a
+   *  federation admission the home side can flip live (`setAccess`).
+   *  Distinct from `readOnly` (a spectator, fixed for the session). */
+  get accessReadOnly(): boolean {
     return this.readOnlyMode;
+  }
+
+  /** No local edits for either reason: a spectator, or a participant
+   *  admitted read-only. */
+  get viewOnly(): boolean {
+    return this.readOnly || this.readOnlyMode;
   }
 
   /** Apply a read-only / editing admission (initial join, or a live
@@ -792,7 +890,7 @@ export class CollabSession {
    *  persist record to the next resume. Re-posting is idempotent for the
    *  CRDT, so a duplicate row costs nothing. */
   flushForUnload(): void {
-    if (this.ended) return;
+    if (this.ended || this.viewOnly) return;
     this.flush();
     const head = this.outQueue[0];
     if (head?.encrypted && head.encrypted.length <= UNLOAD_KEEPALIVE_MAX_BYTES) {
@@ -866,14 +964,14 @@ export class CollabSession {
   private inboundSeqs: number[] = [];
   private static readonly IMPORTED_SEQS_CAP = 5000;
   private catchUpRowsSkipped = 0;
-  /** Byte bound on one inbound importBatch: a push burst (a reconnect
+  /** Byte bound on one inbound drain: a push burst (a reconnect
    *  repost, the audit's full-history chunks) used to land as ONE
    *  synchronous import of everything the 120ms window collected
    *  (2026-09-01 review, SC13). The buffer is drop-safe by design
    *  (the cursor never advanced past it), so slicing it is too. */
   private readonly inboundBatchBytes: number;
   private inboundDrains = 0;
-  /** Byte bound on one full-resync importBatch: the escalation path
+  /** Byte bound on one full-resync import slice: the escalation path
    *  buffered every decrypted blob of the whole room, then blocked the
    *  main thread on one giant import (SC12). pendingLeft semantics are
    *  preserved by folding every slice's status into the span ledger. */
@@ -925,10 +1023,10 @@ export class CollabSession {
   /** Export any local ops since the last flush into the send queue.
    *  Synchronous by design so `applyRemote` can call it pre-import. */
   flush(): void {
-    if (this.ended) return;
-    // Read-only participants never send (their editor blocks local
-    // edits; anything else stays local until an upgrade flushes it).
-    if (this.readOnlyMode) return;
+    // Spectators and read-only participants never send (their editor
+    // blocks local edits; anything else stays local until an upgrade —
+    // read-only participants only — flushes it).
+    if (this.ended || this.viewOnly) return;
     this.loroDoc.commit();
     const version = this.loroDoc.version();
     // An empty diff still exports a ~22-byte header blob, so gate on the
@@ -950,7 +1048,7 @@ export class CollabSession {
   private stopping = false;
 
   private drainQueue(): Promise<void> {
-    if (this.sending || this.ended || this.readOnlyMode) return this.drainPromise ?? Promise.resolve();
+    if (this.sending || this.ended || this.viewOnly) return this.drainPromise ?? Promise.resolve();
     const p = this.drainQueueInner().finally(() => {
       if (this.drainPromise === p) this.drainPromise = null;
     });
@@ -1212,9 +1310,10 @@ export class CollabSession {
     // Per-FRAME bookkeeping happens at arrival: the audit ledger is
     // per relay row (foldTailMeta), and the echo watchdog already
     // cleared in onUpdate. The IMPORT is micro-batched below — frames
-    // arriving within receiveBatchMs land as one importBatch → one
-    // binding transaction → one plugin-pipeline pass, instead of a
-    // full cycle per frame (perf study 2026-08-06).
+    // arriving within receiveBatchMs drain together → one binding
+    // transaction → one plugin-pipeline pass, instead of a full cycle per
+    // frame (perf study 2026-08-06). Each frame is still its own Loro
+    // import so undo history survives (see importLive).
     this.foldTailMeta(u.seq, plain);
     // NOTE: the decrypt above is awaited, so buffer order is arrival-of-
     // plaintext order, not seq order. Harmless for a CRDT import batch —
@@ -1250,9 +1349,9 @@ export class CollabSession {
     }
     this.inboundDrains++;
     this.flush(); // capture local diff before import (see module doc)
-    let status: ReturnType<LoroDoc['importBatch']>;
+    let parked: boolean;
     try {
-      status = this.loroDoc.importBatch(batch);
+      parked = this.importLive(batch);
     } catch (err) {
       // A corrupt frame fails the whole batch. NOT marking these seqs as
       // imported is what lets the next catch-up re-fetch them (knock-on
@@ -1264,7 +1363,6 @@ export class CollabSession {
     // Only now are these rows "already imported" for catch-up's skip list.
     if (this.importedSeqs.size + batchSeqs.length > CollabSession.IMPORTED_SEQS_CAP) this.importedSeqs.clear();
     for (const seq of batchSeqs) this.importedSeqs.add(seq);
-    this.notePending(status);
     this.markImportedSent();
     // The cursor does NOT advance from stream frames — ONLY from
     // catch-up pages. A pushed frame proves nothing about the rows
@@ -1282,7 +1380,7 @@ export class CollabSession {
     // fetch them now instead of waiting for the periodic catch-up. The
     // missing deps sit BELOW our cursor, so the catch-up must be
     // allowed to escalate to a full resync.
-    if (status.pending && status.pending.size > 0) {
+    if (parked) {
       void this.catchUp(true);
     }
   }
@@ -1363,13 +1461,12 @@ export class CollabSession {
           importedAny = true;
           importedCount += blobs.length;
           this.flush();
-          const status = this.loroDoc.importBatch(blobs);
+          const parked = this.importLive(blobs);
           this.markImportedSent();
           // ACCUMULATE across pages — a clean later page must not cancel
           // the full resync a dirty earlier page requested (audit find,
           // 2026-07-10).
-          pendingLeft = pendingLeft || (!!status.pending && status.pending.size > 0);
-          this.notePending(status);
+          pendingLeft = pendingLeft || parked;
         }
         const advanced = page.lastSeq > this.lastSeq;
         if (advanced) {
@@ -1400,9 +1497,8 @@ export class CollabSession {
         const importSlice = (): void => {
           if (blobs.length === 0) return;
           this.flush();
-          const status = this.loroDoc.importBatch(blobs);
+          this.importLive(blobs);
           this.markImportedSent();
-          this.notePending(status);
           this.resyncSlices++;
           importedAnySlice = true;
           blobs = [];
@@ -1510,8 +1606,9 @@ export class CollabSession {
    *  The audit reads only blob METADATA (no full import) and reposting
    *  is idempotent, so a false positive costs one oversized update. */
   async auditRoomHistory(): Promise<void> {
-    // Read-only participants can't repost (and own no ops to protect).
-    if (this.ended || this.outQueue.length > 0 || this.readOnlyMode) return;
+    // Spectators and read-only participants can't repost (and own no
+    // ops to protect).
+    if (this.ended || this.outQueue.length > 0 || this.viewOnly) return;
     try {
       // Cheap self-contained probe (~100B): the room's current compaction
       // epoch, plus any tail rows past our cursor (folded, not imported —
@@ -1578,6 +1675,7 @@ export class CollabSession {
       if (this.outQueue.length > 0) return;
       if (this.loroDoc.version().compare(this.lastSentVersion) !== 0) return;
       if (!this.versionMissingFrom(roomMax)) return;
+      if (this.viewOnly) return; // nothing of ours can be missing; never write
       console.warn(
         '[collab] the room lost ops this replica holds (compacted away?) — reposting full history',
       );
@@ -1642,7 +1740,8 @@ export class CollabSession {
   // --- presence ---
 
   async sendPresence(blob: Uint8Array, opts: { keepalive?: boolean } = {}): Promise<void> {
-    if (this.ended) return;
+    // Spectators are a count, not cursors (and the relay would 403).
+    if (this.ended || this.readOnly) return;
     // Presence frames are DELIVERED over the stream, so while it isn't
     // connected nobody can see ours (and we can't see theirs) — posting
     // is pure waste, and on a dead credential it was the bulk of an

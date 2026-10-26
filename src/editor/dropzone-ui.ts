@@ -38,7 +38,7 @@ import {
 } from './drag-controller.js';
 import { dropzoneStore, deriveDropzoneLabel, type DropzoneItem } from './dropzone-store.js';
 import { TYPE_TO_LEVEL } from './headings.js';
-import { nearestValidInsertPos } from './insert-position.js';
+import { insertAtCursorPos } from './insert-position.js';
 import { flattenZonesInSlice } from './transclusion.js';
 import { flattenSelfRefsInSlice } from './self-transclusion.js';
 import { schema, newHeadingId } from '../schema/index.js';
@@ -417,7 +417,7 @@ export class DropzoneController {
     const insertPos =
       atEnd || inReadMode
         ? view.state.doc.content.size
-        : nearestValidInsertPos(view.state.doc, view.state.selection.head, rewritten.content);
+        : insertAtCursorPos(view.state.doc, view.state.selection.head, rewritten.content);
     const tr = view.state.tr
       .insert(insertPos, rewritten.content)
       .setMeta(READ_MODE_DRAG_META, true);

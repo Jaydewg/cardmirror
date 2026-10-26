@@ -6,6 +6,7 @@ import {
   AUTOSAVE_DELAY_MS,
   DOCX_AUTOSAVE_IDLE_MS,
   autosaveDelayFor,
+  autosaveMaxWaitFor,
   autosaveEffect,
   hasLiveLinks,
   liveLinkCounts,
@@ -25,6 +26,11 @@ describe('autosave-policy', () => {
     expect(autosaveDelayFor('cmir')).toBe(AUTOSAVE_DELAY_MS);
     expect(autosaveDelayFor(null)).toBe(AUTOSAVE_DELAY_MS);
     expect(DOCX_AUTOSAVE_IDLE_MS).toBeGreaterThan(AUTOSAVE_DELAY_MS);
+  });
+
+  it('caps pending time for .cmir only', () => {
+    expect(autosaveMaxWaitFor('cmir')).toBe(30_000);
+    expect(autosaveMaxWaitFor('docx')).toBeNull();
   });
 
   it('counts live views and linked copies', () => {

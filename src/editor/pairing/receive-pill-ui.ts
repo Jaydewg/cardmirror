@@ -410,9 +410,16 @@ export class ReceivePillController {
     main.className = 'pmd-receive-row-main';
     const label = document.createElement('span');
     label.className = 'pmd-receive-row-label';
-    label.textContent = invite.title
-      ? `Invited you to collaborate on “${invite.title}”`
-      : 'Invited you to a collaboration session';
+    // A `cmview1.` code is a SPECTATE invite: joining watches the document
+    // live without editing (the session is view-only end to end).
+    const view = invite.shareCode.startsWith('cmview');
+    label.textContent = view
+      ? invite.title
+        ? `Invited you to watch “${invite.title}”`
+        : 'Invited you to watch a collaboration session'
+      : invite.title
+        ? `Invited you to collaborate on “${invite.title}”`
+        : 'Invited you to a collaboration session';
     label.title = label.textContent;
     main.appendChild(label);
     const meta = document.createElement('span');
@@ -427,8 +434,10 @@ export class ReceivePillController {
       const join = document.createElement('button');
       join.type = 'button';
       join.className = 'pmd-receive-row-join';
-      join.textContent = 'Join';
-      join.title = 'Join the collaboration session';
+      join.textContent = view ? 'Watch' : 'Join';
+      join.title = view
+        ? 'Watch the session live (view only — no editing)'
+        : 'Join the collaboration session';
       join.addEventListener('click', (e) => {
         e.stopPropagation();
         // Consume the invite only when the join actually lands: a cancelled

@@ -19,6 +19,7 @@
  * the editor.
  */
 
+import { showToast } from './toast.js';
 import type { EditorState } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { suppressAutofill } from './autofill-ignore.js';
@@ -668,11 +669,23 @@ export class FindReplaceBar {
   private doReplaceAll(): void {
     const view = this.getView();
     if (!view) return;
+    // The match list is capped (FIND_MATCH_CAP); Replace All works the
+    // capped list, so past the cap it is a partial pass — say so.
+    const before = findReplaceKey.getState(view.state)?.matches.length ?? 0;
+    const capped = before >= FIND_MATCH_CAP;
     const cmd = runReplaceAll(this.replaceInput.value);
     cmd(view.state, view.dispatch.bind(view));
     this.syncCount();
     this.renderResults();
     this.syncNavHits();
+    if (capped) {
+      const left = findReplaceKey.getState(view.state)?.matches.length ?? 0;
+      showToast(
+        left > 0
+          ? `Replaced ${FIND_MATCH_CAP.toLocaleString()} matches; ${left >= FIND_MATCH_CAP ? `${FIND_MATCH_CAP.toLocaleString()}+` : left.toLocaleString()} remain — run Replace All again.`
+          : `Replaced ${FIND_MATCH_CAP.toLocaleString()} matches.`,
+      );
+    }
   }
 
   private getState(): FindReplaceState | null {

@@ -17,6 +17,7 @@
  */
 
 import type { Command, Plugin, Transaction } from 'prosemirror-state';
+import type { SessionRole } from './session-role.js';
 
 export interface CollabPluginSource {
   /** The `DocRecord.uid` of the ONE document this session owns — the registry
@@ -106,6 +107,8 @@ export interface CollabInviteTarget {
   codes: string[];
   label: string;
   via?: string;
+  /** 'view' invites the recipient as a SPECTATOR (view code); default 'edit'. */
+  mode?: 'edit' | 'view';
 }
 
 /** Invite-send seam: the Send pill's click mode hands a picked
@@ -201,6 +204,28 @@ export function collabActiveInviteLink(): string | null {
   return inviteLinkGetter?.() ?? null;
 }
 
+/** Focused doc's session VIEW code / VIEW link (spectator invites) —
+ *  same registration pattern. The link needs the room's view pass; null
+ *  until the session has one (hosts get it at create, joiners fetch it). */
+let viewCodeGetter: (() => string | null) | null = null;
+let viewLinkGetter: (() => string | null) | null = null;
+
+export function setCollabViewCodeGetter(fn: (() => string | null) | null): void {
+  viewCodeGetter = fn;
+}
+
+export function collabActiveViewCode(): string | null {
+  return viewCodeGetter?.() ?? null;
+}
+
+export function setCollabViewLinkGetter(fn: (() => string | null) | null): void {
+  viewLinkGetter = fn;
+}
+
+export function collabActiveViewLink(): string | null {
+  return viewLinkGetter?.() ?? null;
+}
+
 /** Live copresence for one open doc's session — connection status + who's here —
  *  read by the multi-pane shell to paint each slot's footer with ITS visible
  *  doc's session state. Provided by the lazily-loaded collab-ui once it's up;
@@ -208,14 +233,17 @@ export function collabActiveInviteLink(): string | null {
  *  so the always-loaded shell never imports the heavy collab module. */
 export interface CollabCopresence {
   /** This peer's role in the session — drives the close dialog's End-vs-Leave
-   *  wording (a host ends for everyone; a participant leaves). */
-  role: 'host' | 'participant';
+   *  wording (a host ends for everyone; a participant leaves; a spectator
+   *  stops watching). */
+  role: SessionRole;
   connected: boolean;
   queued: number;
   peers: { name: string; color: string; self: boolean; remote?: boolean; server?: string }[];
   /** Classes for the status ring around your own dot (session-chip.ts
    *  ringClasses); absent from older providers. */
   ring?: string;
+  /** Spectators in the room (they post no cursor, so they are a count). */
+  watchers: number;
 }
 
 let copresenceProvider: ((uid: string) => CollabCopresence | null) | null = null;

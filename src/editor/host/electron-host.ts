@@ -9,6 +9,7 @@
  */
 
 import type { LearnOp } from '../learn-store.js';
+import type { MenuRecentsPayload } from '../menu-recents.js';
 import type { DiskBase, CloudProvider } from './types.js';
 export type ClaimResult = 'fresh' | 'journaled' | 'changed' | 'unknown';
 import type {
@@ -232,6 +233,7 @@ interface ElectronAPI {
   listWindows?(): Promise<WindowListEntry[]>;
   focusWindow?(windowId: number): Promise<boolean>;
   syncLibraryRoots?(roots: string[]): Promise<void>;
+  syncWriteFolders?(folders: string[]): Promise<void>;
   grantLegacyRecents?(paths: string[]): Promise<boolean>;
   readFileAtPath(filePath: string): Promise<{
     name: string;
@@ -473,6 +475,11 @@ interface ElectronAPI {
    *  PM-keymap strings; pass `null` for commands with no current
    *  binding so the accelerator slot is left blank. */
   setMenuBindings(bindings: Record<string, string | null>): Promise<void>;
+  /** Push recent files + saved sessions for File → Open Recent / Rejoin
+   *  Recent Session (see menu-recents.ts). */
+  setMenuRecents(payload: MenuRecentsPayload): Promise<void>;
+  /** Subscribe to picks from those submenus. Returns an unsubscribe. */
+  onMenuOpenRecent(handler: (pick: { kind: 'file' | 'session'; id: string }) => void): () => void;
   /** Run a manual auto-update check (mirrors Help → Check for
    *  Updates…). Resolves with a status the UI can render. */
   checkForUpdates(): Promise<{
@@ -797,6 +804,10 @@ export class ElectronHost implements Host {
   /** Read-scope plumbing — no-ops gracefully on an older preload. */
   async syncLibraryRoots(roots: string[]): Promise<void> {
     await api().syncLibraryRoots?.(roots);
+  }
+  /** Write-scope plumbing (main's isWriteAllowed) — same graceful no-op. */
+  async syncWriteFolders(folders: string[]): Promise<void> {
+    await api().syncWriteFolders?.(folders);
   }
   async grantLegacyRecents(paths: string[]): Promise<boolean> {
     return (await api().grantLegacyRecents?.(paths)) ?? false;
@@ -1401,6 +1412,15 @@ export class ElectronHost implements Host {
    *  settings change; main de-dups by reassigning its store. */
   async setMenuBindings(bindings: Record<string, string | null>): Promise<void> {
     await api().setMenuBindings(bindings);
+  }
+
+  async setMenuRecents(payload: MenuRecentsPayload): Promise<void> {
+    // Older preloads (a running app whose renderer hot-reloaded) lack it.
+    await api().setMenuRecents?.(payload);
+  }
+
+  onMenuOpenRecent(handler: (pick: { kind: 'file' | 'session'; id: string }) => void): () => void {
+    return api().onMenuOpenRecent?.(handler) ?? (() => {});
   }
 
   async checkForUpdates(): Promise<{

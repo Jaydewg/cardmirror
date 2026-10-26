@@ -12,10 +12,11 @@
 
 import { chipStateDetail, chipStateText, renderPresenceInto, type ChipSessionModel } from './session-chip.js';
 import type { JoinRequestWatcher, JoinRow } from '../federation/collab-federation.js';
+import type { SessionRole } from './session-role.js';
 
 export interface SessionPanelCtx {
   model(): ChipSessionModel | null;
-  role: 'host' | 'participant';
+  role: SessionRole;
   /** Where the session lives, labelled (null = unknown). */
   homeLabel: string | null;
   watcher: JoinRequestWatcher | null;
@@ -286,14 +287,16 @@ function build(m: ChipSessionModel, rows: JoinRow[], ctx: SessionPanelCtx): HTML
   // out of view (it used to wrap End session under the open menu).
   const actionsRow = h('div', 'pmd-collab-panel-foot-row');
   const leaveSplit = h('div', 'pmd-collab-panel-split pmd-collab-panel-leave');
-  leaveSplit.appendChild(button(ctx.role === 'host' ? 'End session' : 'Leave session', () => {
+  leaveSplit.appendChild(button(ctx.role === 'host' ? 'End session' : ctx.role === 'spectator' ? 'Stop watching' : 'Leave session', () => {
     closeSessionPanel();
     ctx.leave();
   }, {
     kind: 'danger',
     title: ctx.role === 'host'
       ? 'End it for everyone, keep your copy, and go to the Home screen'
-      : 'Leave (you keep your copy) and go to the Home screen',
+      : ctx.role === 'spectator'
+        ? 'Stop watching (the copy becomes yours to edit) and go to the Home screen'
+        : 'Leave (you keep your copy) and go to the Home screen',
   }));
   if (ctx.role !== 'host' && ctx.endForEveryone) {
     const lt = button('▾', () => {

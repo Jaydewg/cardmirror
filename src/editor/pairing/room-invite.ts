@@ -23,7 +23,7 @@ export const ROOM_INVITE_ITEM_TYPE = 'room-invite';
  *  clients drop the invite with the version-mismatch toast rather than
  *  rendering a dead card row. Keep in sync with the release that ships
  *  invite support. */
-import { MOVABLE_ROOMS_MIN_VERSION } from '../relay-protocol.js';
+import { MOVABLE_ROOMS_MIN_VERSION, SPECTATOR_MIN_VERSION } from '../relay-protocol.js';
 
 export const ROOM_INVITE_MIN_VERSION = '0.1.0-beta.8';
 
@@ -31,13 +31,18 @@ export const ROOM_INVITE_MIN_VERSION = '0.1.0-beta.8';
  *  rooms require the movable-capable build — an older client joining
  *  one could not materialize its children at all, so it must decline
  *  the invite (existing minReceiverVersion UX) rather than import. */
-export function roomInviteFloor(format: 'movable' | 'list'): string {
+export function roomInviteFloor(format: 'movable' | 'list', mode: 'edit' | 'view' = 'edit'): string {
+  // A spectate invite needs a client that can run view-only — newer than
+  // either edit floor — so old receivers get the update toast, not a Join.
+  if (mode === 'view') return SPECTATOR_MIN_VERSION;
   return format === 'movable' ? MOVABLE_ROOMS_MIN_VERSION : ROOM_INVITE_MIN_VERSION;
 }
 
 export interface RoomInvitePayload {
   /** `cmshare1.<roomId>.<key>` (or `cmshare2.….<minVersion>` for
-   *  versioned rooms) — everything a client needs to join. */
+   *  versioned rooms) — everything a client needs to join. A SPECTATE
+   *  invite carries the room's `cmview1.…` code instead: same room and
+   *  key, joined view-only. */
   shareCode: string;
   /** Host's doc title at invite time, for the pill row ('' if unknown). */
   title: string;
@@ -64,7 +69,8 @@ export function parseRoomInvite(item: Pick<InboxItem, 'type' | 'sliceJson'>): Ro
   // the envelope, not this parse, is what keeps old builds out.
   // Federation codes (`cmshare1f` / `cmshare2f`, relay/FEDERATION.md
   // §2.1) are invites too — the join flow does the cross-server part.
-  if (typeof shareCode !== 'string' || !/^cmshare[12]f?\./.test(shareCode)) return null;
+  // View codes (`cmview1`) are spectator invites.
+  if (typeof shareCode !== 'string' || !/^(?:cmshare[12]f?|cmview1)\./.test(shareCode)) return null;
   const title = (p as Record<string, unknown>)['title'];
   return { shareCode, title: typeof title === 'string' ? title : '' };
 }

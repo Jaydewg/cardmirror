@@ -300,6 +300,8 @@ export class BrowserHost implements Host {
     // `ensureWritable`.
     const file = await handle.getFile();
     const buf = await file.arrayBuffer();
+    // Freshness baseline for the changed-on-disk guard in saveExisting.
+    this.baselines.set(handle, { mtimeMs: file.lastModified, size: file.size });
     return {
       name: handle.name ?? file.name,
       bytes: new Uint8Array(buf),
@@ -410,6 +412,7 @@ export class BrowserHost implements Host {
       const writable = await handle.createWritable();
       await writable.write(blob);
       await writable.close();
+      await this.recordBaseline(handle);
       return {
         name: handle.name ?? suggestedName,
         handle,
@@ -426,14 +429,27 @@ export class BrowserHost implements Host {
     return { name: suggestedName };
   }
 
-  // `_opts` (the Electron changed-on-disk force flag) is accepted for
-  // interface parity and ignored — the FS Access API has no cheap
-  // stat, so this host has no changed-on-disk guard to override.
-  async saveExisting(handle: unknown, bytes: Uint8Array, _opts?: { force?: boolean }): Promise<void> {
+  /** Per-handle {mtime, size} as last seen by us (open / save). The File
+   *  System Access API has no atomic compare-and-swap, but `getFile()` is a
+   *  cheap stat, so a baseline + pre-write check catches a file that Dropbox,
+   *  another tab or another app changed since we last touched it (audit 14).
+   *  Desktop has the same guard in doc-writes.ts. */
+  private baselines = new WeakMap<object, { mtimeMs: number; size: number }>();
+
+  async saveExisting(handle: unknown, bytes: Uint8Array, opts?: { force?: boolean }): Promise<void> {
     if (!handle || typeof (handle as FileSystemFileHandle).createWritable !== 'function') {
       throw new Error('BrowserHost: saveExisting requires a File System Access handle.');
     }
     const fh = handle as FileSystemFileHandle;
+    const base = this.baselines.get(fh);
+    if (base && !opts?.force && typeof fh.getFile === 'function') {
+      const cur = await fh.getFile().catch(() => null);
+      if (cur && (cur.lastModified !== base.mtimeMs || cur.size !== base.size)) {
+        // Same marker the desktop guard uses: only the message crosses
+        // every boundary, and the save flows key their conflict UI off it.
+        throw new Error(`EMODIFIED: "${fh.name ?? 'file'}" changed on disk since it was opened or last saved here.`);
+      }
+    }
     // VERIFY only — never prompt here. Write permission is granted ahead of time
     // by `ensureWritable` from a user gesture (Save click / autosave toggle), so
     // a gesture-less autosave fire that lacks permission fails cleanly (the
@@ -447,6 +463,7 @@ export class BrowserHost implements Host {
     const blob = bytesToBlob(bytes, fh.name ?? '');
     try {
       await writeThrough(fh, blob);
+      await this.recordBaseline(fh);
     } catch (err) {
       if (!isRetriableWriteError(err)) throw err;
       // Chromium's swap-file write can throw InvalidStateError when the
@@ -458,6 +475,7 @@ export class BrowserHost implements Host {
       await new Promise((r) => setTimeout(r, 300));
       try {
         await writeThrough(fh, blob);
+        await this.recordBaseline(fh);
       } catch (err2) {
         if (!isRetriableWriteError(err2)) throw err2;
         // Deterministic refusal, not a race — cloud-backed ChromeOS mounts
@@ -478,6 +496,16 @@ export class BrowserHost implements Host {
    *  Returns null when there's no readable handle (so the caller skips the
    *  check rather than blocking) — `getFile()` needs only read access, which
    *  a recoverable handle already has. */
+  /** Adopt the file's current {mtime, size} as the baseline (after our own write). */
+  private async recordBaseline(fh: FileSystemFileHandle): Promise<void> {
+    try {
+      const f = await fh.getFile();
+      this.baselines.set(fh, { mtimeMs: f.lastModified, size: f.size });
+    } catch {
+      this.baselines.delete(fh);
+    }
+  }
+
   async statFile(handle: unknown): Promise<{ mtimeMs: number; size: number } | null> {
     const fh = handle as FileSystemFileHandle | null;
     if (!fh || typeof fh.getFile !== 'function') return null;

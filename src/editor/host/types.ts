@@ -354,7 +354,10 @@ export interface SpawnWindowPayload {
   diskBase?: DiskBase;
   filename: string;
   bytes: Uint8Array;
-  handle: string | null;
+  /** Electron: the path string. Web (PWA): the FileSystemFileHandle —
+   *  it crosses to the new window via IndexedDB (structured clone), so
+   *  the spawned doc keeps in-place save and autosave (audit 17). */
+  handle: string | FileSystemFileHandle | null;
   format: 'cmir' | 'docx' | null;
   /** True when the file was genuinely 0 bytes on disk — set by main's
    *  OS-open path only; the receiving window opens it as a blank doc

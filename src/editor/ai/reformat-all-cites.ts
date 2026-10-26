@@ -45,8 +45,8 @@ import { showToast } from '../toast.js';
 import { postNotice } from '../status-notices.js';
 import {
   DEFAULT_AI_CITE_PROMPT,
-  CITE_TOKENS_MARKED_META,
   buildCiteTransaction,
+  citeLeftUnstyled,
   parseCiteResponse,
   resolveCitePrompt,
 } from './cite-creator.js';
@@ -343,7 +343,7 @@ async function reformatAllCites(
           continue;
         }
         lease.apply(tr);
-        if (parsed.tokens.length > 0 && tr.getMeta(CITE_TOKENS_MARKED_META) === 0) s.unstyled++;
+        if (citeLeftUnstyled(parsed, tr)) s.unstyled++;
         s.done++;
         streak = 0;
       } catch (e) {

@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Node as PMNode } from 'prosemirror-model';
+import { Transform } from 'prosemirror-transform';
 import { schema } from '../../src/schema/index.js';
 import {
   countReadAloudSplit,
@@ -66,8 +67,91 @@ describe('countReadAloudSplit', () => {
     expect(countReadAloudWords(fixtureDoc())).toBe(17); // total wrapper agrees
   });
 
+  it('a whole-doc recount after an edit reflects it (per-child cache)', () => {
+    const doc = fixtureDoc();
+    expect(countReadAloudSplit(doc)).toEqual({ body: 7, other: 10 });
+    // Append 2 highlighted words to the card body; the analytic child is reused.
+    const bodyEnd = doc.child(0).nodeSize - 2;
+    const edited = new Transform(doc).insert(bodyEnd, schema.text(' two more', [m['highlight']!.create()])).doc;
+    expect(countReadAloudSplit(edited)).toEqual({ body: 9, other: 10 });
+    expect(countReadAloudSplit(edited)).toEqual(countReadAloudSplit(edited, 0, edited.content.size));
+  });
+
   it('empty range counts nothing', () => {
     expect(countReadAloudSplit(fixtureDoc(), 3, 3)).toEqual({ body: 0, other: 0 });
+  });
+});
+
+describe('words split across formatting runs', () => {
+  const hl = (color = 'yellow') => m['highlight']!.create({ color });
+  const body = (...runs: PMNode[]) =>
+    n['doc']!.create(null, [
+      n['card']!.create(null, [
+        n['tag']!.create({ id: 'T' }, schema.text('T')),
+        n['card_body']!.create(null, runs),
+      ]),
+    ]);
+  const bodyWords = (doc: PMNode) => countReadAloudSplit(doc).body;
+
+  it('a word whose underline ends mid-word counts once', () => {
+    const doc = body(
+      schema.text('re', [m['underline_mark']!.create(), hl()]),
+      schema.text('highlight', [hl()]),
+    );
+    expect(bodyWords(doc)).toBe(1);
+  });
+
+  it('a word whose highlight color changes mid-word counts once', () => {
+    const doc = body(schema.text('Ameri', [hl('yellow')]), schema.text('ca', [hl('green')]));
+    expect(bodyWords(doc)).toBe(1);
+  });
+
+  it('partial-word highlighting still counts each highlighted fragment', () => {
+    const doc = body(
+      schema.text('U', [hl()]),
+      schema.text('nited '),
+      schema.text('S', [hl()]),
+      schema.text('tates of '),
+      schema.text('A', [hl()]),
+      schema.text('merica'),
+    );
+    expect(bodyWords(doc)).toBe(3);
+  });
+
+  it('a word split between highlighted and shaded counts only the unlocked piece', () => {
+    const doc = body(
+      schema.text('Ame', [hl()]),
+      schema.text('rica', [hl(), m['shading']!.create()]),
+    );
+    expect(bodyWords(doc)).toBe(1);
+  });
+
+  it('a cite word half cite-marked, half highlighted counts once in total', () => {
+    const doc = n['doc']!.create(null, [
+      n['card']!.create(null, [
+        n['tag']!.create({ id: 'T' }, schema.text('T')),
+        n['cite_paragraph']!.create(null, [
+          schema.text('Bro', [m['cite_mark']!.create()]),
+          schema.text('oks', [hl()]),
+        ]),
+      ]),
+    ]);
+    const counts = countReadAloudSplit(doc);
+    // 1 tag word + the single cite word, kept in the first piece's bucket.
+    expect(counts).toEqual({ body: 0, other: 2 });
+  });
+
+  it('a space at the run boundary keeps two words apart', () => {
+    const doc = body(schema.text('foo ', [hl()]), schema.text('bar', [hl('green')]));
+    expect(bodyWords(doc)).toBe(2);
+  });
+
+  it('the split-word fix carries through to read time', () => {
+    const doc = body(
+      schema.text('re', [m['underline_mark']!.create(), hl()]),
+      schema.text('highlight', [hl()]),
+    );
+    expect(readTimeSeconds({ body: bodyWords(doc), other: 0 }, { wpm: 60 })).toBe(1);
   });
 });
 

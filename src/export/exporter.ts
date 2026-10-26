@@ -12,6 +12,7 @@
  */
 
 import type { Mark, Node as PMNode } from 'prosemirror-model';
+import { READING_MARKER_COLOR, readingMarkerNodeText } from '../schema/reading-marker.js';
 import {
   el,
   emptyEl,
@@ -470,7 +471,12 @@ class DocxExporter {
       // same reconciliation so a comment that spans across an
       // inline image stays continuous.
       const wanted = new Set<string>();
-      if (child.isText || child.type.name === 'image' || child.type.name === 'footnote') {
+      if (
+        child.isText ||
+        child.type.name === 'image' ||
+        child.type.name === 'footnote' ||
+        child.type.name === 'reading_marker'
+      ) {
         for (const mark of child.marks) {
           if (mark.type.name !== 'comment_range') continue;
           const id = String(mark.attrs['threadId'] ?? '');
@@ -485,6 +491,13 @@ class DocxExporter {
         this.emitImageRun(child);
       } else if (child.type.name === 'footnote') {
         this.emitFootnoteRef(child);
+      } else if (child.type.name === 'reading_marker') {
+        // The atom form of the reading marker goes out as the red run
+        // Word (and older CardMirror builds) understand.
+        const fontColor = child.type.schema.marks['font_color'];
+        const marks = child.marks.filter((m) => m.type.name !== 'font_color');
+        if (fontColor) marks.push(fontColor.create({ color: READING_MARKER_COLOR }));
+        this.emitTextRun(readingMarkerNodeText(child), marks);
       }
       // Other inline non-text nodes: defensive no-op.
     });

@@ -129,6 +129,7 @@ import socket
 import threading
 import time
 import uuid
+import zlib
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -323,6 +324,33 @@ def _public(name: str) -> dict:
     Opt-in — unmarked fields are never published. Public keys are a client
     contract: rename the Python field freely, never the public name."""
     return {"public": name}
+
+
+def gunzip_bounded(raw: bytes, max_bytes: int) -> bytes:
+    """Inflate `raw` but stop as soon as the output would exceed `max_bytes`.
+
+    gzip.decompress() inflates the whole body before any size check runs, so a
+    30 MiB upload could expand toward ~30 GiB (gzip's ~1032:1 ceiling) in
+    process memory first. Streaming through zlib with a running cap bounds the
+    memory a malicious body can take to max_bytes + one chunk.
+    (Security report 2026-10-08.)
+    """
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)  # gzip framing
+    out = bytearray()
+    view = memoryview(raw)
+    step = 256 * 1024
+    for i in range(0, len(view), step):
+        out += d.decompress(view[i:i + step], max_bytes + 1 - len(out))
+        if len(out) > max_bytes:
+            raise ValueError("decompressed payload too large")
+        # Input the decompressor held back because of the output cap means
+        # the body is bigger than allowed; don't keep feeding it.
+        if d.unconsumed_tail:
+            raise ValueError("decompressed payload too large")
+    out += d.flush()
+    if len(out) > max_bytes:
+        raise ValueError("decompressed payload too large")
+    return bytes(out)
 
 
 @dataclass(frozen=True)
@@ -1053,7 +1081,9 @@ def _decode_message_body(raw: bytes, content_encoding: Optional[str]) -> tuple[d
 
     if "gzip" in (content_encoding or "").lower():
         try:
-            data = gzip.decompress(raw)
+            data = gunzip_bounded(raw, LIMITS.max_message_bytes)
+        except ValueError:
+            raise HTTPException(413, "payload too large")
         except Exception:
             raise HTTPException(400, "invalid gzip body")
     else:
@@ -1253,11 +1283,17 @@ def delete_message(msg_id: str, db: Session = Depends(get_db)) -> Response:
 # ── Rooms (collaboration sessions) ───────────────────────────────────
 
 
-def _room_or_error(db: Session, room_id: str, for_update: bool = False) -> RelayRoom:
-    query = db.query(RelayRoom).filter(RelayRoom.id == room_id)
+def _room_or_error(db: Session, room_id: str, *, for_update: bool = False, for_share: bool = False) -> RelayRoom:
+    """Load the room. `for_update` takes the row lock that serializes writers
+    (compaction vs. compaction, compaction vs. the bytes_used updates);
+    `for_share` lets readers see snapshot + tail from one consistent point
+    rather than straddling a compaction commit. (sqlite ignores both.)"""
+    q = db.query(RelayRoom).filter(RelayRoom.id == room_id)
     if for_update:
-        query = query.with_for_update()
-    room = query.one_or_none()
+        q = q.with_for_update()
+    elif for_share:
+        q = q.with_for_update(read=True)
+    room = q.one_or_none()
     if room is None:
         raise HTTPException(404, "no such room")
     if room.tombstoned:

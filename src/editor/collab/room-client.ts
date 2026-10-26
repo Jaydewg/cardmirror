@@ -315,13 +315,19 @@ export class RoomsClient {
     }
   }
 
-  async createRoom(): Promise<{ roomId: string; guestPass: string | null }> {
+  async createRoom(): Promise<{ roomId: string; guestPass: string | null; viewPass: string | null }> {
     const res = await this.request('/rooms', { method: 'POST', headers: this.headers() });
-    const body = await this.readJson<{ roomId?: string; guestPass?: string }>(res, '/rooms');
+    const body = await this.readJson<{ roomId?: string; guestPass?: string; viewPass?: string }>(res, '/rooms');
     if (!body.roomId) throw new RoomsError(0, 'malformed createRoom response');
     // guestPass rides along only when the relay's guest_pass flip is on
     // (web-collab Phase 1); absence is the dormant default, not an error.
-    return { roomId: body.roomId, guestPass: body.guestPass ?? null };
+    // viewPass (the spectator credential) comes with it on relays that
+    // mint one (2026-10-24+).
+    return {
+      roomId: body.roomId,
+      guestPass: body.guestPass ?? null,
+      viewPass: typeof body.viewPass === 'string' ? body.viewPass : null,
+    };
   }
 
   /** Re-mint a guest pass for a live room (host resume path). Null when
@@ -334,6 +340,24 @@ export class RoomsClient {
       });
       const body = await this.readJson<{ guestPass?: string }>(res, 'guest-pass');
       return body.guestPass ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Mint a SPECTATOR (view) pass for a live room — any room credential
+   *  may ask, so every participant can hand out view links and a desktop
+   *  client can swap its own credentials for the pass when it joins as a
+   *  spectator. Null when the relay predates spectators (404) or the
+   *  guest-pass feature is off. */
+  async fetchViewPass(roomId: string): Promise<string | null> {
+    try {
+      const res = await this.request(`/rooms/${roomId}/view-pass`, {
+        method: 'GET',
+        headers: this.headers(),
+      });
+      const body = await this.readJson<{ viewPass?: string }>(res, 'view-pass');
+      return typeof body.viewPass === 'string' ? body.viewPass : null;
     } catch {
       return null;
     }
@@ -510,8 +534,13 @@ export interface RoomStreamCallbacks {
   onPresence: (blob: Uint8Array) => void;
   /** Session ended (server tombstone or live `end` frame). Terminal. */
   onEnded: () => void;
-  /** Room at participant capacity (409). Terminal. */
-  onFull: () => void;
+  /** Room at participant capacity (409). Terminal. `viewPass` is the
+   *  spectator credential a 2026-10-24+ relay hands the refused editor
+   *  ("watch instead"); null from older relays or when the feature is off. */
+  onFull: (viewPass: string | null) => void;
+  /** Spectator count — from the hello frame and every `w` frame the relay
+   *  broadcasts when a viewer connects or leaves. Older relays send none. */
+  onWatchers?: (count: number) => void;
   /** An ESTABLISHED session's reconnect has hit 409 repeatedly — past the
    *  relay's ghost-stream reap window, so the seat really is taken. Fired
    *  once per run of 409s; the stream keeps retrying (a seat may open).
@@ -760,22 +789,27 @@ export class RoomStream {
       this.stats.consecutiveFailures = 0;
       this.stats.lastHelloAt = Date.now();
       let lastSeq = 0;
+      let watchers: number | null = null;
       try {
-        const parsed = JSON.parse(dataText || '{}') as { lastSeq?: number };
+        const parsed = JSON.parse(dataText || '{}') as { lastSeq?: number; watchers?: number };
         if (typeof parsed.lastSeq === 'number') lastSeq = parsed.lastSeq;
+        if (typeof parsed.watchers === 'number') watchers = parsed.watchers;
       } catch {
         /* malformed hello data — treat as 0 */
       }
       this.opts.callbacks.onHello(lastSeq);
+      if (watchers !== null) this.opts.callbacks.onWatchers?.(watchers);
       return;
     }
     if (!dataText) return;
     try {
-      const frame = JSON.parse(dataText) as { t?: string; seq?: number; blob?: string };
+      const frame = JSON.parse(dataText) as { t?: string; seq?: number; blob?: string; n?: number };
       if (frame.t === 'u' && typeof frame.seq === 'number' && typeof frame.blob === 'string') {
         this.opts.callbacks.onUpdate({ seq: frame.seq, blob: base64ToBytes(frame.blob) });
       } else if (frame.t === 'p' && typeof frame.blob === 'string') {
         this.opts.callbacks.onPresence(base64ToBytes(frame.blob));
+      } else if (frame.t === 'w' && typeof frame.n === 'number') {
+        this.opts.callbacks.onWatchers?.(frame.n);
       } else if (frame.t === 'end') {
         this.stopped = true;
         this.opts.callbacks.onEnded();
@@ -847,16 +881,25 @@ export class RoomStream {
         return;
       }
       if (res.status === 409) {
-        drop();
         // On a FIRST join, full means full — terminal. On a RECONNECT,
         // the count may include our own not-yet-reaped ghost connection
         // from the drop; the server clears those within a heartbeat
         // cycle, so retry instead of ending an established session.
         if (!this.everHelloed) {
+          // The refusal body may carry a spectator pass (relay 2026-10-24+)
+          // so the UI can offer "watch instead". Read it before releasing.
+          let viewPass: string | null = null;
+          try {
+            const parsed = JSON.parse(await res.text()) as { viewPass?: unknown };
+            if (typeof parsed.viewPass === 'string') viewPass = parsed.viewPass;
+          } catch {
+            /* no / opaque body — older relay */
+          }
           this.stopped = true;
-          this.opts.callbacks.onFull();
+          this.opts.callbacks.onFull(viewPass);
           return;
         }
+        drop();
         // Past the reap window (the relay notices a departed stream within
         // one heartbeat, 25s; four backoff steps is comfortably longer), the
         // slot is genuinely taken: say so once, keep retrying.

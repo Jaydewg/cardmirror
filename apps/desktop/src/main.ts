@@ -32,6 +32,7 @@ import {
   session,
   nativeImage,
 } from 'electron';
+import { decideNavigation, decideWindowOpen } from './navigation-guard.js';
 import { existsSync } from 'node:fs';
 import { autoUpdater } from 'electron-updater';
 import { bundlePathFromExe, launchSwapHelper, macBundleSelfUpdatable } from './mac-swap-update.js';
@@ -89,6 +90,8 @@ import {
   grantReadPath,
   grantReadDir,
   setLibraryRoots,
+  setWriteFolders,
+  isWriteAllowed,
   grantLegacyRecents,
   isReadAllowed,
 } from './read-scope.js';
@@ -124,6 +127,30 @@ import { hardenStdio } from './stdio-harden.js';
 hardenStdio();
 
 const DEV_SERVER_URL = 'http://localhost:5173';
+
+/** Where the app's own pages come from: the Vite dev server in development,
+ *  the packaged renderer files otherwise. Used by the navigation guard. */
+function ownOrigins(): string[] {
+  return app.isPackaged ? ['file:'] : [new URL(DEV_SERVER_URL).origin];
+}
+
+/** Apply the window-open / navigation policy (navigation-guard.ts) to a
+ *  window: no renderer-spawned BrowserWindows, no leaving the app's own
+ *  origin; http(s)/mailto targets go to the OS browser instead. Every
+ *  BrowserWindow that loads renderer code must pass through here. */
+function hardenWindow(win: BrowserWindow): void {
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    const d = decideWindowOpen(url, ownOrigins());
+    if (d.kind === 'external') void shell.openExternal(d.url);
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (event, url) => {
+    const d = decideNavigation(url, ownOrigins());
+    if (d.kind === 'allow') return;
+    event.preventDefault();
+    if (d.kind === 'external') void shell.openExternal(d.url);
+  });
+}
 
 // macOS scroll-perf tuning. Belt-and-suspenders: none of these
 // switches was the root fix for the historical scroll stalls (the
@@ -454,6 +481,8 @@ function createWindow(initialDoc?: InitialDocPayload): BrowserWindow {
       backgroundThrottling: false,
     },
   });
+
+  hardenWindow(win);
 
   // Mirror tagged renderer console lines to the main-process stdout —
   // renderer console output is otherwise only visible in DevTools,
@@ -965,6 +994,12 @@ ipcMain.handle('host:plugin-pick-file', async (event) => {
 ipcMain.handle('host:sync-library-roots', async (_event, roots: unknown) => {
   setLibraryRoots(Array.isArray(roots) ? roots.map(String) : []);
 });
+// The speech-doc auto-save folder (a settings string) is the one place
+// write-file-at-path writes without a dialog in the same session; the
+// renderer mirrors it here (boot + on change) so the write scope knows it.
+ipcMain.handle('host:sync-write-folders', async (_event, folders: unknown) => {
+  setWriteFolders(Array.isArray(folders) ? folders.map(String) : []);
+});
 // Fired by the preload's getPathForFile — a real dropped file resolved
 // by webUtils. Not on the exposed electronAPI surface.
 ipcMain.on('host:grant-dropped-path', (_event, p: unknown) => {
@@ -1397,6 +1432,11 @@ ipcMain.handle(
   ) => {
     if (typeof filePath !== 'string' || !filePath) {
       throw new Error('write-file-at-path: no path');
+    }
+    // Scoped like read-file-at-path: documents / zips only, inside a
+    // folder the user put in play (read-scope.ts isWriteAllowed).
+    if (!(await isWriteAllowed(filePath))) {
+      throw new Error('write-file-at-path: path not permitted');
     }
     // mkdir: bulk convert writes into a destination folder, preserving
     // the input's subfolder structure. failIfExists is opt-in — only
@@ -2777,6 +2817,83 @@ function dispatchMenuCommand(command: string): void {
   win.webContents.send('menu-command', command);
 }
 
+/** A pick from File → Open Recent / Rejoin Recent Session. The renderer
+ *  resolves the id against its own stores (a path handle, a room id). */
+function dispatchMenuOpenRecent(kind: 'file' | 'session', id: string): void {
+  const win = BrowserWindow.getFocusedWindow() ?? mainWindow;
+  if (!win) return;
+  win.webContents.send('menu-open-recent', { kind, id });
+}
+
+/** Renderer-pushed mirror of the home screen's Recent and Sessions lists
+ *  (`host:set-menu-recents`, see src/editor/menu-recents.ts). Main keeps
+ *  only strings it was handed and rebuilds the two submenus from them. */
+interface MenuRecents {
+  files: { label: string; handle: string }[];
+  sessions: { label: string; roomId: string; role: string }[];
+}
+let menuRecents: MenuRecents = { files: [], sessions: [] };
+
+function sanitizeMenuRecents(raw: unknown): MenuRecents {
+  const out: MenuRecents = { files: [], sessions: [] };
+  if (!raw || typeof raw !== 'object') return out;
+  const r = raw as { files?: unknown; sessions?: unknown };
+  if (Array.isArray(r.files)) {
+    for (const f of r.files.slice(0, 10)) {
+      if (f && typeof f === 'object' && typeof (f as { label?: unknown }).label === 'string' && typeof (f as { handle?: unknown }).handle === 'string') {
+        out.files.push({ label: (f as { label: string }).label.slice(0, 120), handle: (f as { handle: string }).handle });
+      }
+    }
+  }
+  if (Array.isArray(r.sessions)) {
+    for (const s of r.sessions.slice(0, 10)) {
+      if (s && typeof s === 'object' && typeof (s as { label?: unknown }).label === 'string' && typeof (s as { roomId?: unknown }).roomId === 'string') {
+        out.sessions.push({
+          label: (s as { label: string }).label.slice(0, 120),
+          roomId: (s as { roomId: string }).roomId,
+          role: String((s as { role?: unknown }).role ?? ''),
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/** File → Open Recent: the home screen's Recent list, newest first, with
+ *  a Clear Menu at the bottom (macOS convention). */
+function openRecentSubmenu(): MenuItemConstructorOptions[] {
+  const items: MenuItemConstructorOptions[] = menuRecents.files.map((f) => ({
+    label: f.label,
+    toolTip: f.handle,
+    click: () => dispatchMenuOpenRecent('file', f.handle),
+  }));
+  if (items.length === 0) items.push({ label: 'No Recent Files', enabled: false });
+  items.push({ type: 'separator' });
+  items.push({
+    label: 'Clear Menu',
+    enabled: menuRecents.files.length > 0,
+    click: () => dispatchMenuCommand('clearRecents'),
+  });
+  return items;
+}
+
+/** File → Rejoin Recent Session: the home screen's Sessions list (saved
+ *  session records), plus the code / link prompt for anything else. */
+function rejoinSessionSubmenu(): MenuItemConstructorOptions[] {
+  const items: MenuItemConstructorOptions[] = menuRecents.sessions.map((s) => ({
+    label: s.label,
+    click: () => dispatchMenuOpenRecent('session', s.roomId),
+  }));
+  if (items.length === 0) items.push({ label: 'No Saved Sessions', enabled: false });
+  items.push({ type: 'separator' });
+  items.push({
+    label: 'Join or Rejoin Session…',
+    accelerator: menuAccelerator('collabJoinSession'),
+    click: () => dispatchMenuCommand('collabJoinSession'),
+  });
+  return items;
+}
+
 /** Current renderer-reported keybinding for each menu-bound ribbon
  *  command, in PM keymap form (`Mod-o`, `CmdOrCtrl+Alt+N`, etc.).
  *  Renderer pushes this map via `host:set-menu-bindings` whenever
@@ -2825,6 +2942,8 @@ function buildMenu(): Menu {
         accelerator: menuAccelerator('openFile'),
         click: () => dispatchMenuCommand('openFile'),
       },
+      { label: 'Open Recent', submenu: openRecentSubmenu() },
+      { label: 'Rejoin Recent Session', submenu: rejoinSessionSubmenu() },
       {
         label: 'New Document',
         accelerator: menuAccelerator('newDocument'),
@@ -3077,6 +3196,12 @@ function buildMenu(): Menu {
  *  keybindings (after rebinds via Settings → Keybindings) show
  *  next to each menu item. Idempotent — safe to call on every
  *  settings change. */
+ipcMain.handle('host:set-menu-recents', async (_event, payload: unknown) => {
+  menuRecents = sanitizeMenuRecents(payload);
+  // macOS only — see the note on the bindings handler below.
+  Menu.setApplicationMenu(process.platform === 'darwin' ? buildMenu() : null);
+});
+
 ipcMain.handle(
   'host:set-menu-bindings',
   async (_event, bindings: Record<string, string | null>) => {
@@ -3424,6 +3549,7 @@ function openTimerWindow(popoutOpts?: TimerPopoutOpts): void {
     opts.y = Math.min(Math.max(timerWindowPos.y, area.y), area.y + area.height - height);
   }
   const win = new BrowserWindow(opts);
+  hardenWindow(win);
   timerWindowZoom = zoom;
   // 'floating' sits above normal windows without fighting system
   // panels. (Fullscreen spaces are explicitly out of scope — the

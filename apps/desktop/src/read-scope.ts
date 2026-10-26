@@ -136,6 +136,42 @@ export function grantReadDir(d: string): void {
   void realOrRaw(d).then((real) => grantedDirs.add(fold(real)));
 }
 
+/** Mirror of the renderer's `defaultSpeechDocFolder` setting: the one
+ *  folder the app writes into without a per-file dialog. */
+let writeFolders: string[] = [];
+export function setWriteFolders(folders: string[]): void {
+  writeFolders = (Array.isArray(folders) ? folders : []).filter(
+    (f): f is string => typeof f === 'string' && f.length > 0,
+  );
+}
+
+/** Document / archive extensions `write-file-at-path` may produce. */
+const WRITE_EXTS = new Set(['.cmir', '.docx', '.zip']);
+
+/** May `write-file-at-path` write `p`? Only a document or zip, and only
+ *  inside a folder the user put in play: a library root, a directory
+ *  picked this session (bulk convert / cleaner destinations), or the
+ *  configured speech-doc folder. Everything else — startup folders,
+ *  LaunchAgents, arbitrary bytes anywhere — is refused, so a compromised
+ *  renderer can't turn this channel into a file drop. (Security report
+ *  2026-10-08.) */
+export async function isWriteAllowed(p: string): Promise<boolean> {
+  if (typeof p !== 'string' || !p) return false;
+  if (!WRITE_EXTS.has(path.extname(p).toLowerCase())) return false;
+  await loadJournalOnce();
+  const candidates = new Set<string>([fold(p), fold(await realOrRaw(p))]);
+  const bases: string[] = [];
+  for (const r of [...libraryRoots, ...writeFolders]) {
+    bases.push(fold(r));
+    bases.push(fold(await realOrRaw(r)));
+  }
+  bases.push(...grantedDirs);
+  for (const c of candidates) {
+    if (bases.some((b) => c !== b && within(c, b))) return true;
+  }
+  return false;
+}
+
 /** Mirror of the renderer's `fileSearchRoots` setting. */
 export function setLibraryRoots(roots: string[]): void {
   libraryRoots = (Array.isArray(roots) ? roots : []).filter(
@@ -183,6 +219,7 @@ export async function isReadAllowed(p: string): Promise<boolean> {
 
 /** Test hook: wipe all state (session + journal cache). */
 export function resetReadScopeForTests(): void {
+  writeFolders = [];
   grantedFiles.clear();
   grantedDirs.clear();
   libraryRoots = [];

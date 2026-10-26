@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { schema, newHeadingId } from '../../src/schema/index.js';
 import { EditorState, TextSelection } from 'prosemirror-state';
 import { transformForExport, countMarkedCards, bakesUnreadRedOnSave } from '../../src/export/transform-for-export.js';
-import { buildToggleReadingMarkerTransaction } from '../../src/editor/reading-marker.js';
+import { buildToggleReadingMarkerTransaction, normalizeReadingMarkers } from '../../src/editor/reading-marker.js';
 
 // ---- Doc builders ----------------------------------------------
 
@@ -303,9 +303,9 @@ describe('markedCardsOnly transform', () => {
     readMode: false,
     markedCardsOnly: true,
   };
-  // A reading marker is plain red text — the font_color mark at FF0000.
+  // A reading marker is red text carrying the marker role (schema/reading-marker.ts).
   const marker = (s: string) =>
-    schema.text(s, [schema.marks['font_color']!.create({ color: 'FF0000' })]);
+    schema.text(s, [schema.marks['font_color']!.create({ color: 'FF0000', role: 'marker' })]);
 
   it('keeps only marked cards, flat — drops headings, unmarked cards, analytics', () => {
     const doc = makeDoc(
@@ -364,7 +364,7 @@ describe('markedCardsOnly transform', () => {
 
 describe('markUnreadAfterMarker bake', () => {
   const marker = (s: string) =>
-    schema.text(s, [schema.marks['font_color']!.create({ color: 'FF0000' })]);
+    schema.text(s, [schema.marks['font_color']!.create({ color: 'FF0000', role: 'marker' })]);
 
   /** Which text runs carry a red font_color mark after the transform. */
   function redRuns(doc: ReturnType<typeof makeDoc>): string[] {
@@ -387,10 +387,10 @@ describe('markUnreadAfterMarker bake', () => {
 
   it('bakes body after the marker into real red runs when on', () => {
     const out = transformForExport(doc, { ...ALL_ON, markUnreadAfterMarker: true });
-    // Everything from the marker onward is red. The marker run and the body
-    // that follows it in the same paragraph coalesce (identical mark); the
-    // next paragraph's body is its own red run.
-    expect(redRuns(out)).toEqual(['Marked 7:32 after one.', 'after two.']);
+    // Everything from the marker onward is red. The marker keeps its own run
+    // (its role attr keeps it from merging with the baked body), so reopened
+    // the baked red is just red — not more marker.
+    expect(redRuns(out)).toEqual(['Marked 7:32', ' after one.', 'after two.']);
   });
 
   it('leaves the doc untouched when off (only the marker stays red)', () => {
@@ -401,7 +401,7 @@ describe('markUnreadAfterMarker bake', () => {
 
 describe('the unread red is never baked into a working file', () => {
   const marker = (s: string) =>
-    schema.text(s, [schema.marks['font_color']!.create({ color: 'FF0000' })]);
+    schema.text(s, [schema.marks['font_color']!.create({ color: 'FF0000', role: 'marker' })]);
 
   it('only an export to Word bakes it', () => {
     expect(bakesUnreadRedOnSave('docx', false, true), 'Save As → Word').toBe(true);
@@ -411,13 +411,17 @@ describe('the unread red is never baked into a working file', () => {
     expect(bakesUnreadRedOnSave('docx', false, false), 'setting off').toBe(false);
   });
 
-  it('why: baked red is read back as marker text, and toggling the marker off deletes it', () => {
-    // What a working file saved with the red baked in looks like on reopen.
-    const baked = transformForExport(
-      makeDoc(card(tag('T'), cardBody(txt('before. '), marker('Marked 7:32'), txt(' after one.')))),
-      { ...ALL_ON, markUnreadAfterMarker: true },
+  it('and if it were: the baked red stays plain red on reopen, so toggling the marker off removes only the marker', () => {
+    // What a file saved with the red baked in looks like on reopen — the
+    // export has no role attr for the body red, and load-time normalization
+    // keeps it that way (the role lands on `Marked h:mm` and nowhere else).
+    const baked = normalizeReadingMarkers(
+      transformForExport(
+        makeDoc(card(tag('T'), cardBody(txt('before. '), marker('Marked 7:32'), txt(' after one.')))),
+        { ...ALL_ON, markUnreadAfterMarker: true },
+      ),
     );
-    // Caret on the marker, toggle it off.
+    expect(countMarkedCards(baked)).toBe(1);
     let markerPos = -1;
     baked.descendants((n, pos) => {
       if (markerPos < 0 && n.isText && (n.text ?? '').startsWith('Marked')) markerPos = pos + 2;
@@ -425,11 +429,8 @@ describe('the unread red is never baked into a working file', () => {
     });
     const state = EditorState.create({ doc: baked, selection: TextSelection.create(baked, markerPos) });
     const after = state.apply(buildToggleReadingMarkerTransaction(state)!).doc;
-    // The user's own text after the marker went with it.
-    expect(after.textContent).toBe('Tbefore. ');
-    // From an unbaked file, the same toggle removes the marker alone.
-    const clean = makeDoc(card(tag('T'), cardBody(txt('before. '), marker('Marked 7:32'), txt(' after one.'))));
-    const cleanState = EditorState.create({ doc: clean, selection: TextSelection.create(clean, markerPos) });
-    expect(cleanState.apply(buildToggleReadingMarkerTransaction(cleanState)!).doc.textContent).toBe('Tbefore.  after one.');
+    // The user's own text after the marker survives (it used to go with it).
+    expect(after.textContent).toBe('Tbefore.  after one.');
+    expect(countMarkedCards(after)).toBe(0);
   });
 });

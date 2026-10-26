@@ -55,6 +55,7 @@ import {
 } from './plugin-registry.js';
 import { schema } from '../schema/index.js';
 import { newHeadingId } from '../schema/ids.js';
+import { extractCard } from './extract-card.js';
 import {
   condenseBranchC,
   condenseMerge,
@@ -64,8 +65,9 @@ import {
   type HeadingMode,
 } from './condense.js';
 import { applyPlainPasteFromText, togglePlainPaste } from './paste-plugin.js';
-import { lockHighlighting } from './create-reference.js';
+import { lockHighlighting, REFERENCE_SHADING_HEX } from './create-reference.js';
 import { showToast } from './toast.js';
+import { activateCitePromptPreset, citePromptPresets } from './ai/cite-prompt-presets.js';
 import { surfaceError } from './error-surface.js';
 import { TYPE_TO_LEVEL, TYPE_LABEL } from './headings.js';
 import { selectedTransclusion, enclosingZonePos, isTransclusionNode } from './transclusion.js';
@@ -92,6 +94,7 @@ import { classifyChar, isWordChar } from './word-break.js';
 import { moveContainerUp, moveContainerDown } from './move-container.js';
 import { toggleNumberRole, toggleSubRole, toggleNumRestart } from './numbering-commands.js';
 import { settings } from './settings.js';
+import { hasCiteMark } from './cite-classifier-plugin.js';
 import { matchAcronymPattern } from './acronym-patterns.js';
 import {
   getTimerState,
@@ -1807,6 +1810,12 @@ function gapFixRanges(state: EditorState): { from: number; to: number }[] {
  *  actually painted, when that is less than its operating ranges. */
 const META_PAINTED_RANGES = 'pmd-painted-ranges';
 
+/** Textblocks "Highlight underlined text only" leaves alone — painted
+ *  whole, whatever their marks: structural headings, tags, cites and
+ *  analytics. Body paragraphs (card_body, loose paragraphs, undertags,
+ *  table cells) are the ones the filter is for. */
+const UNDERLINE_FILTER_EXEMPT = new Set(['pocket', 'hat', 'block', 'tag', 'cite_paragraph', 'analytic']);
+
 /** The marks that count as "underlined" for "Highlight underlined text
  *  only": the body underline style, its structural-block twin, and
  *  emphasis (underline + bold). Cite is bold-only, so it doesn't count. */
@@ -1829,6 +1838,11 @@ const UNDERLINED_MARKS = new Set(['underline_mark', 'underline_direct', 'emphasi
  * how the setting composes with "Bridge formatting across gaps". Returns
  * the kept pieces clipped to the input ranges, merged where contiguous; an
  * empty list when nothing in the selection qualifies.
+ *
+ * Only BODY text is filtered. Headings (pocket / hat / block / tag), cites
+ * and analytics are painted whole — their text is read in full, so there's
+ * no "underlined part" to single out, and a highlight there is a deliberate
+ * emphasis, not a reading pass (see `UNDERLINE_FILTER_EXEMPT`).
  */
 export function restrictToUnderlinedText(
   doc: PMNode,
@@ -1845,6 +1859,13 @@ export function restrictToUnderlinedText(
       if (!node.isTextblock) return !node.isLeaf;
       const base = pos + 1;
       const size = node.content.size;
+      if (UNDERLINE_FILTER_EXEMPT.has(node.type.name)) {
+        // Whole textblock (clipped to the range), underlined or not.
+        const lo = Math.max(from, base);
+        const hi = Math.min(to, base + size);
+        if (hi > lo) push(lo, hi);
+        return false;
+      }
       // Per-position character and style maps for the textblock; inline
       // leaves read as whitespace so they end a word.
       const ch = new Array<string>(size).fill(' ');
@@ -2342,7 +2363,61 @@ export function uniShade(
 ): Command {
   return runUniColor('shading', activeColor, scope, true, except);
 }
+/**
+ * "Turn <color> into Locked Highlighting": Lock Highlighting filtered
+ * to one highlight color. Every `highlight` run in `target()`'s color
+ * becomes the locked gray shading; existing shading is left alone,
+ * matching lockHighlighting. Other highlight colors are untouched.
+ *
+ * `scope` works like `uniHighlight`'s: `'document'` walks the whole
+ * doc, `'selection'` only the current selection (no-op when empty).
+ * Returns false when nothing in scope matches.
+ * 
+ * The function follows the exact same REFERENCE_SHADING_HEX color that lockHighlighting does.
+ */
+export function lockHighlightColor(
+  scope: 'document' | 'selection',
+  target: () => string,
+): Command {
+  return (state, dispatch) => {
+    const highlightType = schema.marks['highlight'];
+    const shadingType = schema.marks['shading'];
+    if (!highlightType || !shadingType) return false;
 
+    let from = 0;
+    let to = state.doc.content.size;
+    if (scope === 'selection') {
+      if (state.selection.empty) return false;
+      const [trimmed] = trimRangesForFormatting(state.doc, [
+        { from: state.selection.from, to: state.selection.to },
+      ]);
+      from = trimmed!.from;
+      to = trimmed!.to;
+    }
+
+    const color = target();
+    const tr = state.tr;
+    let changed = false;
+    state.doc.nodesBetween(from, to, (node, pos) => {
+      if (!node.isText) return true;
+      const mark = highlightType.isInSet(node.marks);
+      if (!mark || mark.attrs['color'] !== color) return true;
+      const start = Math.max(from, pos);
+      const end = Math.min(to, pos + node.nodeSize);
+      if (start >= end) return true;
+      tr.removeMark(start, end, highlightType);
+      if (!shadingType.isInSet(node.marks)) {
+        tr.addMark(start, end, shadingType.create({ color: REFERENCE_SHADING_HEX }));
+      }
+      changed = true;
+      return true;
+    });
+
+    if (!changed) return false;
+    if (dispatch) dispatch(tr);
+    return true;
+  };
+}
 /** Word's 15 named highlight colors with their canonical OOXML RGB
  *  values. Used to bridge between the `highlight` mark (which
  *  stores a name) and the `shading` mark (which stores hex RGB). */
@@ -3336,7 +3411,7 @@ function computeSmartShrinkBlocks(
       const out: SmartShrinkBlock[] = [];
       let offset = 1;
       docLevel.forEach((child) => {
-        if (child.type.name === 'card_body') {
+        if (isShrinkBodyBlock(child)) {
           const childStart = docLevelStart + offset;
           out.push({ node: child, from: childStart + 1, to: childStart + child.nodeSize - 1 });
         }
@@ -3344,7 +3419,7 @@ function computeSmartShrinkBlocks(
       });
       return out;
     }
-    if (t === 'paragraph') {
+    if (isShrinkBodyBlock(docLevel)) {
       return [{ node: docLevel, from: docLevelStart + 1, to: docLevelStart + docLevel.nodeSize - 1 }];
     }
     return [];
@@ -3352,8 +3427,7 @@ function computeSmartShrinkBlocks(
   const out: SmartShrinkBlock[] = [];
   state.doc.nodesBetween(sel.from, sel.to, (node, pos) => {
     if (!node.isTextblock) return true;
-    const t = node.type.name;
-    if (t !== 'card_body' && t !== 'paragraph') return false;
+    if (!isShrinkBodyBlock(node)) return false;
     const from = Math.max(sel.from, pos + 1);
     const to = Math.min(sel.to, pos + node.nodeSize - 1);
     if (from < to) out.push({ node, from, to });
@@ -3385,7 +3459,7 @@ export function smartShrinkText(
   return (state, dispatch) => {
     const blocks = computeSmartShrinkBlocks(state);
     if (blocks.length === 0) {
-      if (dispatch && state.selection.$from.parent.type.name === 'cite_paragraph') {
+      if (dispatch && caretInCiteLine(state)) {
         showToast(SHRINK_ON_CITE_MESSAGE, { durationMs: 2200 });
       }
       return false;
@@ -3463,7 +3537,7 @@ function sizeCycleCommand(
       // (imported cite-style debris keeps the paragraph classified
       // as cite) — toast so the refusal is diagnosable. Still
       // returns false: the command didn't run.
-      if (dispatch && state.selection.$from.parent.type.name === 'cite_paragraph') {
+      if (dispatch && caretInCiteLine(state)) {
         showToast(SHRINK_ON_CITE_MESSAGE, { durationMs: 2200 });
       }
       return false;
@@ -3542,6 +3616,25 @@ function nextShrinkSize(sizes: Set<number>, normalPt: number): number {
   return normalPt;
 }
 
+/** A textblock the shrink cycle may touch: body text (card_body / doc-
+ *  level paragraph) that is not a cite line. The node TYPE check alone
+ *  is not enough — the cite classifier retypes a paragraph from its
+ *  content, and a paragraph carrying cite-marked text whose type has not
+ *  (or not yet) caught up is still a cite. Cite-ness IS the mark, so
+ *  shrink reads the same signal the classifier does. */
+function isShrinkBodyBlock(node: PMNode): boolean {
+  const t = node.type.name;
+  if (t !== 'card_body' && t !== 'paragraph') return false;
+  return !hasCiteMark(node);
+}
+
+/** True when the caret's paragraph is a cite line by type or content —
+ *  the case the shrink refusal toast explains. */
+function caretInCiteLine(state: import('prosemirror-state').EditorState): boolean {
+  const parent = state.selection.$from.parent;
+  return parent.type.name === 'cite_paragraph' || (parent.isTextblock && hasCiteMark(parent));
+}
+
 function computeShrinkScope(state: import('prosemirror-state').EditorState): { from: number; to: number }[] {
   const sel = state.selection;
   if (sel.empty) {
@@ -3554,7 +3647,7 @@ function computeShrinkScope(state: import('prosemirror-state').EditorState): { f
       const out: { from: number; to: number }[] = [];
       let offset = 1;
       docLevel.forEach((child) => {
-        if (child.type.name === 'card_body') {
+        if (isShrinkBodyBlock(child)) {
           const childStart = docLevelStart + offset;
           out.push({ from: childStart + 1, to: childStart + child.nodeSize - 1 });
         }
@@ -3562,7 +3655,7 @@ function computeShrinkScope(state: import('prosemirror-state').EditorState): { f
       });
       return out;
     }
-    if (t === 'paragraph') {
+    if (isShrinkBodyBlock(docLevel)) {
       return [{ from: docLevelStart + 1, to: docLevelStart + docLevel.nodeSize - 1 }];
     }
     return [];
@@ -3572,8 +3665,7 @@ function computeShrinkScope(state: import('prosemirror-state').EditorState): { f
   const out: { from: number; to: number }[] = [];
   state.doc.nodesBetween(sel.from, sel.to, (node, pos) => {
     if (!node.isTextblock) return true;
-    const t = node.type.name;
-    if (t !== 'card_body' && t !== 'paragraph') return false;
+    if (!isShrinkBodyBlock(node)) return false;
     const contentFrom = pos + 1;
     const contentTo = pos + node.nodeSize - 1;
     const from = Math.max(sel.from, contentFrom);
@@ -4570,6 +4662,7 @@ export type RibbonCommandId =
   | 'uncondense'
   | 'toggleCase'
   | 'copyPreviousCite'
+  | 'extractCard'
   | 'pasteAsText'
   | 'pasteCondensed'
   | 'clearToNormal'
@@ -4585,6 +4678,7 @@ export type RibbonCommandId =
   | 'standardizeShading'
   | 'standardizeHighlightExcept'
   | 'standardizeShadingExcept'
+  | 'standardizeLockedHighlights'
   | 'convertCardsToReadMode'
   | 'toggleReadMode'
   | 'toggleReaderView'
@@ -4694,6 +4788,8 @@ export type RibbonCommandId =
   | 'collabCopyInviteLink'
   | 'collabCopyCrossServerCode'
   | 'collabReviewJoinRequests'
+  | 'collabCopyViewCode'
+  | 'collabCopyViewLink'
   | 'collabInviteStarred'
   | 'collabEndSession'
   | 'insertImage'
@@ -4716,6 +4812,18 @@ export type RibbonCommandId =
   | 'setNavDepth2'
   | 'setNavDepth3'
   | 'setNavDepth4'
+  | 'alphabetizeSelectedHeadings'
+  | 'aiCitePromptDefault'
+  | 'aiCitePromptPreset1'
+  | 'aiCitePromptPreset2'
+  | 'aiCitePromptPreset3'
+  | 'aiCitePromptPreset4'
+  | 'aiCitePromptPreset5'
+  | 'aiCitePromptPreset6'
+  | 'aiCitePromptPreset7'
+  | 'aiCitePromptPreset8'
+  | 'aiCitePromptPreset9'
+  | 'aiCitePromptPreset10'
   // Commands that ship without a default binding — bindable via
   // Settings → Keyboard shortcuts. Each maps to a ribbon button or
   // menu item.
@@ -4841,6 +4949,7 @@ export const RIBBON_COMMAND_IDS: RibbonCommandId[] = [
   'uncondense',
   'toggleCase',
   'copyPreviousCite',
+  'extractCard',
   'pasteAsText',
   'pasteCondensed',
   'clearToNormal',
@@ -4856,6 +4965,7 @@ export const RIBBON_COMMAND_IDS: RibbonCommandId[] = [
   'standardizeShading',
   'standardizeHighlightExcept',
   'standardizeShadingExcept',
+  'standardizeLockedHighlights',
   'convertCardsToReadMode',
   'toggleReadMode',
   'toggleReaderView',
@@ -4955,6 +5065,8 @@ export const RIBBON_COMMAND_IDS: RibbonCommandId[] = [
   'collabCopyInviteLink',
   'collabCopyCrossServerCode',
   'collabReviewJoinRequests',
+  'collabCopyViewCode',
+  'collabCopyViewLink',
   'collabInviteStarred',
   'collabEndSession',
   'insertImage',
@@ -4975,6 +5087,18 @@ export const RIBBON_COMMAND_IDS: RibbonCommandId[] = [
   'setNavDepth2',
   'setNavDepth3',
   'setNavDepth4',
+  'alphabetizeSelectedHeadings',
+  'aiCitePromptDefault',
+  'aiCitePromptPreset1',
+  'aiCitePromptPreset2',
+  'aiCitePromptPreset3',
+  'aiCitePromptPreset4',
+  'aiCitePromptPreset5',
+  'aiCitePromptPreset6',
+  'aiCitePromptPreset7',
+  'aiCitePromptPreset8',
+  'aiCitePromptPreset9',
+  'aiCitePromptPreset10',
   // Bindable ribbon actions with no default keys.
   'adjustFontSizeUp',
   'adjustFontSizeDown',
@@ -5057,6 +5181,7 @@ export const RIBBON_COMMAND_LABELS: Record<RibbonCommandId, string> = {
   uncondense: 'Uncondense',
   toggleCase: 'Toggle Case',
   copyPreviousCite: 'Copy Previous Cite',
+  extractCard: 'Extract Card',
   pasteAsText: 'Paste Plain Text',
   pasteCondensed: 'Paste and Destructively Condense',
   clearToNormal: 'Clear',
@@ -5072,6 +5197,7 @@ export const RIBBON_COMMAND_LABELS: Record<RibbonCommandId, string> = {
   standardizeShading: 'Standardize Background Color',
   standardizeHighlightExcept: 'Standardize Highlighting (with Exception)',
   standardizeShadingExcept: 'Standardize Background Color (with Exception)',
+  standardizeLockedHighlights: 'Convert Specific Colored Highlights to Locked Highlighting',
   convertCardsToReadMode: 'Convert Cards to Read Mode',
   toggleReadMode: 'Toggle Read Mode',
   toggleReaderView: 'Toggle Reading View',
@@ -5171,6 +5297,8 @@ export const RIBBON_COMMAND_LABELS: Record<RibbonCommandId, string> = {
   collabCopyInviteLink: 'Copy Session Invite Link',
   collabCopyCrossServerCode: 'Copy Cross-Server Session Code',
   collabReviewJoinRequests: 'Review Session Join Requests',
+  collabCopyViewCode: 'Copy Session View Code (Spectators)',
+  collabCopyViewLink: 'Copy Session View Link (Spectators)',
   collabInviteStarred: 'Invite Starred Partner to Session',
   collabEndSession: 'End or Leave Collaboration Session',
   insertImage: 'Insert Image at Cursor',
@@ -5191,6 +5319,18 @@ export const RIBBON_COMMAND_LABELS: Record<RibbonCommandId, string> = {
   setNavDepth2: 'Navigation Pane: Show Levels 1–2 (Hats)',
   setNavDepth3: 'Navigation Pane: Show Levels 1–3 (Blocks)',
   setNavDepth4: 'Navigation Pane: Show Levels 1–4 (Tags)',
+  alphabetizeSelectedHeadings: 'Navigation Pane: Alphabetize Selected Headings',
+  aiCitePromptDefault: 'AI Cite Creator: Use Built-in Prompt',
+  aiCitePromptPreset1: 'AI Cite Creator: Use Prompt Preset 1',
+  aiCitePromptPreset2: 'AI Cite Creator: Use Prompt Preset 2',
+  aiCitePromptPreset3: 'AI Cite Creator: Use Prompt Preset 3',
+  aiCitePromptPreset4: 'AI Cite Creator: Use Prompt Preset 4',
+  aiCitePromptPreset5: 'AI Cite Creator: Use Prompt Preset 5',
+  aiCitePromptPreset6: 'AI Cite Creator: Use Prompt Preset 6',
+  aiCitePromptPreset7: 'AI Cite Creator: Use Prompt Preset 7',
+  aiCitePromptPreset8: 'AI Cite Creator: Use Prompt Preset 8',
+  aiCitePromptPreset9: 'AI Cite Creator: Use Prompt Preset 9',
+  aiCitePromptPreset10: 'AI Cite Creator: Use Prompt Preset 10',
   adjustFontSizeUp: 'Increase Font Size by 1pt',
   adjustFontSizeDown: 'Decrease Font Size by 1pt',
   applyFontColor: 'Apply Font Color',
@@ -5264,6 +5404,8 @@ export const RIBBON_COMMAND_ALIASES: Partial<Record<RibbonCommandId, readonly st
   collabCopyInviteLink: ['invite link', 'share link', 'join link', 'session link'],
   collabCopyCrossServerCode: ['cross-server code', 'federated code', 'other server', 'share code', 'v2f'],
   collabReviewJoinRequests: ['join requests', 'accept join', 'let in', 'other server', 'read-only', 'remove participant', 'revoke'],
+  collabCopyViewCode: ['view code', 'spectator code', 'watch code', 'read-only code', 'spectate'],
+  collabCopyViewLink: ['view link', 'spectator link', 'watch link', 'read-only link', 'spectate link'],
   collabInviteStarred: ['invite partner', 'session invite', 'invite to session'],
   openDevConsole: ['devtools', 'dev console', 'debug console', 'inspect', 'developer tools'],
   collabEndSession: ['leave session', 'stop session', 'stop collaborating'],
@@ -5280,6 +5422,19 @@ export const RIBBON_COMMAND_ALIASES: Partial<Record<RibbonCommandId, readonly st
   setNavDepth2: ['nav depth', 'navigation depth', 'outline level', 'level 2', 'hats'],
   setNavDepth3: ['nav depth', 'navigation depth', 'outline level', 'level 3', 'blocks'],
   setNavDepth4: ['nav depth', 'navigation depth', 'outline level', 'level 4', 'tags'],
+  extractCard: ['extract selection', 'new card from selection', 'split out card', 'pull out card', 'copy to new card'],
+  alphabetizeSelectedHeadings: ['alphabetize', 'sort headings', 'sort selected', 'sort cards', 'sort alphabetically', 'a to z'],
+  aiCitePromptDefault: ['cite prompt', 'cite preset', 'prompt preset', 'default prompt', 'built-in prompt'],
+  aiCitePromptPreset1: ['cite prompt', 'cite preset', 'prompt preset', 'preset 1'],
+  aiCitePromptPreset2: ['cite prompt', 'cite preset', 'prompt preset', 'preset 2'],
+  aiCitePromptPreset3: ['cite prompt', 'cite preset', 'prompt preset', 'preset 3'],
+  aiCitePromptPreset4: ['cite prompt', 'cite preset', 'prompt preset', 'preset 4'],
+  aiCitePromptPreset5: ['cite prompt', 'cite preset', 'prompt preset', 'preset 5'],
+  aiCitePromptPreset6: ['cite prompt', 'cite preset', 'prompt preset', 'preset 6'],
+  aiCitePromptPreset7: ['cite prompt', 'cite preset', 'prompt preset', 'preset 7'],
+  aiCitePromptPreset8: ['cite prompt', 'cite preset', 'prompt preset', 'preset 8'],
+  aiCitePromptPreset9: ['cite prompt', 'cite preset', 'prompt preset', 'preset 9'],
+  aiCitePromptPreset10: ['cite prompt', 'cite preset', 'prompt preset', 'preset 10'],
   convertCardsToReadMode: ['zap card', 'zap cards'],
   toggleReadMode: ['show read mode', 'hide read mode', 'invisibility mode'],
   toggleReaderView: ['reading view', 'reader view', 'paginated view', 'read view', 'book view', 'columns'],
@@ -5294,6 +5449,7 @@ export const RIBBON_COMMAND_ALIASES: Partial<Record<RibbonCommandId, readonly st
   lockHighlighting: ['lock highlights', 'grey highlights', 'gray highlights', 'rehighlight'],
   standardizeHighlightExcept: ['standardize except', 'standardize highlighting except', 'exception highlight'],
   standardizeShadingExcept: ['standardize background except', 'standardize shading except', 'exception shading'],
+  standardizeLockedHighlights: ['lock highlighting of specific highlight', 'lock highlighting full doc'],
   regrow: ['unshrink', 'regrow', 'restore text size', 'unshrink card text'],
   smartShrink: ['smart shrink', 'deep shrink'],
   condenseAndShrink: ['fast condense', 'condense and shrink', 'condense shrink'],
@@ -5441,7 +5597,10 @@ export const DEFAULT_RIBBON_KEYS: Record<RibbonCommandId, string | string[]> = {
   toggleItalic: 'Mod-i',
   toggleStrikethrough: '',
   toggleSuperscript: 'Mod-Shift-=',
-  toggleSubscript: 'Mod-=',
+  // Unbound: Mod-= is Zoom In (browser convention, and the later-registered
+  // binding won the collision anyway, so the chord never reached Subscript).
+  // Bind it in Settings → Keyboard shortcuts.
+  toggleSubscript: '',
   applyCite: 'F8',
   applyUnderline: ['F9'],
   toggleUnderlineTyping: 'Mod-u',
@@ -5461,6 +5620,7 @@ export const DEFAULT_RIBBON_KEYS: Record<RibbonCommandId, string | string[]> = {
   uncondense: 'Mod-Alt-Shift-F3',
   toggleCase: 'Shift-F3',
   copyPreviousCite: 'Alt-F8',
+  extractCard: 'Alt-Shift-F8',
   pasteAsText: 'F2',
   pasteCondensed: '',
   clearToNormal: 'F12',
@@ -5478,6 +5638,7 @@ export const DEFAULT_RIBBON_KEYS: Record<RibbonCommandId, string | string[]> = {
   standardizeShading: '',
   standardizeHighlightExcept: '',
   standardizeShadingExcept: '',
+  standardizeLockedHighlights: '',
   convertCardsToReadMode: '',
   toggleReadMode: '',
   toggleReaderView: '',
@@ -5593,6 +5754,8 @@ export const DEFAULT_RIBBON_KEYS: Record<RibbonCommandId, string | string[]> = {
   collabCopyInviteLink: '',
   collabCopyCrossServerCode: '',
   collabReviewJoinRequests: '',
+  collabCopyViewCode: '',
+  collabCopyViewLink: '',
   collabInviteStarred: '',
   collabEndSession: '',
   newSpeechDocument: '',
@@ -5640,6 +5803,18 @@ export const DEFAULT_RIBBON_KEYS: Record<RibbonCommandId, string | string[]> = {
   setNavDepth2: '',
   setNavDepth3: '',
   setNavDepth4: '',
+  alphabetizeSelectedHeadings: '',
+  aiCitePromptDefault: '',
+  aiCitePromptPreset1: '',
+  aiCitePromptPreset2: '',
+  aiCitePromptPreset3: '',
+  aiCitePromptPreset4: '',
+  aiCitePromptPreset5: '',
+  aiCitePromptPreset6: '',
+  aiCitePromptPreset7: '',
+  aiCitePromptPreset8: '',
+  aiCitePromptPreset9: '',
+  aiCitePromptPreset10: '',
   // Ribbon actions with no default key — all already reachable via
   // the ribbon, so a default chord would be noise. Bindable in
   // Settings → Keyboard shortcuts.
@@ -5878,6 +6053,8 @@ export interface RibbonContext {
   collabCopyInviteLink: () => void;
   collabCopyCrossServerCode: () => void;
   collabReviewJoinRequests: () => void;
+  collabCopyViewCode: () => void;
+  collabCopyViewLink: () => void;
   collabInviteStarred: () => void;
   collabEndSession: () => void;
   /** Open the file picker that prompts for an image to insert at
@@ -5921,6 +6098,10 @@ export interface RibbonContext {
    *  clicking its level button would (transient, per-panel — never
    *  written to settings). */
   setNavDepth: (level: 1 | 2 | 3 | 4) => void;
+  /** Alphabetize the focused document's nav-pane multi-selection in
+   *  place (NavigationPanel.alphabetizeSelection). False when fewer
+   *  than two headings are selected or they are already in order. */
+  alphabetizeSelectedHeadings: () => boolean;
   /** Most-recently-picked font color (hex, no `#`, e.g. `"FF0000"`)
    *  or `null` when the user has chosen "Automatic" / no explicit
    *  color. Read at invocation time by the `applyFontColor` command
@@ -6055,6 +6236,8 @@ const DEFAULT_RIBBON_CONTEXT: RibbonContext = {
   collabCopyInviteLink: () => {},
   collabCopyCrossServerCode: () => {},
   collabReviewJoinRequests: () => {},
+  collabCopyViewCode: () => {},
+  collabCopyViewLink: () => {},
   collabInviteStarred: () => {},
   collabEndSession: () => {},
   insertImage: () => {},
@@ -6072,6 +6255,7 @@ const DEFAULT_RIBBON_CONTEXT: RibbonContext = {
   openFindByProximity: () => {},
   toggleNavPane: () => {},
   setNavDepth: () => {},
+  alphabetizeSelectedHeadings: () => false,
   lastFontColor: () => null,
   openSettings: () => {},
   minimizeWindow: () => {},
@@ -6183,6 +6367,7 @@ function commandFor(id: RibbonCommandId, ctx: RibbonContext): Command {
     case 'uncondense': return uncondense();
     case 'toggleCase': return toggleCase();
     case 'copyPreviousCite': return copyPreviousCite();
+    case 'extractCard': return extractCard();
     case 'pasteAsText':
       return pasteAsText(ctx);
     case 'pasteCondensed':
@@ -6255,6 +6440,12 @@ function commandFor(id: RibbonCommandId, ctx: RibbonContext): Command {
           ctx.shadingColor,
           state.selection.empty ? 'document' : 'selection',
           () => settings.get('standardizeShadingException'),
+        )(state, dispatch, view);
+    case 'standardizeLockedHighlights':
+      return (state, dispatch, view) =>
+        lockHighlightColor(
+          state.selection.empty ? 'document' : 'selection',
+          () => settings.get('standardizeLockedHighlightsColor'),
         )(state, dispatch, view);
     case 'convertCardsToReadMode':
       return convertCardsToReadMode;
@@ -6794,6 +6985,18 @@ function commandFor(id: RibbonCommandId, ctx: RibbonContext): Command {
         ctx.collabCopyShareCode();
         return true;
       };
+    case 'collabCopyViewCode':
+      return (_state, dispatch) => {
+        if (!dispatch) return true;
+        ctx.collabCopyViewCode();
+        return true;
+      };
+    case 'collabCopyViewLink':
+      return (_state, dispatch) => {
+        if (!dispatch) return true;
+        ctx.collabCopyViewLink();
+        return true;
+      };
     case 'collabCopyInviteLink':
       return (_state, dispatch) => {
         if (!dispatch) return true;
@@ -6934,6 +7137,44 @@ function commandFor(id: RibbonCommandId, ctx: RibbonContext): Command {
       return (_state, dispatch) => {
         if (!dispatch) return true;
         ctx.setNavDepth(level);
+        return true;
+      };
+    }
+    case 'alphabetizeSelectedHeadings':
+      return (_state, dispatch) => {
+        if (!dispatch) return true;
+        return ctx.alphabetizeSelectedHeadings();
+      };
+    // AI cite-creator prompt presets (ai/cite-prompt-presets.ts): switch
+    // the prompt in use. Pure settings work — no view, no context.
+    case 'aiCitePromptDefault':
+      return (_state, dispatch) => {
+        if (!dispatch) return true;
+        activateCitePromptPreset(-1);
+        showToast('Cite prompt: built-in default');
+        return true;
+      };
+    case 'aiCitePromptPreset1':
+    case 'aiCitePromptPreset2':
+    case 'aiCitePromptPreset3':
+    case 'aiCitePromptPreset4':
+    case 'aiCitePromptPreset5':
+    case 'aiCitePromptPreset6':
+    case 'aiCitePromptPreset7':
+    case 'aiCitePromptPreset8':
+    case 'aiCitePromptPreset9':
+    case 'aiCitePromptPreset10':
+    {
+      const n = Number(id.slice('aiCitePromptPreset'.length));
+      return (_state, dispatch) => {
+        if (!dispatch) return true;
+        const preset = citePromptPresets()[n - 1];
+        if (!preset) {
+          showToast(`No cite-prompt preset ${n} — add one under Settings → Comments & AI.`);
+          return true;
+        }
+        activateCitePromptPreset(n - 1);
+        showToast(`Cite prompt: ${preset.name}`);
         return true;
       };
     }

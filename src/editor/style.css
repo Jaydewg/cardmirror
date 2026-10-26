@@ -1222,7 +1222,13 @@ button {
    full scrollable extent regardless of where inner content's box
    ends. */
 :root[data-theme="dark"]:not([data-theme-doc="dark"]) body:not(.pmd-multi-doc) #app,
-:root[data-theme="dark"]:not([data-theme-doc="dark"]) .pmd-pane-body {
+:root[data-theme="dark"]:not([data-theme-doc="dark"]) .pmd-pane-body,
+/* …and the document previews (Receive / shelf card preview, Recover,
+   version history), whose scroller is `.pmd-recover-preview-scroll`
+   around a content-sized `.pmd-pane-editor` host: without this the
+   editor's paper stops where the cards end and the rest of the pane
+   shows the dark chrome. */
+:root[data-theme="dark"]:not([data-theme-doc="dark"]) .pmd-recover-preview-scroll {
   background: var(--pmd-c-doc-paper);
 }
 
@@ -4122,6 +4128,11 @@ body.pmd-override-shading [data-shading] {
   color: var(--pmd-color-reading-marker) !important;
 }
 :root[data-theme="dark"][data-theme-doc="dark"] .ProseMirror span[data-color="ff0000" i] {
+  color: var(--pmd-color-reading-marker) !important;
+}
+/* The atom form of the reading marker (dormant `reading_marker` node) — same
+   hue as the run form. Not an image, so read mode's img hiding leaves it. */
+.ProseMirror .pmd-reading-marker {
   color: var(--pmd-color-reading-marker) !important;
 }
 
@@ -9580,6 +9591,47 @@ body:has(#comments-column:not([hidden])) :is(#editor, .pmd-pane-editor) .pmd-com
   resize: vertical;
 }
 
+/* Preset name field above the prompt textarea. */
+.pmd-prompt-name-label {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+  color: var(--pmd-c-text-muted);
+}
+.pmd-prompt-name {
+  flex: 1 1 auto;
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+  font-size: 0.9rem;
+  border: 1px solid var(--pmd-c-border);
+  border-radius: 4px;
+  background: var(--pmd-c-bg);
+  color: var(--pmd-c-text);
+}
+/* Settings row: the prompt-preset picker and its buttons. */
+.pmd-cite-preset-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.pmd-cite-preset-select {
+  flex: 1 1 10rem;
+  min-width: 10rem;
+  padding: 0.3rem 0.4rem;
+  font: inherit;
+  font-size: 0.9rem;
+  border: 1px solid var(--pmd-c-border);
+  border-radius: 4px;
+  background: var(--pmd-c-bg);
+  color: var(--pmd-c-text);
+}
+.pmd-settings-btn-danger {
+  border-color: var(--pmd-c-danger, #c0392b);
+  color: var(--pmd-c-danger, #c0392b);
+}
+
 /* Shared scaffolding (modal button).
    Diverge by pulling a selector out, not by re-copying. */
 .pmd-prompt-btn,
@@ -14983,6 +15035,16 @@ body.pmd-multi-doc .pmd-cardcutter-trim {
   margin-top: 4px;
   padding-top: 4px;
   border-top: 1px solid var(--pmd-c-border-soft);
+  /* Pinned to the popup's bottom edge while the list above scrolls: the
+     popup is the scroll container (`.pmd-pill-popup`), so sticky holds the
+     row in view; the negative bottom + padding cover the popup's own
+     0.25rem inset so nothing peeks through underneath. */
+  position: sticky;
+  bottom: -0.25rem;
+  margin-bottom: -0.25rem;
+  padding-bottom: 0.25rem;
+  background: var(--pmd-c-bg);
+  z-index: 1;
 }
 /* display:flex would defeat the hidden attribute (collab gate closed) —
    on the row, and on its buttons (Clear with nothing received, Join with
@@ -15030,7 +15092,17 @@ body.pmd-multi-doc .pmd-cardcutter-trim {
 .pmd-send-action-collab-hidden {
   display: none;
 }
-/* Copy code's ▾ (federation): a narrow companion to the session action. */
+/* Copy edit code's ▾ (federation): a narrow companion to the session
+   action, sharing its grid cell (or its share of the no-session row). */
+.pmd-send-action-split {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+}
+.pmd-send-action-split > .pmd-send-action:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
 .pmd-send-action.pmd-send-action-caret {
   flex: 0 0 auto;
   padding-inline: 6px;
@@ -15112,6 +15184,72 @@ body.pmd-multi-doc .pmd-cardcutter-trim {
 }
 .pmd-send-pill:not(.pmd-send-invite-mode) .pmd-pill-settings {
   display: none;
+}
+/* The Send pill's session actions. Click-open: a 2×2 grid (Start session /
+   Copy edit code · Copy edit link / Copy view code · Copy view link) beside
+   a side column (gear over an icon-only Add contact). The copy actions
+   exist only while the focused doc has a live session and, like the gear,
+   only on a click-open — a drag's row is two drop zones. */
+.pmd-send-actions-grid {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.pmd-send-actions-side {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: row;
+  gap: 4px;
+}
+/* The side column stacks only beside the two-row copy grid (live session).
+   Without a session the grid holds Start session alone, laid out as a flex
+   row so it fills, and the bottom reads as it always did: Add contact ·
+   Start session · gear. */
+.pmd-send-actions-live .pmd-send-actions-side {
+  flex-direction: column;
+}
+.pmd-send-actions:not(.pmd-send-actions-live) .pmd-send-actions-grid {
+  display: flex;
+  /* Same zero basis as the Add contact button beside it, so the two split
+     the row evenly instead of the grid taking its content width first. */
+  flex: 1 1 0;
+}
+.pmd-send-actions-grid > .pmd-send-action,
+.pmd-send-actions-grid > .pmd-send-action-split {
+  min-width: 0;
+}
+/* Without a session the split holds Start session alone; it fills its
+   half of the row like the bare button did. */
+.pmd-send-actions:not(.pmd-send-actions-live) .pmd-send-action-split,
+.pmd-send-pill:not(.pmd-send-invite-mode) .pmd-send-action-split {
+  flex: 1 1 0;
+}
+.pmd-send-pill:not(.pmd-send-invite-mode) .pmd-send-action-link {
+  display: none;
+}
+/* Live session, click-open: Add contact is the glyph alone (its tooltip
+   says the rest), a square like the gear above it. */
+.pmd-send-invite-mode .pmd-send-actions-live .pmd-send-action-contact {
+  width: 30px;
+  padding: 5px 0;
+}
+.pmd-send-invite-mode .pmd-send-actions-live .pmd-send-action-contact > span:last-child {
+  display: none;
+}
+/* Drag mode: back to the two-zone row — "Send by code" (Add contact) on the
+   left, "Recent senders" (the session footprint) on the right. */
+.pmd-send-pill:not(.pmd-send-invite-mode) .pmd-send-actions-grid {
+  display: flex;
+}
+.pmd-send-pill:not(.pmd-send-invite-mode) .pmd-send-actions-side {
+  order: -1;
+  flex: 1 1 0;
+  flex-direction: row;
+}
+.pmd-send-pill:not(.pmd-send-invite-mode) .pmd-send-action-contact {
+  flex: 1 1 0;
 }
 /* Drag-revealed recent-senders FLYOUT: a separate area to the right of
    the panel (left/bottom set in JS from the panel's live rect). Same
@@ -15805,6 +15943,10 @@ body.pmd-multi-doc .pmd-cardcutter-trim {
 .pmd-send-invite-mode .pmd-send-invite-btn:hover {
   background: var(--pmd-c-hover);
   border-color: var(--pmd-c-accent);
+}
+/* The second per-row invite button (spectate) sits right after the first. */
+.pmd-send-invite-mode .pmd-send-invite-btn-view {
+  margin-left: 2px;
 }
 /* In invite mode the row itself isn't the affordance — only its button is. */
 .pmd-send-invite-mode .pmd-send-target {

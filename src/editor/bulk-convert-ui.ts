@@ -13,7 +13,8 @@
  */
 
 import { zipSync } from 'fflate';
-import { fromDocxFull, parseNative, serializeNative, toDocx } from '../index.js';
+import { fromDocxFull, serializeNative } from '../index.js';
+import { nativeBytesToDocx } from './native-to-docx.js';
 import { getHost, getElectronHost } from './host/index.js';
 import { settings } from './settings.js';
 import { runWebFileTool } from './web-file-tools.js';
@@ -36,10 +37,12 @@ async function convertBytes(bytes: Uint8Array, dir: Direction): Promise<Uint8Arr
     const { doc, threads } = await fromDocxFull(bytes);
     return serializeNative(doc, threads.length ? { threads } : undefined);
   }
-  const { doc, threads } = parseNative(bytes);
-  return toDocx(doc, {
-    ...(threads.length ? { threads } : {}),
-    defaultFont: settings.get('bodyFont'),
+  // The ordinary export pipeline: comments/analytics/undertags kept,
+  // live views materialized, unread red not baked (a converted file is
+  // a working file).
+  return nativeBytesToDocx(bytes, {
+    bodyFont: settings.get('bodyFont'),
+    markUnreadAfterMarker: settings.get('markUnreadAfterMarker'),
   });
 }
 
@@ -276,13 +279,16 @@ class BulkConvertModal {
       if (input.kind === 'file') {
         this.setStatus(`Converting ${input.name}…`);
         const converted = await convertBytes(input.bytes!, dir);
-        if (out === 'zip') {
-          const bytes = zipSync({ [swapExt(input.name, dir)]: converted });
-          await electron.writeFileAtPath(joinPath(dest, `${baseNoExt(input.name)}.zip`), bytes);
-        } else {
-          await electron.writeFileAtPath(joinPath(dest, swapExt(input.name, dir)), converted);
-        }
-        this.setStatus(`Converted “${input.name}”.`);
+        // Never overwrite: a same-named file in the destination (a re-run,
+        // or converting into the source folder) is left alone and reported.
+        const target = out === 'zip' ? `${baseNoExt(input.name)}.zip` : swapExt(input.name, dir);
+        const bytes = out === 'zip' ? zipSync({ [swapExt(input.name, dir)]: converted }) : converted;
+        const r = await electron.writeFileAtPath(joinPath(dest, target), bytes, { failIfExists: true });
+        this.setStatus(
+          r === 'collision'
+            ? `“${target}” already exists in the destination — not overwritten.`
+            : `Converted “${input.name}”.`,
+        );
       } else {
         const srcExt = dir === 'docx2cmir' ? 'docx' : 'cmir';
         this.setStatus('Scanning…');
@@ -294,6 +300,7 @@ class BulkConvertModal {
         const zipParts: Record<string, Uint8Array> | null = out === 'zip' ? {} : null;
         let ok = 0;
         let failed = 0;
+        let skipped = 0;
         for (let i = 0; i < files.length; i++) {
           const f = files[i]!;
           this.setStatus(`Converting ${i + 1} / ${files.length}…`);
@@ -302,8 +309,15 @@ class BulkConvertModal {
             if (!read) throw new Error('unreadable');
             const converted = await convertBytes(read.bytes, dir);
             const rel = swapExt(f.relPath, dir);
-            if (zipParts) zipParts[rel.replace(/\\/g, '/')] = converted;
-            else await electron.writeFileAtPath(joinPath(dest, rel), converted);
+            if (zipParts) {
+              zipParts[rel.replace(/\\/g, '/')] = converted;
+            } else {
+              const r = await electron.writeFileAtPath(joinPath(dest, rel), converted, { failIfExists: true });
+              if (r === 'collision') {
+                skipped++;
+                continue;
+              }
+            }
             ok++;
           } catch (err) {
             failed++;
@@ -312,10 +326,14 @@ class BulkConvertModal {
         }
         if (zipParts && ok > 0) {
           const bytes = zipSync(zipParts);
-          await electron.writeFileAtPath(joinPath(dest, `${input.name}.zip`), bytes);
+          const r = await electron.writeFileAtPath(joinPath(dest, `${input.name}.zip`), bytes, { failIfExists: true });
+          if (r === 'collision') {
+            this.setStatus(`“${input.name}.zip” already exists in the destination — not overwritten.`);
+            return;
+          }
         }
         this.setStatus(
-          `Done — ${ok} converted${failed ? `, ${failed} failed (see console)` : ''}.`,
+          `Done — ${ok} converted${skipped ? `, ${skipped} skipped (already in the destination)` : ''}${failed ? `, ${failed} failed (see console)` : ''}.`,
         );
       }
     } catch (err) {

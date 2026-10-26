@@ -77,9 +77,10 @@ describe('BrowserHost.saveExisting ladder', () => {
     const host = new BrowserHost();
     const h = fakeHandle(1);
     await host.saveExisting(h, bytes);
-    // Refresh happened between the failure and the successful retry.
+    // Refresh happened between the failure and the successful retry, plus
+    // the post-save stat that records the freshness baseline.
     expect(h.calls.createWritable).toBe(2);
-    expect(h.calls.getFile).toBe(1);
+    expect(h.calls.getFile).toBe(2);
     expect(h.calls.write).toBe(1);
     expect(h.calls.close).toBe(1);
   });

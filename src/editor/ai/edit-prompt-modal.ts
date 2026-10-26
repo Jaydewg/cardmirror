@@ -1,21 +1,50 @@
 /**
- * Modal editor for the AI cite-creator prompt.
+ * Modal editor for one AI cite-creator prompt preset.
  *
  * The prompt is long enough that the inline settings text input
- * doesn't fit. This dialog opens on demand with a full-size
- * textarea pre-populated with the current prompt (or the default
- * when the setting is empty). Save persists the value; "Restore
- * default" clears the override.
+ * doesn't fit. This dialog opens on demand with a name field and a
+ * full-size textarea — pre-populated with the preset being edited, or,
+ * for a new preset, with the prompt currently in use (the built-in
+ * default when none is). Save writes the preset (cite-prompt-presets.ts)
+ * and makes it the active one; "Restore default" refills the textarea
+ * with the built-in prompt.
  */
 
 import { settings } from '../settings.js';
 import { DEFAULT_AI_CITE_PROMPT } from './cite-creator.js';
+import {
+  MAX_CITE_PROMPT_PRESETS,
+  activateCitePromptPreset,
+  activeCitePromptIndex,
+  citePromptPresets,
+  defaultCitePromptPresetName,
+  saveCitePromptPreset,
+} from './cite-prompt-presets.js';
 import { setIcon } from '../icons';
 import { pushOverlay, popOverlay, isTopOverlay } from '../overlay-stack.js';
 import { isBackdropClick } from '../backdrop-click.js';
+import { showToast } from '../toast.js';
 
-export function openCitePromptEditor(): void {
+export interface CitePromptEditorOptions {
+  /** Preset to edit; null adds a new one. Omitted: the active preset,
+   *  or a new one when the built-in default is in use. */
+  preset?: number | null;
+}
+
+export function openCitePromptEditor(opts: CitePromptEditorOptions = {}): void {
   if (document.querySelector('.pmd-prompt-overlay')) return;
+  const presets = citePromptPresets();
+  const index =
+    opts.preset === undefined
+      ? activeCitePromptIndex() >= 0
+        ? activeCitePromptIndex()
+        : null
+      : opts.preset;
+  const editing = index != null ? presets[index] : undefined;
+  if (index == null && presets.length >= MAX_CITE_PROMPT_PRESETS) {
+    showToast(`You already have ${MAX_CITE_PROMPT_PRESETS} cite-prompt presets — delete one to add another.`);
+    return;
+  }
   const overlayToken = pushOverlay();
 
   const overlay = document.createElement('div');
@@ -31,7 +60,7 @@ export function openCitePromptEditor(): void {
   const header = document.createElement('header');
   header.className = 'pmd-prompt-header';
   const title = document.createElement('h2');
-  title.textContent = 'AI cite-creator prompt';
+  title.textContent = editing ? `AI cite-creator prompt: ${editing.name}` : 'New AI cite-creator prompt preset';
   header.appendChild(title);
   const close = (): void => {
     overlay.remove();
@@ -55,11 +84,24 @@ export function openCitePromptEditor(): void {
     'The reply must use the delimited [[CITE]] … [[TOKENS]] … [[END]] block format at the bottom of the prompt — the editor splits on those exact markers to insert the cite and apply the F8 cite mark to each token, so leave that part intact unless you know what you\'re doing.';
   dialog.appendChild(note);
 
-  const stored = settings.get('aiCitePrompt');
+  const nameLabel = document.createElement('label');
+  nameLabel.className = 'pmd-prompt-name-label';
+  nameLabel.textContent = 'Preset name';
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.className = 'pmd-prompt-name';
+  nameInput.maxLength = 60;
+  nameInput.placeholder = defaultCitePromptPresetName(index ?? presets.length);
+  nameInput.value = editing?.name ?? '';
+  nameLabel.appendChild(nameInput);
+  dialog.appendChild(nameLabel);
+
   const textarea = document.createElement('textarea');
   textarea.className = 'pmd-prompt-textarea';
   textarea.spellcheck = false;
-  textarea.value = stored || DEFAULT_AI_CITE_PROMPT;
+  // A new preset starts from what's in use now, so "tweak the current
+  // prompt into a second one" is the zero-effort path.
+  textarea.value = editing ? editing.prompt : settings.get('aiCitePrompt') || DEFAULT_AI_CITE_PROMPT;
   textarea.rows = 24;
   dialog.appendChild(textarea);
 
@@ -89,12 +131,14 @@ export function openCitePromptEditor(): void {
   const saveBtn = document.createElement('button');
   saveBtn.type = 'button';
   saveBtn.className = 'pmd-prompt-btn pmd-prompt-btn-primary';
-  saveBtn.textContent = 'Save';
+  saveBtn.textContent = editing ? 'Save' : 'Save and use';
   saveBtn.addEventListener('click', () => {
-    const v = textarea.value;
-    // Treat verbatim-equal-to-default as "no override" so the
-    // setting stays empty and inherits future prompt updates.
-    settings.set('aiCitePrompt', v.trim() === DEFAULT_AI_CITE_PROMPT.trim() ? '' : v);
+    const at = saveCitePromptPreset(index, nameInput.value, textarea.value);
+    if (at == null) {
+      showToast('Could not save the preset.');
+      return;
+    }
+    activateCitePromptPreset(at);
     close();
   });
   footer.appendChild(saveBtn);
@@ -109,5 +153,5 @@ export function openCitePromptEditor(): void {
   };
   document.addEventListener('keydown', onKey);
 
-  requestAnimationFrame(() => textarea.focus());
+  requestAnimationFrame(() => (editing ? textarea : nameInput).focus());
 }

@@ -31,7 +31,7 @@ const OWNER = 'ui-flows-doc';
 import { settings } from '../../src/editor/settings.js';
 import { CollabSession } from '../../src/editor/collab/collab-session.js';
 import * as collabUi from '../../src/editor/collab/collab-ui.js';
-import { decodeShareCode } from '../../src/editor/collab/collab-crypto.js';
+import { decodeShareCode, viewCodeFromShareCode } from '../../src/editor/collab/collab-crypto.js';
 import { RoomsClient } from '../../src/editor/collab/room-client.js';
 import { startRoomsMock, type RoomsMock } from './_rooms-mock.js';
 import { settle, sleep, simpleDoc, docText, typeAfter, mkView } from './_loro-helpers.js';
@@ -860,5 +860,125 @@ describe('collab UI flows through the editor seams', () => {
     clickPromptButton('End Session');
     await end;
     view.destroy();
+  }, 20_000);
+});
+
+describe('spectators through the UI flows (view-only sessions, 2026-10-24)', () => {
+  it('a view code joins as a spectator: no local edits, host sees "1 watching", Stop Watching leaves', async () => {
+    mock.setViewPass('VIEW-PASS');
+    const client = new RoomsClient({ baseUrl: () => mock.url, token: () => mock.token });
+    const { session: rawHost, shareCode } = await CollabSession.host({
+      pmDoc: simpleDoc('watched doc contents'),
+      client,
+      flushMs: 25,
+      minBackoffMs: 20,
+      maxBackoffMs: 60,
+    });
+    const hostView = mkView(rawHost.plugins());
+    await settle();
+    rawHost.start();
+    await sleep(80);
+    const decoded = decodeShareCode(shareCode)!;
+    const viewS = mkIndexStyleView('doc-S');
+    const depsS = {
+      getView: () => viewS,
+      getOwnerUid: () => 'doc-S',
+      getViewForUid: (u: string): EditorView | null => (u === 'doc-S' ? viewS : null),
+      refreshPlugins: () =>
+        viewS.updateState(viewS.state.reconfigure({ plugins: buildMiniPlugins('doc-S') })),
+      newSessionDoc: () => true,
+    };
+    try {
+      const joined = await collabUi.joinSessionWithCode(depsS, viewCodeFromShareCode(shareCode)!);
+      expect(joined).toBe(true);
+      await sleep(250);
+      const cp = collabCopresenceFor('doc-S');
+      expect(cp?.role).toBe('spectator');
+      expect(docText(viewS.state.doc)).toContain('watched doc contents');
+      expect(mock.viewerCount(decoded.roomId)).toBe(1);
+      // The persisted record says spectator, with the view pass as its credential.
+      const rec = await loadSessionRecord(decoded.roomId);
+      expect(rec?.role).toBe('spectator');
+      expect(rec?.guestPass).toBe('VIEW-PASS');
+      // Local typing is refused; the room never hears from this peer.
+      const updates = mock.updateCount(decoded.roomId);
+      typeAfter(viewS, 'watched doc contents', ' NOPE');
+      expect(docText(viewS.state.doc)).not.toContain('NOPE');
+      await sleep(150);
+      expect(mock.updateCount(decoded.roomId)).toBe(updates);
+      // Host edits still arrive.
+      typeAfter(hostView, 'watched doc contents', ' + host edit');
+      await sleep(250);
+      expect(docText(viewS.state.doc)).toContain('+ host edit');
+      // Leaving is "Stop Watching"; the copy stays.
+      const end = collabUi.endSessionFlow(depsS);
+      await settle();
+      clickPromptButton('Stop Watching');
+      await end;
+      await sleep(100);
+      expect(collabPluginSourceFor('doc-S')).toBeNull();
+      expect(docText(viewS.state.doc)).toContain('+ host edit');
+      expect(mock.viewerCount(decoded.roomId)).toBe(0);
+    } finally {
+      mock.setViewPass(null);
+      await rawHost.stop();
+      hostView.destroy();
+      viewS.destroy();
+    }
+  }, 20_000);
+
+  it('a full room offers "watch instead" and the accepted fallback mounts a spectator session', async () => {
+    mock.setViewPass('VIEW-PASS');
+    const client = new RoomsClient({ baseUrl: () => mock.url, token: () => mock.token });
+    const { session: rawHost, shareCode } = await CollabSession.host({
+      pmDoc: simpleDoc('full room, watch me'),
+      client,
+      flushMs: 25,
+      minBackoffMs: 20,
+      maxBackoffMs: 60,
+    });
+    const hostView = mkView(rawHost.plugins());
+    await settle();
+    rawHost.start();
+    await sleep(80);
+    const decoded = decodeShareCode(shareCode)!;
+    const raws: AbortController[] = [];
+    for (let i = 0; i < 9; i++) {
+      const ac = new AbortController();
+      raws.push(ac);
+      void fetch(`${mock.url}/rooms/${decoded.roomId}/stream?sid=rawf${i}`, {
+        headers: { Authorization: `Bearer ${mock.token}` },
+        signal: ac.signal,
+      }).catch(() => {});
+    }
+    await sleep(150);
+    const viewF = mkIndexStyleView('doc-F');
+    const depsF = {
+      getView: () => viewF,
+      getOwnerUid: () => 'doc-F',
+      getViewForUid: (u: string): EditorView | null => (u === 'doc-F' ? viewF : null),
+      refreshPlugins: () =>
+        viewF.updateState(viewF.state.reconfigure({ plugins: buildMiniPlugins('doc-F') })),
+      newSessionDoc: () => true,
+    };
+    try {
+      const joined = await collabUi.joinSessionWithCode(depsF, shareCode);
+      expect(joined).toBe(true); // REST half; the stream 409s with a view pass
+      await sleep(300);
+      // The editor session is torn down and the offer is up.
+      clickPromptButton('Watch');
+      await sleep(400);
+      expect(collabCopresenceFor('doc-F')?.role).toBe('spectator');
+      expect(mock.viewerCount(decoded.roomId)).toBe(1);
+      expect(docText(viewF.state.doc)).toContain('full room, watch me');
+      expect((await loadSessionRecord(decoded.roomId))?.role).toBe('spectator');
+    } finally {
+      mock.setViewPass(null);
+      for (const ac of raws) ac.abort();
+      await collabEndOrLeaveSession('doc-F').catch(() => {});
+      await rawHost.stop();
+      hostView.destroy();
+      viewF.destroy();
+    }
   }, 20_000);
 });
