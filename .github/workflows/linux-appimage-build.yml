@@ -1,0 +1,67 @@
+name: Linux AppImage build
+
+# Manually triggered Linux desktop build — produces the x64 `.AppImage`
+# and uploads it as a workflow artifact that can be downloaded from the
+# run page. Unlike the tag-triggered `release.yml`, this one does NOT
+# cut a GitHub Release or publish anything; it's a fast iteration path
+# for verifying Linux-specific fixes on a real Linux build without going
+# through a versioned release cycle. Only the AppImage target is built —
+# the `.pacman` package that release.yml also produces is skipped (and
+# with it the libarchive-tools install that fpm needs).
+#
+# Run from the Actions tab → "Linux AppImage build" → "Run workflow",
+# or via `gh workflow run linux-appimage-build.yml --ref <branch>`.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Linux AppImage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install desktop dependencies
+        # Mirrors release.yml — apps/desktop intentionally isn't in
+        # the npm workspaces array because electron-builder's internal
+        # install step prunes hoisted dev-deps mid-build. Install
+        # separately.
+        run: npm --prefix apps/desktop ci
+
+      - name: Bake relay token into the build
+        # Mirrors release.yml — writes the PAIRING_TOKEN secret into
+        # the (otherwise empty) pairing-build.ts in this ephemeral
+        # checkout only, so cross-machine card sharing works in test
+        # builds too. No-op (empty token) if the secret isn't set.
+        env:
+          PAIRING_TOKEN: ${{ secrets.PAIRING_TOKEN }}
+        run: node apps/desktop/scripts/inject-relay-token.cjs
+
+      - name: Build AppImage
+        # `--linux AppImage --x64` overrides the package.json linux
+        # targets so only the AppImage is assembled. `--publish never`
+        # keeps electron-builder from publishing to GitHub Releases
+        # (the package.json `publish` block is for release.yml). The
+        # trailing `--` flows through `npm run` → `dist` → the bare
+        # `electron-builder` call at the end of the script.
+        run: npm --prefix apps/desktop run dist -- --linux AppImage --x64 --publish never
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cardmirror-linux-appimage
+          path: apps/desktop/release/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
