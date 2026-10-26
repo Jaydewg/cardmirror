@@ -23,7 +23,7 @@ import { Plugin } from 'prosemirror-state';
 import { Decoration, DecorationSet } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
 import { settings } from './settings.js';
-import { isMarkerText } from './reading-marker.js';
+import { isMarkerNode, isMarkerText } from '../schema/reading-marker.js';
 
 /** Meta flag on the no-op transaction the settings watcher dispatches when
  *  the toggle flips, so the plugin rebuilds on demand (mirrors read mode's
@@ -44,9 +44,13 @@ export function computeUnreadDecorations(doc: PMNode): Decoration[] {
     // feature is about the *body* you didn't read.
     let markerEnd = -1;
     node.descendants((child, offset, parent) => {
-      if (!child.isText || !child.text) return true;
       const from = pos + 1 + offset;
       const to = from + child.nodeSize;
+      if (isMarkerNode(child)) {
+        if (markerEnd < 0) markerEnd = to;
+        return false;
+      }
+      if (!child.isText || !child.text) return true;
       if (markerEnd < 0) {
         if (isMarkerText(child)) markerEnd = to; // "after the marked location"
         return true;

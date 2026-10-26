@@ -35,6 +35,8 @@
  * triple-click the whole paragraph; a drag adds the dragged range,
  * snapped to whole words after a double-click and to whole
  * paragraphs after a triple-click (`discontinuousRangeFor`).
+ * Ctrl/Cmd click on a word that is already selected removes the
+ * range that word is in (`selectedRangeIndexForUnit`).
  *
  * The plugin tracks a module-level `currentAnchor` across
  * gestures so shift+click after a double-click extends in word
@@ -290,6 +292,23 @@ export function discontinuousRangeFor(
   return { from: Math.min(lo, a?.from ?? lo), to: Math.max(hi, b?.to ?? hi) };
 }
 
+/** Index of the range in `ranges` that the word `unit` a Ctrl/Cmd-click landed
+ *  on belongs to, or -1 if the word isn't selected. Any overlap with the word
+ *  itself counts; the trailing whitespace the unit absorbs does not, so a click
+ *  on the word just after a range never matches that range. A unit that is all
+ *  whitespace never matches. */
+export function selectedRangeIndexForUnit(
+  doc: PMNode,
+  ranges: RangePair[],
+  unit: RangePair,
+): number {
+  if (unit.to <= unit.from) return -1;
+  const text = doc.textBetween(unit.from, unit.to, '\n', '\uFFFC');
+  const coreTo = unit.from + text.trimEnd().length;
+  if (coreTo <= unit.from) return -1;
+  return ranges.findIndex((r) => r.from < coreTo && r.to > unit.from);
+}
+
 /** Ctrl/Cmd add-to-selection. From the pointer-down at `startPos` (click
  *  count `detail`), track the gesture; on release add the range
  *  `discontinuousRangeFor` decides to the discontinuous shadow selection. The
@@ -327,6 +346,14 @@ function beginDiscontinuousSelect(view: EditorView, startPos: number, detail: nu
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
     const endPos = posAt(e) ?? startPos;
+    if (!dragged && detail === 1) {
+      const word = discontinuousRangeFor(view, startPos, null, 1);
+      const idx = selectedRangeIndexForUnit(view.state.doc, base, word);
+      if (idx !== -1) {
+        setManualShadowSelection(view, base.filter((_, i) => i !== idx), startPos);
+        return;
+      }
+    }
     const added = discontinuousRangeFor(view, startPos, dragged ? endPos : null, detail);
     // setManualShadowSelection clears the pending preview (its setMatches resets it).
     setManualShadowSelection(view, [...base, added]);

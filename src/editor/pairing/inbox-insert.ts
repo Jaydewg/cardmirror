@@ -8,7 +8,7 @@ import { Slice } from 'prosemirror-model';
 import type { EditorView } from 'prosemirror-view';
 import { schema } from '../../schema/index.js';
 import { rewriteHeadingIds } from '../drag-controller.js';
-import { nearestValidInsertPos } from '../insert-position.js';
+import { insertAtCursorPos } from '../insert-position.js';
 import { flattenZonesInSlice } from '../transclusion.js';
 import { readModePlugin } from '../read-mode-plugin.js';
 import { READ_MODE_DRAG_META } from '../reading-marker.js';
@@ -44,7 +44,7 @@ export function insertReceivedItem(view: EditorView, item: InboxItem, atEnd: boo
   const insertPos =
     atEnd || inReadMode
       ? view.state.doc.content.size
-      : nearestValidInsertPos(view.state.doc, view.state.selection.head, rewritten.content);
+      : insertAtCursorPos(view.state.doc, view.state.selection.head, rewritten.content);
   const tr = view.state.tr
     .insert(insertPos, rewritten.content)
     .setMeta(READ_MODE_DRAG_META, true);

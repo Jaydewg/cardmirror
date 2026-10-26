@@ -377,6 +377,46 @@ export const nodes: { [name: string]: NodeSpec } = {
   },
 
   /**
+   * Reading-position marker as a first-class inline atom — DORMANT.
+   *
+   * Today's marker is a red `font_color` text run with `role: 'marker'`
+   * (see schema/reading-marker.ts). This node is the end state: an atom
+   * deletes, selects and arrows over as one unit, and can't be typed into.
+   * It is in the schema NOW so that every build from here on can open a
+   * file that carries one; nothing creates it yet. The marker command
+   * switches to inserting it once the fleet has this schema (a build
+   * without it throws on the unknown node type at load).
+   *
+   * Rendered as the same red `Marked h:mm` text the run form shows (the
+   * text is `readingMarkerNodeText` in schema/reading-marker.ts — keep the
+   * two in step; that module can't be imported here). Exports as a red
+   * run, so Word sees the Verbatim convention either way.
+   */
+  reading_marker: {
+    inline: true,
+    group: 'inline',
+    atom: true,
+    attrs: {
+      /** Clock time as `h:mm` (12-hour, no leading zero), e.g. `7:32`. */
+      time: {
+        default: '',
+        validate: (v: unknown) => typeof v === 'string',
+      },
+    },
+    parseDOM: [
+      {
+        tag: 'span.pmd-reading-marker',
+        getAttrs: (dom: HTMLElement) => ({ time: dom.getAttribute('data-time') ?? '' }),
+      },
+    ],
+    toDOM: (node) => [
+      'span',
+      { class: 'pmd-reading-marker', 'data-time': String(node.attrs['time']) },
+      `Marked ${String(node.attrs['time'])}`,
+    ],
+  },
+
+  /**
    * Transclusion "live zone" — a region mirroring the contents under a heading
    * in another CardMirror file (see TRANSCLUSION_PLAN.md).
    *

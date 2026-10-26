@@ -38,7 +38,7 @@ import { DOMParser as PMDOMParser, Fragment, Slice, type Node as PMNode } from '
 import { type EditorState, type Transaction } from 'prosemirror-state';
 import { ReplaceStep } from 'prosemirror-transform';
 import { newHeadingId } from '../schema/ids.js';
-import { nearestValidInsertPos } from './insert-position.js';
+import { insertAtCursorPos } from './insert-position.js';
 import { markCiteTokensInText } from './cite-token-match.js';
 
 /**
@@ -135,7 +135,7 @@ export function buildExternalInsertTransaction(
     // Dropping a doc-level object at a raw caret inside a card makes PM split
     // the card and leave a phantom blank-tag sibling behind; snap to the
     // outline slot a drag would use instead (mirrors the receive-pill insert).
-    const at = nearestValidInsertPos(state.doc, state.selection.head, content);
+    const at = insertAtCursorPos(state.doc, state.selection.head, content);
     return state.tr.insert(at, content);
   }
 
@@ -241,7 +241,7 @@ const STRIP_SELECTOR = 'script, style, template, iframe, object, embed, noscript
  * cooperating apps emit) round-trips at full fidelity by construction
  * — structure, highlight colors, cite/underline marks, everything.
  *
- * Placement is content-aware via `nearestValidInsertPos`, mirroring
+ * Placement is content-aware via `insertAtCursorPos`, mirroring
  * drag-and-drop: purely-inline content lands at the caret (inline
  * when `newParagraph` is false, as its own body block otherwise);
  * block content — whole cards included — snaps to the nearest valid
@@ -320,7 +320,7 @@ export function buildExternalRichInsertTransaction(
   }
   if (docNode.content.size === 0) return null;
   const content = docNode.content;
-  const at = nearestValidInsertPos(state.doc, state.selection.head, content);
+  const at = insertAtCursorPos(state.doc, state.selection.head, content);
   const tr = state.tr.insert(at, content);
   tr.setStoredMarks([]);
   return tr;

@@ -137,7 +137,8 @@ import { openBulkCompress, runCompressSingleFileWeb } from './bulk-compress-ui.j
 import { bulkCompressEnabled } from './bulk-compress-gate.js';
 import { openClean, runCleanSingleFileWeb } from './clean-ui.js';
 import { homeScreen, type HomeScreenCallbacks } from './home-screen.js';
-import { recordRecent, removeRecent, listRecents, type RecentFile } from './recents-store.js';
+import { recordRecent, removeRecent, listRecents, clearRecents, subscribeRecents, type RecentFile } from './recents-store.js';
+import { buildMenuRecents } from './menu-recents.js';
 import {
   reportWindowWorkspace,
   rolloverLastWorkspace,
@@ -272,7 +273,7 @@ import { imageContextMenuPlugin } from './image-context-menu-plugin.js';
 import { editorNodeViews } from './image-resize-nodeview.js';
 import { setViewDocPath, getViewDocPath } from './transclusion-doc-path.js';
 import { isSyncOrigin } from './sync-origin.js';
-import { listSessionRecords, deleteSessionRecord } from './collab/collab-store.js';
+import { listSessionRecords, deleteSessionRecord, subscribeSessionRecords } from './collab/collab-store.js';
 import { collabEnabled } from './collab/collab-gate.js';
 import { parseJoinLinkHash } from './collab/join-link.js';
 import { setRePickOpener, setOpenSourceOpener } from './transclusion-actions.js';
@@ -292,6 +293,7 @@ import { customDashPlugin } from './custom-dash-plugin.js';
 import { autoCapitalizePlugin } from './auto-capitalize-plugin.js';
 import { customAutocorrectPlugin } from './custom-autocorrect-plugin.js';
 import { footnotePopoverPlugin } from './footnote-popover.js';
+import { readModeCopyPlugin } from './read-mode-copy.js';
 import { wordSelectionKeymap } from './word-selection-keymap.js';
 import { morphModePlugin, toggleMorphMode } from './morph-mode.js';
 import { highlightFrequencyPlugin } from './highlight-frequency-plugin.js';
@@ -474,9 +476,12 @@ if (!getElectronHost() && !isLiteBuild() && window.location.hash.includes('join=
     }, 600);
   } else if (joinParts) {
     const offerJoin = async (): Promise<void> => {
+      const view = joinParts.shareCode.startsWith('cmview');
       const go = await confirmDialog(
-        'Join the shared session from this link? You will edit the document live with its host.',
-        { okLabel: 'Join Session' },
+        view
+          ? 'Watch the shared session from this link? You will see every edit live but cannot make changes.'
+          : 'Join the shared session from this link? You will edit the document live with its host.',
+        { okLabel: view ? 'Watch Session' : 'Join Session' },
       );
       if (!go) return;
       const m = await loadCollabUi();
@@ -1679,6 +1684,12 @@ const ribbonContext: RibbonContext = {
   collabCopyInviteLink: () => {
     void loadCollabUi().then((m) => m.copyInviteLinkFlow());
   },
+  collabCopyViewCode: () => {
+    void loadCollabUi().then((m) => m.copyViewCodeFlow());
+  },
+  collabCopyViewLink: () => {
+    void loadCollabUi().then((m) => m.copyViewLinkFlow());
+  },
   collabInviteStarred: () => {
     void loadCollabUi().then((m) => m.inviteStarredFlow());
   },
@@ -2312,6 +2323,7 @@ const ribbonContext: RibbonContext = {
     else settings.set('navPaneVisible', !settings.get('navPaneVisible'));
   },
   setNavDepth: (level) => activeNavPanelResolver()?.setMaxLevel(level),
+  alphabetizeSelectedHeadings: () => activeNavPanelResolver()?.alphabetizeSelection() ?? false,
   // ─── No-default-binding hooks ────────────────────────────────
   // Each routes through the same button's existing click handler
   // (via `.click()`) — the keybinding then follows the exact same
@@ -5587,7 +5599,7 @@ function makeStarterDoc(): PMNode {
     ),
     blank(),
     paraText(
-      'For live co-editing, click the Send pill and press the invite button on a recipient — or run Start Collaboration Session from the command bar and share the code it copies. Up to 10 people type in one document with live cursors, and everyone keeps their copy when the session ends.',
+      'For live co-editing, click the Send pill and press the invite button on a recipient — or run Start Collaboration Session from the command bar and share the code it copies. Up to 30 people type in one document with live cursors, and everyone keeps their copy when the session ends.',
     ),
     blank(),
     paraText(
@@ -5828,6 +5840,9 @@ export function buildEditorPlugins(targetUid?: string | null): Plugin[] {
     // reproduces cursor-join shapes). A logged no-op is the honest
     // outcome — the edit had no legal result.
     keymap(Object.fromEntries(Object.entries(baseKeymap).map(([k, c]) => [k, neverThrow(c)]))),
+    // After the keymaps on purpose: read mode's `handleKeyDown` swallows
+    // bare keys nobody claimed, so a ribbon/macro binding on a bare key
+    // (Send to Speech's backtick) keeps working while reading.
     readModePlugin,
     markUnreadPlugin,
     commentsPlugin,
@@ -5971,6 +5986,10 @@ export function buildEditorPlugins(targetUid?: string | null): Plugin[] {
   // firing) takes precedence; the link lands on the next chance.
   plugins.push(autolinkPlugin());
   plugins.push(footnotePopoverPlugin());
+  // A copy from a read-mode view carries only what read mode shows
+  // (`readModeCopyVisible`, default on). Runs after the live-view
+  // flattening transformCopied above; PM runs every such hook.
+  plugins.push(readModeCopyPlugin());
   // Editor spellcheck — viewport-scoped custom checker, gated internally
   // on the `editorSpellcheck` setting (does nothing when off).
   plugins.push(viewportSpellcheckPlugin());
@@ -7234,6 +7253,59 @@ async function loadFileInPlace(file: {
   view?.focus();
 }
 
+/** Resume a saved session from the home screen's Sessions list — and from
+ *  File → Rejoin Recent Session, which mirrors it. */
+async function resumeSessionFromHome(roomId: string): Promise<void> {
+  // Duplicate guards BEFORE any spawn, so a redundant click never mints
+  // a stray window. This-window: the synchronous live-room probe.
+  // Other-window: the session's claim in the duplicate-open registry —
+  // probing it also focuses the owning window.
+  if (collabRoomIsLive(roomId)) {
+    homeScreen.hide(); // the live doc is somewhere in this window
+    showToast('That session is already open in this window.');
+    return;
+  }
+  let liveElsewhere = false;
+  try {
+    liveElsewhere =
+      (await getElectronHost()?.openPathCheck(collabRoomClaimKey(roomId)))?.takenByOther ??
+      false;
+  } catch {
+    /* openPath API absent (old preload / web) — skip the cross-window guard */
+  }
+  if (liveElsewhere) {
+    showToast('That session is already open in another CardMirror window.');
+    return;
+  }
+  homeScreen.hide();
+  // Single-pane with a real doc behind the home screen: resume in a NEW
+  // window (the session doc would otherwise evict this one) — the spawned
+  // window opens a blank starter and runs the full resume, mirroring the
+  // spawn-to-join flow.
+  if (!multiDocActive && !isPristineStarter && getHost().canSpawnWindow) {
+    void getHost()
+      .spawnWindow({
+        filename: '',
+        bytes: new Uint8Array(),
+        handle: null,
+        format: null,
+        uid: null,
+        resumeRoomId: roomId,
+      })
+      .catch((err) => {
+        console.error('Spawn-to-resume failed:', err);
+        showToast('Could not open a new window for the session.');
+      });
+    return;
+  }
+  // Multi-pane resumes into a user-picked slot (the home screen is
+  // reachable there via the Home button); a pristine single-pane
+  // starter resumes in place.
+  void loadCollabUi().then((m) =>
+    m.resumeSessionFlow(multiDocActive ? makeMultiPaneSessionDeps() : collabDeps, roomId),
+  );
+}
+
 const homeCallbacks: HomeScreenCallbacks = {
   // Single-doc: load in-place in this window. Multi-pane: hide
   // home and route through the shell flows, which present the
@@ -7290,56 +7362,7 @@ const homeCallbacks: HomeScreenCallbacks = {
       }
     : {}),
   resumeSession: (roomId: string) => {
-    void (async (): Promise<void> => {
-      // Duplicate guards BEFORE any spawn, so a redundant click never mints
-      // a stray window. This-window: the synchronous live-room probe.
-      // Other-window: the session's claim in the duplicate-open registry —
-      // probing it also focuses the owning window.
-      if (collabRoomIsLive(roomId)) {
-        homeScreen.hide(); // the live doc is somewhere in this window
-        showToast('That session is already open in this window.');
-        return;
-      }
-      let liveElsewhere = false;
-      try {
-        liveElsewhere =
-          (await getElectronHost()?.openPathCheck(collabRoomClaimKey(roomId)))?.takenByOther ??
-          false;
-      } catch {
-        /* openPath API absent (old preload / web) — skip the cross-window guard */
-      }
-      if (liveElsewhere) {
-        showToast('That session is already open in another CardMirror window.');
-        return;
-      }
-      homeScreen.hide();
-      // Single-pane with a real doc behind the home screen: resume in a NEW
-      // window (the session doc would otherwise evict this one) — the spawned
-      // window opens a blank starter and runs the full resume, mirroring the
-      // spawn-to-join flow.
-      if (!multiDocActive && !isPristineStarter && getHost().canSpawnWindow) {
-        void getHost()
-          .spawnWindow({
-            filename: '',
-            bytes: new Uint8Array(),
-            handle: null,
-            format: null,
-            uid: null,
-            resumeRoomId: roomId,
-          })
-          .catch((err) => {
-            console.error('Spawn-to-resume failed:', err);
-            showToast('Could not open a new window for the session.');
-          });
-        return;
-      }
-      // Multi-pane resumes into a user-picked slot (the home screen is
-      // reachable there via the Home button); a pristine single-pane
-      // starter resumes in place.
-      void loadCollabUi().then((m) =>
-        m.resumeSessionFlow(multiDocActive ? makeMultiPaneSessionDeps() : collabDeps, roomId),
-      );
-    })();
+    void resumeSessionFromHome(roomId);
   },
   manageQuickCards: () => {
     void quickCardsManageUI.open();
@@ -9703,6 +9726,30 @@ function pushNativeMenuBindings(): void {
 {
   const electronHost = getElectronHost();
   if (electronHost) {
+    // File → Open Recent / Rejoin Recent Session mirror the home screen's
+    // Recent and Sessions lists: push a compact payload now and on every
+    // change of either store; main rebuilds the two submenus from it.
+    const pushNativeMenuRecents = (): void => {
+      void (async () => {
+        const records = collabEnabled() ? await listSessionRecords().catch(() => []) : null;
+        await electronHost.setMenuRecents(buildMenuRecents(listRecents(), records));
+      })().catch(() => {});
+    };
+    pushNativeMenuRecents();
+    subscribeRecents(pushNativeMenuRecents);
+    subscribeSessionRecords(pushNativeMenuRecents);
+    electronHost.onMenuOpenRecent((pick) => {
+      if (pick.kind === 'file') {
+        // Same path as a home-screen Recent click: in-place on a pristine
+        // starter, a new window over a real doc, the slot picker in
+        // three-pane; a vanished file is pruned with a toast.
+        const recent = listRecents().find((r) => r.handle === pick.id);
+        if (recent) void openRecentInPlace(recent);
+        else showToast('That file is no longer in the recent list');
+        return;
+      }
+      void resumeSessionFromHome(pick.id);
+    });
     electronHost.onMenuCommand((command) => {
       switch (command) {
         case 'newDocument':
@@ -9737,6 +9784,11 @@ function pushNativeMenuBindings(): void {
               await handleUserCloseRequest();
             }
           })();
+          break;
+        case 'clearRecents':
+          // File → Open Recent → Clear Menu (the home screen's list too —
+          // they are one store).
+          clearRecents();
           break;
         default:
           // Fallback for the Speech / View / Help / Toggle Autosave
@@ -10024,10 +10076,11 @@ export function confirmCloseUnsaved(): Promise<'save' | 'saveAs' | 'discard' | '
  *  removes ambiguity about which one is closing (multi-pane). */
 function confirmCloseCoEditedDoc(
   docName: string,
-  info: { role: 'host' | 'participant'; unsynced: number },
+  info: { role: 'host' | 'participant' | 'spectator'; unsynced: number },
 ): Promise<'keep' | 'end' | 'cancel'> {
   const name = docName ? `"${docName}"` : 'this document';
-  const leaveLabel = info.role === 'host' ? 'End session' : 'Leave session';
+  const leaveLabel =
+    info.role === 'host' ? 'End session' : info.role === 'spectator' ? 'Stop watching' : 'Leave session';
   const syncing =
     info.unsynced > 0
       ? ` ${info.unsynced} change${info.unsynced === 1 ? '' : 's'} still syncing will sync when you rejoin.`
@@ -10038,7 +10091,10 @@ function confirmCloseCoEditedDoc(
       {
         value: 'keep',
         label: 'Close',
-        description: `Keep the session — rejoin from the Sessions list to keep editing.${syncing}`,
+        description:
+          info.role === 'spectator'
+            ? 'Keep watching later — rejoin from the Sessions list.'
+            : `Keep the session — rejoin from the Sessions list to keep editing.${syncing}`,
       },
       {
         value: 'end',
@@ -10046,7 +10102,9 @@ function confirmCloseCoEditedDoc(
         description:
           info.role === 'host'
             ? 'End the session for everyone.'
-            : 'Leave the session; your copy stays as it is.',
+            : info.role === 'spectator'
+              ? 'Stop watching; this copy stays as it is and becomes editable.'
+              : 'Leave the session; your copy stays as it is.',
       },
     ],
   }).then((c) => c ?? 'cancel');

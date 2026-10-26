@@ -37,6 +37,8 @@ import { Plugin } from 'prosemirror-state';
 import type { Command } from 'prosemirror-state';
 import { Decoration, DecorationSet } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
+import { AddMarkStep, RemoveMarkStep } from 'prosemirror-transform';
+import type { Transaction } from 'prosemirror-state';
 import { undo, redo, undoDepth, redoDepth } from 'prosemirror-history';
 import { changedRange, expandToTopLevel } from './decoration-range.js';
 import { isSyncOrigin } from './sync-origin.js';
@@ -125,7 +127,9 @@ export const readModePlugin: Plugin<ReadModeState> = new Plugin<ReadModeState>({
     // blocks edits via `filterTransaction` below. Space and Enter do
     // nothing else here, so they're the effortless way to drop/remove a
     // reading-position marker at the podium. The command's bound shortcut
-    // (Mod-Shift-D) still works via the normal keymap.
+    // (Mod-Shift-D) still works via the normal keymap. This runs at the
+    // DOM level — ahead of every keymap — so a bare Enter reaches the
+    // marker before any Enter-bound editing command claims it.
     handleDOMEvents: {
       keydown(view, event) {
         if (!readModePlugin.getState(view.state)?.on) return false;
@@ -136,30 +140,36 @@ export const readModePlugin: Plugin<ReadModeState> = new Plugin<ReadModeState>({
             return true;
           }
         }
-        // Swallow bare editing keys at the DOM level. `filterTransaction`
-        // already guarantees no doc change, but the view is EDITABLE in
-        // read mode (both layouts since 2026-07-27 — the caret must be
-        // placeable), so without this the browser would mutate the DOM,
-        // PM would parse the mutation, the filter would reject it, and
-        // PM would redraw to revert — wasted churn per keystroke, and
-        // the first such mutation trips PM's checkCSS console warning
-        // (single-pane read mode deliberately resets white-space to
-        // `normal` for chunk-separator collapsing). Shift is allowed
-        // (shifted letters are still typing); real chords, navigation
-        // keys, and F-keys all pass through untouched.
-        const noChord = !event.ctrlKey && !event.metaKey && !event.altKey;
-        if (
-          noChord &&
-          (event.key.length === 1 ||
-            event.key === 'Enter' ||
-            event.key === 'Backspace' ||
-            event.key === 'Delete')
-        ) {
-          event.preventDefault();
-          return true;
-        }
         return false;
       },
+    },
+    // Swallow bare editing keys. `filterTransaction` already guarantees
+    // no doc change, but the view is EDITABLE in read mode (both layouts
+    // since 2026-07-27 — the caret must be placeable), so without this
+    // the browser would mutate the DOM, PM would parse the mutation, the
+    // filter would reject it, and PM would redraw to revert — wasted
+    // churn per keystroke, and the first such mutation trips PM's
+    // checkCSS console warning (single-pane read mode deliberately
+    // resets white-space to `normal` for chunk-separator collapsing).
+    // Shift is allowed (shifted letters are still typing); real chords,
+    // navigation keys, and F-keys all pass through untouched.
+    //
+    // A `handleKeyDown` prop, not a DOM-level handler, so that keymaps
+    // registered BEFORE this plugin see the key first: a bare key bound
+    // to a ribbon command or macro (Send to Speech's default is the
+    // backtick) still runs in read mode — the command doesn't touch this
+    // document, and if one did, `filterTransaction` would stop it. Only
+    // a bare key nobody claimed is swallowed here.
+    handleKeyDown(view, event) {
+      if (!readModePlugin.getState(view.state)?.on) return false;
+      const noChord = !event.ctrlKey && !event.metaKey && !event.altKey;
+      return (
+        noChord &&
+        (event.key.length === 1 ||
+          event.key === 'Enter' ||
+          event.key === 'Backspace' ||
+          event.key === 'Delete')
+      );
     },
   },
   // Read mode's lock: while on, reject any document change except the
@@ -174,6 +184,12 @@ export const readModePlugin: Plugin<ReadModeState> = new Plugin<ReadModeState>({
   // output (a normalizer only fires in response to a transaction this
   // filter already admitted; blocking the fix-up would strand the doc
   // half-normalized until read mode exits).
+  //
+  // Comments pass too: adding or deleting one only adds or removes a
+  // `comment_range` mark — the text you're reading is untouched, same as
+  // a private note or a flashcard, which never enter the document at all.
+  // Judged on the steps, not a meta flag, so nothing but comment marks
+  // can ride through on it.
   filterTransaction(tr, state) {
     if (!readModePlugin.getState(state)?.on) return true;
     if (!tr.docChanged) return true;
@@ -182,10 +198,22 @@ export const readModePlugin: Plugin<ReadModeState> = new Plugin<ReadModeState>({
       tr.getMeta(NORMALIZER_META) === true ||
       tr.getMeta(READING_MARKER_META) === true ||
       tr.getMeta(READ_MODE_UNDO_META) === true ||
-      tr.getMeta(READ_MODE_DRAG_META) === true
+      tr.getMeta(READ_MODE_DRAG_META) === true ||
+      isCommentMarkOnly(tr)
     );
   },
 });
+
+/** True when every step of `tr` adds or removes a `comment_range` mark and
+ *  nothing else — the shape of adding or deleting a comment. */
+export function isCommentMarkOnly(tr: Transaction): boolean {
+  if (tr.steps.length === 0) return false;
+  return tr.steps.every(
+    (step) =>
+      (step instanceof AddMarkStep || step instanceof RemoveMarkStep) &&
+      step.mark.type.name === 'comment_range',
+  );
+}
 
 /** Undo — but in read mode, only as far back as the markers dropped since
  *  read mode was entered (never earlier edits). Outside read mode, plain

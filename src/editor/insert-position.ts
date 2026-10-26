@@ -19,6 +19,17 @@
 
 import { type Fragment, type Node as PMNode } from 'prosemirror-model';
 import { collectHeadings, headingInsertPos, TYPE_TO_LEVEL } from './headings.js';
+import { settings } from './settings.js';
+
+export interface InsertPosOptions {
+  /** Forward-only snapping for doc-level objects: the first valid outline
+   *  slot AT OR AFTER `pos` (doc end as the fallback) instead of the
+   *  nearest slot in either direction. With the caret inside an F5
+   *  section, an F5 then lands after the section's last child rather
+   *  than above its heading. The "headings go after the current section"
+   *  setting. */
+  forward?: boolean;
+}
 
 /**
  * Outline level of a doc-level structural slice lead, or `undefined` if the lead
@@ -39,13 +50,14 @@ function docLevelObjectLevel(node: PMNode): number | undefined {
  * before any card/heading, a block (level 3) only at pocket/hat/block
  * boundaries, etc.
  */
-function nearestOutlineSlot(doc: PMNode, pos: number, level: number): number {
+function nearestOutlineSlot(doc: PMNode, pos: number, level: number, forward: boolean): number {
   let best = doc.content.size; // doc-end is always a valid slot
   let bestDist = Math.abs(best - pos);
   for (const entry of collectHeadings(doc, { skipCite: true })) {
     if (entry.level > level) continue;
     const slot = headingInsertPos(doc, entry);
     if (slot == null) continue;
+    if (forward && slot < pos) continue;
     const dist = Math.abs(slot - pos);
     if (dist < bestDist) {
       best = slot;
@@ -66,11 +78,12 @@ export function nearestValidInsertPos(
   doc: PMNode,
   pos: number,
   content: Fragment,
+  opts: InsertPosOptions = {},
 ): number {
   const lead = content.firstChild;
   if (lead) {
     const level = docLevelObjectLevel(lead);
-    if (level !== undefined) return nearestOutlineSlot(doc, pos, level);
+    if (level !== undefined) return nearestOutlineSlot(doc, pos, level, opts.forward === true);
   }
 
   // Inline / card content: snap to the innermost ancestor that accepts it.
@@ -94,4 +107,15 @@ export function nearestValidInsertPos(
     if (canAfter) return after;
   }
   return pos;
+}
+
+/**
+ * `nearestValidInsertPos` for the user-facing insert-at-cursor surfaces
+ * (receive pill, dropzone shelf, send-to-speech, quick cards / external
+ * inserts), honouring the "headings go after the current section"
+ * setting. Cut in Place keeps the plain nearest-slot rule: a cut is a move
+ * the user is aiming precisely.
+ */
+export function insertAtCursorPos(doc: PMNode, pos: number, content: Fragment): number {
+  return nearestValidInsertPos(doc, pos, content, { forward: settings.get('insertHeadingsAfterSection') });
 }

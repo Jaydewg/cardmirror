@@ -688,3 +688,46 @@ describe('save-time structural tripwire (audit tier 1)', () => {
     expect(() => parseNative(bytes)).toThrow(/damaged/);
   });
 });
+
+describe('reading markers are normalized at load', () => {
+  const red = (text: string, role: string | null = null) =>
+    schema.text(text, [marks['font_color']!.create({ color: 'FF0000', role })]);
+  const markerRuns = (doc: PMNode): string[] => {
+    const out: string[] = [];
+    doc.descendants((n) => {
+      if (n.isText && n.marks.some((m) => m.type.name === 'font_color' && m.attrs['role'] === 'marker')) out.push(n.text ?? '');
+      return true;
+    });
+    return out;
+  };
+  const docOf = (...inline: PMNode[]) =>
+    nodes['doc']!.createChecked(null, [
+      nodes['card']!.createChecked(null, [
+        nodes['tag']!.create({ id: newHeadingId() }, schema.text('T')),
+        nodes['card_body']!.create(null, inline),
+      ]),
+    ]);
+
+  it('a pre-role file: red "Marked h:mm" gains the role; other red text does not', () => {
+    const legacy = docOf(schema.text('a '), red('Marked 7:32'), schema.text(' b '), red('just red'));
+    const { doc } = parseNative(serializeNative(legacy));
+    expect(markerRuns(doc)).toEqual(['Marked 7:32']);
+    expect(doc.textContent).toBe(legacy.textContent);
+  });
+
+  it('a mangled marker loses the role on reopen (its red stays)', () => {
+    const saved = docOf(red('Marked 7:32 oops', 'marker'));
+    const { doc } = parseNative(serializeNative(saved));
+    expect(markerRuns(doc)).toEqual(['Marked 7:32']);
+    const reds: string[] = [];
+    doc.descendants((n) => { if (n.isText && n.marks.some((m) => m.type.name === 'font_color')) reds.push(n.text ?? ''); return true; });
+    expect(reds).toEqual(['Marked 7:32', ' oops']);
+  });
+
+  it('an intact marker round-trips unchanged', () => {
+    const saved = docOf(schema.text('a '), red('Marked 7:32', 'marker'), schema.text(' b'));
+    const { doc } = parseNative(serializeNative(saved));
+    expect(doc.eq(saved)).toBe(true);
+  });
+});
+

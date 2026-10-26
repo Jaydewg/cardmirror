@@ -1327,13 +1327,15 @@ class Slot {
       return;
     }
     this.copresenceEl.hidden = false;
-    const text = cp.connected
+    let text = cp.connected
       ? cp.queued > 0
         ? `Sending ${cp.queued}…`
         : 'Synced'
       : cp.queued > 0
         ? `Offline · ${cp.queued}`
         : 'Offline';
+    if (cp.role === 'spectator') text = `Watching · ${text.toLowerCase()}`;
+    if (cp.watchers > 0) text += ` · ${cp.watchers} watching`;
     const labelEl = document.createElement('span');
     labelEl.className = 'pmd-pane-copresence-label';
     labelEl.textContent = text;

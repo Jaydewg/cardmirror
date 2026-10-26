@@ -9,6 +9,7 @@ import { dedupeHeadingIds } from '../schema/ids.js';
 import { importDoc, type MediaPart, type MediaPartsMap } from './importer.js';
 import { importComments } from './comments.js';
 import { importNotes } from './footnotes.js';
+import { normalizeReadingMarkers } from '../schema/reading-marker.js';
 import type { Thread } from '../editor/comments-plugin.js';
 
 export { importDoc } from './importer.js';
@@ -77,7 +78,7 @@ export async function fromDocx(
   // duplicate bookmarked paragraphs; Word doesn't) must not become
   // duplicate heading ids — first occurrence wins, matching every
   // id-keyed lookup's first-match resolution.
-  return dedupeHeadingIds(checkImportedDoc(
+  return normalizeReadingMarkers(dedupeHeadingIds(checkImportedDoc(
     repairDoc(
       importDoc(
         documentXml,
@@ -91,7 +92,7 @@ export async function fromDocx(
         provenanceOut,
       ),
     ),
-  ));
+  )));
 }
 
 /** Enforcement net behind the docx pipeline (audit tier 4): the
@@ -145,14 +146,14 @@ export async function fromDocxFull(
   const endnotesRelsXml = await docx.readText('word/_rels/endnotes.xml.rels');
   // Same rectangularity repair + enforcement check + heading-id dedupe
   // as `fromDocx`.
-  const doc = dedupeHeadingIds(checkImportedDoc(
+  const doc = normalizeReadingMarkers(dedupeHeadingIds(checkImportedDoc(
     repairDoc(
       importDoc(documentXml, relsXml, mediaParts, stylesXml, {
         footnotes: importNotes(footnotesXml, footnotesRelsXml, 'w:footnotes', 'w:footnote'),
         endnotes: importNotes(endnotesXml, endnotesRelsXml, 'w:endnotes', 'w:endnote'),
       }),
     ),
-  ));
+  )));
   const commentsXml = await docx.readText('word/comments.xml');
   const commentsExtendedXml = await docx.readText('word/commentsExtended.xml');
   const threads = importComments(commentsXml, commentsExtendedXml);

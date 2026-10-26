@@ -50,6 +50,13 @@ export const RELAY_CLIENT_ROUTING_HEADER = 'X-CardMirror-Routing';
  */
 export const MOVABLE_ROOMS_MIN_VERSION = '1.0.0';
 
+/** First build whose Receive pill understands a SPECTATOR invite (a
+ *  `cmview1.` code) and whose session can run view-only. Spectate
+ *  invites carry this as their envelope floor, so older clients drop
+ *  them with the update toast instead of showing a Join they cannot
+ *  honor (their share-code parser rejects the prefix anyway). */
+export const SPECTATOR_MIN_VERSION = '1.16.0';
+
 /**
  * Prerelease-aware version compare for CardMirror's version shapes
  * (`X.Y.Z`, `X.Y.Z-alpha.N`, `-beta.N`, `-rc.N`). Returns <0, 0, >0.

@@ -37,6 +37,8 @@ const RECENT = 'recent-rooms';
 
 /** Recent rooms older than this are pruned: the relay reaps a room idle for
  *  7 days, so an older one can't be rejoined anyway. */
+import type { SessionRole } from './session-role.js';
+
 export const RECENT_ROOM_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 /** At most this many rooms are remembered: each entry holds a room's key,
  *  so the list is kept short as well as young. Oldest go first. */
@@ -47,7 +49,7 @@ export interface PersistedSessionRecord {
   /** Key. */
   roomId: string;
   shareCode: string;
-  role: 'host' | 'participant';
+  role: SessionRole;
   /** Delivery cursor: catch-up resumes from here. */
   lastSeq: number;
   /** VersionVector.encode() of what the relay has seen from us. */
@@ -79,7 +81,7 @@ export interface RecentRoomRecord {
   /** Carries the room key — what makes a rejoin possible after Leave. */
   shareCode: string;
   guestPass?: string | null;
-  role: 'host' | 'participant';
+  role: SessionRole;
   docTitle: string;
   /** Last time this window was in the room (install, and again on
    *  teardown). */

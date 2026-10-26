@@ -76,12 +76,26 @@ describe('deriveBrowse — search view (query)', () => {
     const files = r.rows.filter((row) => row.kind === 'file');
     expect(files.map((f) => f.kind === 'file' && [f.name, f.subPath])).toEqual([['Elections DA', 'Politics']]);
   });
-  it('subfolders appear only when their name matches, before the files', () => {
+  it('folders appear only when their name matches, before the files', () => {
     // "neg" also reaches the files INSIDE Neg through their folder path —
     // the shared matcher's secondary field — ranked below the name hit.
     expect(names(browse('', 'neg'))).toEqual(['[Neg]', 'Warming Neg', 'Elections DA', 'Fiat Solvency']);
     expect(names(browse('', 'warming'))).toEqual(['Warming Aff', 'Warming Neg']);
-    expect(names(browse('', 'politics'))).toEqual(['Elections DA', 'Fiat Solvency']);
+  });
+  it('matching folders at any depth below the browsed folder appear, shallowest first, with their sub-path', () => {
+    // "politics" is two levels down from the root: a folder row now, not
+    // only the files inside it (2026-10-24; it used to be immediate
+    // subfolders only).
+    const r = browse('', 'politics');
+    expect(names(r)).toEqual(['[Politics]', 'Elections DA', 'Fiat Solvency']);
+    expect(r.rows[0]).toMatchObject({ kind: 'folder', relativeDirectory: 'Neg/Politics', subPath: 'Neg' });
+    // From inside Neg the same folder is an immediate child (empty sub-path),
+    // and its own child shows beneath it.
+    const deep = browse('Neg', 'e');
+    expect(names(deep).filter((n) => n.startsWith('['))).toEqual(['[Deep]']);
+    expect(deep.rows[0]).toMatchObject({ kind: 'folder', relativeDirectory: 'Neg/Politics/Deep', subPath: 'Politics' });
+    // The navigation view (no query) still lists only the immediate subfolders.
+    expect(names(browse('Neg'))).toEqual(['[Politics]', 'Warming Neg']);
   });
   it('stays inside the browsed folder', () => {
     expect(names(browse('Aff', 'warming'))).toEqual([]);

@@ -11,6 +11,9 @@ import {
   decryptBlob,
   encodeShareCode,
   decodeShareCode,
+  encodeViewCode,
+  viewCodeFromShareCode,
+  isViewCode,
   bytesToBase64,
   base64ToBytes,
 } from '../../src/editor/collab/collab-crypto.js';
@@ -52,6 +55,28 @@ describe('share codes', () => {
     const decoded = decodeShareCode(code)!;
     expect(decoded.roomId).toBe(roomId);
     expect(decoded.keyBytes).toEqual(keyBytes);
+  });
+
+  it('view codes: the share code’s read-only twin, same room + key, flagged view', () => {
+    const keyBytes = generateRoomKeyBytes();
+    const roomId = 'e0720dd8a2df4479bbdad0ed9f48cb21';
+    const edit = encodeShareCode(roomId, keyBytes, '1.0.0');
+    const view = viewCodeFromShareCode(edit)!;
+    expect(view.startsWith('cmview1.')).toBe(true);
+    expect(isViewCode(view)).toBe(true);
+    expect(isViewCode(edit)).toBe(false);
+    const d = decodeShareCode(view)!;
+    expect(d.roomId).toBe(roomId);
+    expect(d.keyBytes).toEqual(keyBytes);
+    expect(d.minVersion).toBe('1.0.0');
+    expect(d.view).toBe(true);
+    expect(decodeShareCode(edit)!.view).toBe(false);
+    // Unversioned twin too.
+    const bare = encodeViewCode(roomId, keyBytes);
+    expect(bare.split('.').length).toBe(3);
+    expect(decodeShareCode(bare)!.view).toBe(true);
+    // The old prefixes never decode as view, and a view code with a bad key is rejected.
+    expect(decodeShareCode(`cmview1.${roomId}.AAAA`)).toBeNull();
   });
 
   it('rejects malformed codes', () => {

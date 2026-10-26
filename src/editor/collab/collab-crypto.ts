@@ -22,6 +22,10 @@ export const ROOM_KEY_BYTES = 32;
 
 const SHARE_CODE_PREFIX = 'cmshare1';
 const SHARE_CODE_PREFIX_V2 = 'cmshare2';
+/** Spectator (view-only) code: same room id + key as a share code, a
+ *  prefix older builds reject outright — the only way an old client can
+ *  react to a view invite is "not a share code", never an edit join. */
+const VIEW_CODE_PREFIX = 'cmview1';
 
 export function generateRoomKeyBytes(): Uint8Array {
   const key = new Uint8Array(ROOM_KEY_BYTES);
@@ -101,22 +105,49 @@ export function encodeShareCode(roomId: string, keyBytes: Uint8Array, minVersion
   return `${SHARE_CODE_PREFIX}.${roomId}.${toBase64Url(keyBytes)}`;
 }
 
-export function decodeShareCode(
-  code: string,
-): { roomId: string; keyBytes: Uint8Array; minVersion?: string } | null {
+/** The view-only twin of a share code: `cmview1.<roomId>.<key>[.<minVersion>]`.
+ *  Holders join as SPECTATORS (relay-enforced through a view pass; the
+ *  client refuses local edits). Mirrors the share code's floor. */
+export function encodeViewCode(roomId: string, keyBytes: Uint8Array, minVersion?: string): string {
+  const base = `${VIEW_CODE_PREFIX}.${roomId}.${toBase64Url(keyBytes)}`;
+  return minVersion ? `${base}.${minVersion}` : base;
+}
+
+/** Rewrite a share code as its view code (same room, same key, same floor). */
+export function viewCodeFromShareCode(shareCode: string): string | null {
+  const d = decodeShareCode(shareCode);
+  return d ? encodeViewCode(d.roomId, d.keyBytes, d.minVersion) : null;
+}
+
+/** True for a `cmview1.` code — cheap, no key decoding. */
+export function isViewCode(code: string): boolean {
+  return code.trim().startsWith(`${VIEW_CODE_PREFIX}.`);
+}
+
+export interface DecodedShareCode {
+  roomId: string;
+  keyBytes: Uint8Array;
+  minVersion?: string;
+  /** True for a spectator (`cmview1.`) code. */
+  view: boolean;
+}
+
+export function decodeShareCode(code: string): DecodedShareCode | null {
   const parts = code.trim().split('.');
-  // The version itself contains dots ("1.0.0"), so a v2 code splits
-  // into 4+ parts: everything past the key is the floor, rejoined.
-  const v2 = parts.length >= 4 && parts[0] === SHARE_CODE_PREFIX_V2;
-  if (!v2 && (parts.length !== 3 || parts[0] !== SHARE_CODE_PREFIX)) return null;
+  const view = parts[0] === VIEW_CODE_PREFIX;
+  // The version itself contains dots ("1.0.0"), so a versioned code
+  // splits into 4+ parts: everything past the key is the floor, rejoined.
+  const versioned = parts.length >= 4 && (parts[0] === SHARE_CODE_PREFIX_V2 || view);
+  const bare = parts.length === 3 && (parts[0] === SHARE_CODE_PREFIX || view);
+  if (!versioned && !bare) return null;
   const roomId = parts[1]!;
   if (!/^[0-9a-f]{16,64}$/.test(roomId)) return null;
-  const minVersion = v2 ? parts.slice(3).join('.') : undefined;
-  if (v2 && !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(minVersion!)) return null;
+  const minVersion = versioned ? parts.slice(3).join('.') : undefined;
+  if (versioned && !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(minVersion!)) return null;
   try {
     const keyBytes = fromBase64Url(parts[2]!);
     if (keyBytes.byteLength !== ROOM_KEY_BYTES) return null;
-    return v2 ? { roomId, keyBytes, minVersion } : { roomId, keyBytes };
+    return versioned ? { roomId, keyBytes, minVersion, view } : { roomId, keyBytes, view };
   } catch {
     return null;
   }

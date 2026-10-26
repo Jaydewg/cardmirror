@@ -8,9 +8,15 @@
  * Space, Enter, or the bound shortcut all drop one (see `read-mode-plugin`).
  *
  * Triggering it again while the cursor is on an existing marker removes that
- * marker (toggle). The marker is plain red text (the `font_color` mark at
- * `FF0000`), so it round-trips to Word like any other colored run, and read
- * mode keeps red text visible so the marker shows in the mode that drops it.
+ * marker (toggle). The marker is red text (the `font_color` mark at `FF0000`
+ * carrying `role: 'marker'`), so it round-trips to Word like any other
+ * colored run, and read mode keeps red text visible so the marker shows in
+ * the mode that drops it. A card holds at most one: dropping a marker
+ * removes any others in that card, so a second tap on the fresh marker
+ * leaves the card clean — the way out of a card that is "secretly" marked.
+ *
+ * What counts as a marker, and the load-time normalization that keeps
+ * stray red text from counting, live in schema/reading-marker.ts.
  */
 
 import { TextSelection } from 'prosemirror-state';
@@ -18,10 +24,26 @@ import type { Command, EditorState, Transaction } from 'prosemirror-state';
 import type { EditorView } from 'prosemirror-view';
 import { closeHistory } from 'prosemirror-history';
 import { schema } from '../schema/index.js';
+import {
+  READING_MARKER_COLOR,
+  READING_MARKER_ROLE,
+  isMarkerText,
+  readingMarkerRangesIn,
+} from '../schema/reading-marker.js';
 
-/** Verbatim red — the marker's text color, and the signal read mode uses
- *  to keep the marker visible. Hex without `#` (OOXML / `font_color`). */
-export const READING_MARKER_COLOR = 'FF0000';
+export {
+  READING_MARKER_COLOR,
+  READING_MARKER_ROLE,
+  READING_MARKER_TEXT_RE,
+  isReadingMarkerColor,
+  isMarkerText,
+  isMarkerNode,
+  isReadingMarker,
+  containsReadingMarker,
+  normalizeReadingMarkers,
+  readingMarkerNodeText,
+  readingMarkerRangesIn,
+} from '../schema/reading-marker.js';
 
 /** Transaction meta flag marking a transaction as the reading-marker edit,
  *  so read mode's `filterTransaction` lets it through (the one edit read
@@ -38,27 +60,12 @@ export const READ_MODE_UNDO_META = 'readModeUndo';
  *  too — moving and shelf-inserting cards is safe even while reading. */
 export const READ_MODE_DRAG_META = 'readModeDragEdit';
 
-/** True when a `font_color` value is the reading-marker red. */
-export function isReadingMarkerColor(color: string | undefined | null): boolean {
-  return (color ?? '').toUpperCase() === READING_MARKER_COLOR;
-}
-
 /** Format the marker's clock time as `h:mm` (12-hour, no leading zero on the
  *  hour, no meridiem) — e.g. `7:32`. Exported for testing. */
 export function formatMarkerTime(d: Date): string {
   let h = d.getHours() % 12;
   if (h === 0) h = 12;
   return `${h}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
-/** True when a text node is a reading-position marker run (red `font_color`). */
-export function isMarkerText(node: { isText: boolean; marks: readonly { type: { name: string }; attrs: Record<string, unknown> }[] }): boolean {
-  return (
-    node.isText &&
-    node.marks.some(
-      (m) => m.type.name === 'font_color' && isReadingMarkerColor(m.attrs['color'] as string),
-    )
-  );
 }
 
 /** If the cursor sits on (inside, or at either edge of) an existing
@@ -82,9 +89,21 @@ export function readingMarkerRunAt(state: EditorState): { from: number; to: numb
   return { from, to };
 }
 
+/** The stretch a marker "owns": its card or analytic unit (a card holds at
+ *  most one marker), or, outside any card, just the cursor's paragraph. */
+export function readingMarkerScopeAt(state: EditorState): { from: number; to: number } {
+  const $h = state.selection.$head;
+  for (let d = $h.depth; d > 0; d--) {
+    const name = $h.node(d).type.name;
+    if (name === 'card' || name === 'analytic_unit') return { from: $h.start(d), to: $h.end(d) };
+  }
+  return { from: $h.start(), to: $h.end() };
+}
+
 /** Build (don't dispatch) the transaction that inserts a red "Marked h:mm"
- *  marker at the cursor and places the caret after it. Returns null if the
- *  schema lacks `font_color`. Exported for testing. */
+ *  marker at the cursor and places the caret after it — removing any other
+ *  marker in the same card first, so a card never carries two. Returns null
+ *  if the schema lacks `font_color`. Exported for testing. */
 export function buildInsertReadingMarkerTransaction(
   state: EditorState,
   now: Date = new Date(),
@@ -92,9 +111,19 @@ export function buildInsertReadingMarkerTransaction(
   const fontColor = schema.marks['font_color'];
   if (!fontColor) return null;
   const text = `Marked ${formatMarkerTime(now)}`;
-  const node = schema.text(text, [fontColor.create({ color: READING_MARKER_COLOR })]);
-  const pos = state.selection.head;
-  const tr = state.tr.insert(pos, node);
+  const node = schema.text(text, [
+    fontColor.create({ color: READING_MARKER_COLOR, role: READING_MARKER_ROLE }),
+  ]);
+  const head = state.selection.head;
+  const tr = state.tr;
+  // Other markers in this card go first (back to front, so each range is
+  // still where we found it); the cursor isn't on one — that's the toggle
+  // branch — so mapping it through the deletions is exact.
+  const scope = readingMarkerScopeAt(state);
+  const others = readingMarkerRangesIn(state.doc, scope.from, scope.to);
+  for (let i = others.length - 1; i >= 0; i--) tr.delete(others[i]!.from, others[i]!.to);
+  const pos = tr.mapping.map(head);
+  tr.insert(pos, node);
   tr.setSelection(TextSelection.create(tr.doc, pos + node.nodeSize));
   // Don't let the (inclusive) red mark bleed into whatever's typed next.
   tr.removeStoredMark(fontColor);

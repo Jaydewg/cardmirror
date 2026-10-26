@@ -25,9 +25,9 @@ const STALE_MS = 60 * 60 * 1000;
  *  consumers don't need the crypto module. */
 export function roomIdFromShareCode(code: string): string | null {
   const parts = code.trim().split('.');
-  if (parts.length === 3 && parts[0] === 'cmshare1' && parts[1]) return parts[1];
+  if (parts.length === 3 && (parts[0] === 'cmshare1' || parts[0] === 'cmview1') && parts[1]) return parts[1];
   // v2 floors contain dots ("1.0.0"), so 4+ parts.
-  if (parts.length >= 4 && parts[0] === 'cmshare2' && parts[1]) return parts[1];
+  if (parts.length >= 4 && (parts[0] === 'cmshare2' || parts[0] === 'cmview1') && parts[1]) return parts[1];
   return null;
 }
 

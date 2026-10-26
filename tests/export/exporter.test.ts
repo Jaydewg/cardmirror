@@ -589,3 +589,37 @@ describe('image alt text round-trip', () => {
     expect(docXml).toContain('descr="Test alt"');
   });
 });
+
+describe('reading marker ↔ Word', () => {
+  const body = (...inline: ReturnType<typeof schema.text>[]) =>
+    schema.nodes['doc']!.createChecked(null, [
+      schema.nodes['card']!.create(null, [
+        schema.nodes['tag']!.create({ id: newHeadingId() }, schema.text('Tag')),
+        schema.nodes['card_body']!.create(null, inline),
+      ]),
+    ]);
+  const markerRuns = (doc: ReturnType<typeof body>): string[] => {
+    const out: string[] = [];
+    doc.descendants((n) => {
+      if (n.isText && n.marks.some((m) => m.type.name === 'font_color' && m.attrs['role'] === 'marker')) out.push(n.text ?? '');
+      return true;
+    });
+    return out;
+  };
+
+  it('a marker goes out as a plain red run (Word has no role) and comes back as a marker', async () => {
+    const doc = body(
+      schema.text('read to '),
+      schema.text('Marked 7:32', [schema.marks['font_color']!.create({ color: 'FF0000', role: 'marker' })]),
+      schema.text(' unread '),
+      schema.text('verbatim red', [schema.marks['font_color']!.create({ color: 'FF0000' })]),
+    );
+    const bytes = await toDocx(doc);
+    const xml = await (await Docx.load(bytes)).readText('word/document.xml');
+    expect(xml).not.toContain('role');
+    const back = await fromDocx(bytes);
+    expect(markerRuns(back)).toEqual(['Marked 7:32']);
+    expect(back.textContent).toContain('verbatim red');
+  });
+});
+

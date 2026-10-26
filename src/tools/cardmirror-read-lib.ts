@@ -29,6 +29,7 @@ import { parseNative, serializeNative } from '../native/index.js';
 import { isGzip, gunzip } from '../native/codec.js';
 import { fromDocxFull } from '../import/index.js';
 import { footnotePlainText, type FootnoteContent } from '../schema/footnotes.js';
+import { readingMarkerNodeText } from '../schema/reading-marker.js';
 
 export type ReadForm = 'json' | 'text';
 export type FileKind = 'cmir' | 'docx';
@@ -85,6 +86,8 @@ function inlineText(node: PMNode): string {
       if (note) segs.push({ t: ` [note: ${note}]`, w: 'plain' });
     } else if (child.type.name === 'image') {
       segs.push({ t: '[image]', w: 'plain' });
+    } else if (child.type.name === 'reading_marker') {
+      segs.push({ t: readingMarkerNodeText(child), w: 'plain' });
     } else {
       const t = child.textContent;
       if (t) segs.push({ t, w: 'plain' });

@@ -28,6 +28,7 @@ import {
 } from './self-transclusion-commands.js';
 import { registerOpenContextMenu, clearOpenContextMenu } from './context-menu-registry.js';
 import { dragController, type DragItem, type DragSurface } from './drag-controller.js';
+import { alphabetizeSlots, type SectionSlot } from './alphabetize-headings.js';
 import { isTransclusionNode, zoneIdentity } from './transclusion.js';
 import { isSelfRef, resolveSelfProjection, typesHoldingSelfRef } from './self-transclusion.js';
 import { transclusionDivergenceKey } from './transclusion-divergence-plugin.js';
@@ -202,6 +203,8 @@ export function installNavResizeHandle(host: HTMLElement): HTMLElement {
 export class NavigationPanel {
   private root: HTMLElement;
   private view: EditorView | null = null;
+  /** Removes the editor scroll listener behind `navFollowScroll`. */
+  private detachScrollFollow: (() => void) | null = null;
   private readonly readOnly: boolean = false;
   private listEl: HTMLOListElement;
   private emptyEl: HTMLElement;
@@ -647,6 +650,7 @@ export class NavigationPanel {
     // anyway.
     this.applyMaxLevelToCollapseState();
     this.render(this.currentDoc);
+    this.installScrollFollow(view);
 
     // Register as a drop-target surface and subscribe to drag events
     // so we render indicators regardless of which surface initiated
@@ -700,6 +704,8 @@ export class NavigationPanel {
     this.removeSearchEscapeListeners();
     if (this.searchRenderTimer !== null) clearTimeout(this.searchRenderTimer);
     this.cancelLongPress();
+    this.detachScrollFollow?.();
+    this.detachScrollFollow = null;
     this.unsubscribeSettings?.();
     this.unsubscribeSettings = null;
     this.unsubscribeDrag?.();
@@ -1843,6 +1849,64 @@ export class NavigationPanel {
     }
   }
 
+  /**
+   * `navFollowScroll`: on editor scroll, light the section at the top of
+   * the viewport, as if the caret were there. A caret move re-lights the
+   * caret's own section through the usual `setCaretHeading` path.
+   * Skipped mid-drag and while a Shift/Ctrl multi-select stands, so
+   * scrolling never throws away a deliberate selection.
+   */
+  private installScrollFollow(view: EditorView): void {
+    this.detachScrollFollow?.();
+    this.detachScrollFollow = null;
+    // Scroll doesn't bubble, so catch it in the capture phase. Resolving
+    // the scroller up front would break in multi-pane, which mounts the
+    // editor after `attach` and moves it between slots.
+    let scroller: Element | null = null;
+    let frame = 0;
+    const sync = (): void => {
+      frame = 0;
+      if (this.view !== view || !settings.get('navFollowScroll')) return;
+      if (dragController.isActive() || this.selectedIds.size > 1) return;
+      const dom = view.dom.getBoundingClientRect();
+      const box = scroller?.getBoundingClientRect();
+      const top = Math.max(box?.top ?? 0, dom.top);
+      const bottom = Math.min(box?.bottom ?? window.innerHeight, dom.bottom);
+      // The caret wins while it's on screen: the scroll may be the editor
+      // keeping the caret in view (typing, arrowing past the bottom), and
+      // the section at the top of the window isn't the one being edited.
+      const { state } = view;
+      const caret = view.coordsAtPos(state.selection.head);
+      if (caret.bottom > top && caret.top < bottom) {
+        this.setCaretHeading(state.selection.from, selfRefSelectionPos(state));
+      } else {
+        // A few px down so a heading `scrollToHeadingId` aligned to the
+        // top edge counts as on screen.
+        const hit = view.posAtCoords({ left: dom.left + dom.width / 2, top: top + 8 });
+        if (!hit) return;
+        this.setCaretHeading(hit.pos);
+      }
+      // Pane scrolling stays `navFollowCursor`'s call: `setCaretHeading`
+      // already brings the lit row into view when that is on, and a user
+      // who turned it off asked the pane to hold still.
+    };
+    const onScroll = (e: Event): void => {
+      const t = e.target;
+      if (t instanceof Element) {
+        if (!t.contains(view.dom)) return;
+        scroller = t;
+      } else {
+        scroller = null; // document / viewport scroll
+      }
+      if (!frame) frame = requestAnimationFrame(sync);
+    };
+    document.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    this.detachScrollFollow = () => {
+      document.removeEventListener('scroll', onScroll, { capture: true });
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }
+
   private handleShiftClick(entry: HeadingEntry): void {
     if (entry.id == null) return;
     if (!this.currentDoc) {
@@ -2738,6 +2802,18 @@ export class NavigationPanel {
         label: `Delete ${what} and contents`,
         action: () => this.deleteHeadingAndContents(entry),
       },
+      // Only meaningful for a multi-selection: sorts the selected sections
+      // into the slots they occupy (see `alphabetizeSelection`).
+      ...(n > 1
+        ? ([
+            { kind: 'separator' },
+            {
+              kind: 'item',
+              label: `Alphabetize ${what}`,
+              action: () => void this.alphabetizeSelection(),
+            },
+          ] as ContextMenuItem[])
+        : []),
       // Creators — deliberately NOT multi-select aware: a live view or
       // linked copy mirrors ONE section, so these always act on the
       // clicked row alone, whatever the selection is.
@@ -2944,6 +3020,29 @@ export class NavigationPanel {
   /** Delete the heading subtree(s) — all targets in ONE transaction
    *  (one undo step), applied back-to-front so earlier positions never
    *  need remapping. Undo via Cmd+Z. */
+  /**
+   * Alphabetize the multi-selected headings: their sections are sorted by
+   * heading text and written back into the slots the selection occupies
+   * (alphabetize-headings.ts) — unselected headings never move, and a
+   * discontinuous selection stays discontinuous. Needs two or more real
+   * (non-windowed) selected headings; the selection survives, now in its
+   * new order. Returns whether anything changed.
+   */
+  alphabetizeSelection(): boolean {
+    if (!this.view || this.selectedIds.size < 2) return false;
+    const doc = this.view.state.doc;
+    const slots: SectionSlot[] = [];
+    for (const e of collectHeadings(doc)) {
+      if (e.id == null || e.windowed || !this.selectedIds.has(e.id)) continue;
+      const range = computeHeadingRange(doc, e);
+      if (range) slots.push({ from: range.from, to: range.to, text: e.text });
+    }
+    const tr = this.view.state.tr;
+    if (!alphabetizeSlots(tr, slots)) return false;
+    this.view.dispatch(tr.scrollIntoView());
+    return true;
+  }
+
   private deleteHeadingAndContents(entry: HeadingEntry): void {
     if (!this.view) return;
     const ranges = this.headingRanges(this.contextTargets(entry));

@@ -50,6 +50,7 @@ import type {
 } from '../../../src/editor/file-index-protocol.js';
 import {
   deriveBrowse,
+  deriveBrowseAcrossRoots,
   locateInRoots,
   normalizeRelativeDirectory,
 } from '../../../src/editor/file-browse.js';
@@ -301,6 +302,16 @@ export function createFileIndexCore(opts: {
 
     async browse(q: FileBrowseParams): Promise<FileBrowseResult> {
       await ensureLoaded();
+      if (q.location === null) {
+        return deriveBrowseAcrossRoots(q.roots, (root) => visibleEntries([root], q.exclusions, q.formats), {
+          query: q.query,
+          sep: path.sep,
+          tiebreak: q.tiebreak,
+          folderPriority: q.folderPriority,
+          pins: q.pins,
+          limit: q.limit,
+        });
+      }
       const root = q.location.root;
       const relDir = normalizeRelativeDirectory(q.location.relativeDirectory, path.sep);
       if (!q.roots.includes(root) || relDir === null) return { rows: [], total: 0, valid: false };
