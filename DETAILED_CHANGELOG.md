@@ -5,7 +5,61 @@ behavior, rationale, and (where useful) the implementation context
 behind a change. For a shorter, jargon-free summary of what's new
 in each release, see `CHANGELOG.md`.
 
-## Unreleased — federation (1.16.0-f)
+## 1.16.1-f — 2026-10-26
+
+Pre-release build of the `server-federation` branch: everything in 1.16.1
+(below) plus federation. Tagged `v1.16.1-f`, which `release.yml` drafts as
+a GitHub pre-release.
+
+### Release: the manifest carries the flag
+
+`package.json` / `apps/desktop/package.json` / `package-lock.json` are
+`1.16.1-f`, not the numeric `1.16.1`. The reason is the release plumbing:
+electron-builder publishes to the release tagged `v<version>`, so a
+numeric manifest would upload federation installers into main's `v1.16.1`
+release. As a semver pre-release of 1.16.1, electron-updater never offers
+it to stable 1.16.1 installs. Everything inside the app still reads it as
+1.16.1 plus flag `f`: `splitVersionFlags` takes the trailing `-f` as flags,
+`numericVersion` / `compareAppVersions` (version floors, the plugin API,
+relay headers to non-federating relays) see `1.16.1`, and `flaggedVersion`
+displays `1.16.1-f` (flags are de-duplicated, so not `-f-f`). Caveat: a
+1.16.1-f install that checks for updates sees pre-releases, and would be
+offered a later stable release (≥ 1.16.1, without federation) if one is
+published to the same repo.
+
+### Changed: upstream 1.16 spectators alongside federation
+
+Upstream's spectators (view codes, view passes) and federation's
+read-only admission coexist:
+- `CollabSession.readOnly` keeps upstream's meaning (a spectator, fixed
+  for the session). The federation admission is `accessReadOnly` (live,
+  `setAccess`). `viewOnly` (either) gates `flush`, `flushForUnload`,
+  `drainQueue`, the history audit and the repost. Presence and the
+  spectator lock plugin stay spectator-only, so read-only participants
+  keep their cursor and roster entry. The editor lock, undo clamps and
+  chip use `viewOnly`; the roster `ro` flag and the panel's access
+  controls use `accessReadOnly`.
+- `parseCodePrefix` accepts `cmview`. `decodeShareCode` returns
+  `{view, home?}` and refuses `cmview1f` (no cross-server watch flow yet,
+  and it must never fall through to an edit join). `roomIdFromShareCode`
+  goes through the prefix parser; `parseRoomInvite` accepts
+  `cmshare[12]f?` and `cmview1`.
+- View invites go only to recipients on the room's own server. Others are
+  skipped, with a toast. Edit invites keep the per-recipient plain vs.
+  cross-server code choice.
+- Send pill: upstream's 2×2 grid. The code-forms ▾ shares the "Copy edit
+  code" cell (`.pmd-send-action-split`).
+- Session chip: `chipStateText` adds the "Watching" head and
+  "· N watching"; spectators get the read-only ring pip. Session panel:
+  `role` is `SessionRole`, Stop watching wording, and End for everyone is
+  offered to participants only.
+- Session full: upstream's "watch instead" offer; the first-join toast
+  keeps "maximum number of coeditors reached".
+- Relay: upstream's `gunzip_bounded` (streaming inflate capped at
+  `LIMITS.max_message_bytes`) replaces the unbounded decompress. Room
+  reads keep REPEATABLE READ plus the per-room lock rather than
+  upstream's `FOR SHARE`, which would raise serialization errors under
+  REPEATABLE READ on Postgres.
 
 Federation lets users of DIFFERENT relays share cards and co-edit. The
 protocol is `relay/FEDERATION.md` (protocol v1); the self-hosted relay
@@ -378,7 +432,107 @@ federation variables through (empty = off).
 
 **Known gaps.** Web join links (guest passes) don't cross servers; a
 read-only participant's comment-thread edits stay local; the official
-relay only federates if it runs this protocol.
+relay only federates if it runs this protocol. The self-hosted federation
+relay has no view passes yet, so spectating isn't available on it (the
+view actions stay hidden), and its editor cap is still 10
+(`RELAY_MAX_STREAMS_PER_ROOM`). Cross-server spectating (`cmview1f`) is
+not implemented.
+
+## 1.16.1 — 2026-10-26
+
+First release from the fork (`Jaydewg/cardmirror`): upstream 1.16.0
+(merged at `dd35eb39`) plus the fork's own main-branch work below.
+Federation (`server-federation`) and dynamic speech
+(`dynamic-speech-timer`) are NOT in this release.
+
+### Added: `.docx` autosave
+
+`src/editor/autosave-policy.ts` (new) holds the policy both layouts
+share. `autosaveDelayFor(format)`: `.cmir` keeps the 5s debounce
+(`AUTOSAVE_DELAY_MS`, capped by `CMIR_AUTOSAVE_MAX_WAIT_MS = 30s`);
+`.docx` waits for a 30s idle window (`DOCX_AUTOSAVE_IDLE_MS`, no
+max-wait cap). `toDocx` is too expensive for a short debounce, and
+autosaving mid-typing would stutter large files. Window blur /
+`visibilitychange` → hidden flushes a pending `.docx` save early.
+
+Live links: Word can't hold live views (`self_ref`) or linked copies
+(`transclusion_ref`), and a `.docx` write flattens them. Manual Save
+already asked first (`confirmDocxDropsLiveLinks`); autosave can't ask, so
+a `.docx` with live links (`hasLiveLinks` / `liveLinkCounts`, a cheap
+top-level scan) doesn't autosave. Turning autosave on for one, or adding
+the first live link while it's on, opens a route-choice modal
+(`promptForRouteChoice`): **Save as .cmir…**, **Undo the link**, or
+**Turn autosave off**. The ribbon button's hollow/dashed "on but not
+saving" state now also covers this case.
+
+Save on close: with autosave on, closing a doc or window (or quitting)
+saves without the Save / Don't Save prompt (`saveOnCloseIfAutosaving`,
+`index.ts`; multi-pane in `multi-pane-shell.ts`). It cancels the doc's
+pending autosave and waits for an in-flight one, at most
+`CLOSE_SAVE_SETTLE_MS` (3s), so the writes don't race and a write hung on
+a stalled sync folder can't freeze quit. Desktop queues same-path writes
+in order (`doc-writes.ts`), and Save's watchdog offers Save As if the
+folder stays stuck. The prompt still appears when that save fails (after
+its failure alert is dismissed, via `awaitFailureAlert`) or when autosave
+couldn't have saved the doc anyway.
+
+Follow-up fixes before release (5f47ec29): a debounce outliving the doc
+that armed it (Save, back to Home, another file opened in the window)
+could rewrite a file nobody edited, and with `.docx` a full re-export. It
+now skips when nothing is unsaved, or when a manual Save already covered
+the edit. Settings copy for
+`defaultSpeechDocFormat` / `defaultSaveFormat` no longer says `.cmir` is
+the only autosaving format. Web-only gaps (no same-path write queue in
+`BrowserHost.saveExisting`; tab close vs. the 30s `.docx` idle window)
+are logged in `WEB-RELEASE-TODO.md`. Tests: `autosave-policy.test.ts`.
+
+### Added: Turn a highlight color into Locked Highlighting
+
+`lockHighlightColor(scope, target)` (`ribbon-commands.ts`): Lock
+Highlighting filtered to one color. Every `highlight` run whose color is
+`target()` loses the highlight and gains `shading` at
+`REFERENCE_SHADING_HEX` (now exported from `create-reference.ts`, so it
+matches `lockHighlighting` exactly). Runs that already have shading keep
+it. Scope is the selection (trimmed with `trimRangesForFormatting`) when
+there is one, else the document; returns false when nothing matches.
+Command `standardizeLockedHighlights` ("Convert Specific Colored
+Highlights to Locked Highlighting", unbound), in the Docs menu's
+standardize list as "Turn *color* into Locked Highlighting" (the label
+is rebuilt on open from the setting). Setting
+`standardizeLockedHighlightsColor` (default `lightGray`, Editing
+category) uses the shared highlight-name editor. No per-card mode, and
+no carve-out for reference cards: select a card from the nav pane, or
+convert reference cards first. Tests: `lock-highlight-color.test.ts`;
+`default-colors.test.ts` adjusted for the new setting.
+
+### Changed: fork retargeting
+
+`RELEASES_URL`, `MANUAL_URL`, `PRIVACY_URL`, `TERMS_URL` (desktop
+`main.ts`; the in-app copies in `settings-ui.ts`), `web-download.ts`'s
+download lookup, the package `homepage` / `repository` / `bugs` fields,
+and electron-builder's `publish` (`owner: Jaydewg`) point to
+`github.com/Jaydewg/cardmirror`, so the updater checks the fork's
+releases. `lite-build.test.ts` follows. CI:
+`win-test-build.yml` and `linux-appimage-build.yml` add manual
+(`workflow_dispatch`) installer builds. `release.yml` is unchanged: a
+`v*.*.*` tag drafts the release and pulls its notes from this version's
+`CHANGELOG.md` section. `packaging/aur/PKGBUILD` still tracks upstream
+releases and isn't bumped here.
+
+### Fixed: words split by a formatting change counted twice
+
+`readAloudBucket` counting (`word-count.ts`) went run by run, so a word
+whose formatting changed partway (underline ending mid-highlight, a
+highlight color change mid-word) counted once per run. The counter now
+tracks whether the previous counted run ended mid-word (`prevCounted`,
+`prevEndsMidWord`). A run that continues that word without leading
+whitespace counts one fewer, so the word lands in the first piece's
+bucket. Any uncounted run, a new block or a `hard_break` resets the
+join, so partial-word highlighting (`*U*nited *S*tates`) still counts
+each highlighted fragment. A highlight color change mid-word is treated
+as unintentional (it's unreadable aloud, and read mode doesn't separate
+colors). Tests: `word-count.test.ts`.
+
 ## 1.16.0 — 2026-10-24
 
 ### Added: Spectators (view-only sessions)

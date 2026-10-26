@@ -5,6 +5,139 @@ changes in each release, written for users of the editor. For
 in-depth rationale and implementation context behind each entry,
 see `DETAILED_CHANGELOG.md`.
 
+## 1.16.1-f — 2026-10-26
+
+A **pre-release** with server federation: everything in 1.16.1 (see its
+entry in `CHANGELOG.md`), plus sharing and co-editing between people on
+different relay servers. Your app shows its version as `1.16.1-f`.
+Installs of the stable 1.16.1 release are not offered this build as an
+update.
+
+### Added
+
+- **Share cards with people on other servers.** A contact's pairing code
+  can now name their server (`cmk1f.…@https://their-relay`). Cards you
+  send them go through your own relay to theirs. If their server is
+  temporarily unreachable, the card waits and is delivered when it comes
+  back. Contacts on other servers show their server after their name,
+  and cards they send you are labelled with it. The same person on a
+  different server counts as a different contact.
+
+- **Co-edit with people on other servers.** A session's
+  **cross-server code** (`cmshare1f` / `cmshare2f`, ending in
+  `@<server>`) lets someone on another relay join. They don't get in
+  automatically: someone in the session on its own server sees their
+  name and server and chooses **Accept**, **Accept (read-only)**,
+  **Decline** or **Decide later**, while the joiner sees a cancellable
+  *Waiting to be let in* dialog. Once accepted, they rejoin later without
+  asking again. People in the session can later make a cross-server
+  participant read-only, allow them to edit again, or remove them (they
+  keep their copy). Invites you send pick the right code for each
+  recipient automatically.
+
+- **Read-only participants.** Someone accepted read-only sees every edit
+  live and appears in the session with their cursor, but can't change
+  the document. Unlike a spectator, they can be switched to editing
+  later.
+
+- **Copying a session's code.** The session panel's and the Send pill's
+  **▾** next to the copy button lists both forms: the **classic code**
+  (for people on the session's own server, readable by every CardMirror
+  version) and the **cross-server code**. The commands **Copy
+  Cross-Server Session Code** and **Review Session Join Requests** do the
+  same from the command bar, and Settings → Collaboration has an option
+  to make every copied code the cross-server form.
+
+- **A new session chip and panel.** Your own dot in the status bar sits
+  inside a ring that shows the connection: blue when live, yellow when
+  only polling, grey while reconnecting, red when the server rejected
+  your credentials, turning while edits are waiting to send. A yellow
+  pip means read-only, a rounded square means you joined from another
+  server, and a pulsing badge counts people waiting to be let in.
+  Clicking the chip opens a panel with the session's state, where it's
+  hosted, who's here, anyone waiting to join, cross-server participants
+  you can manage, and Copy code / Leave or End session. With no session,
+  the chip shows whether your server is reachable.
+
+### Changed
+
+- **Spectators and federation together.** 1.16's spectators work as
+  before alongside read-only participants. View codes and view invites
+  only work for people on the session's own server for now: inviting
+  someone on another server to watch is skipped with a message. The
+  Send pill keeps 1.16's two-by-two buttons, with the **▾** for code
+  forms beside **Copy edit code**.
+
+### Fixed
+
+- **People without a cursor stay in "who's here".** Partners used to
+  disappear from the session's list when their cursor wasn't showing
+  (editor unfocused, or cursors turned off). Everyone in the session now
+  stays listed.
+
+### Known limits
+
+- Federation only works between relays that run this release's
+  self-hosted relay with federation turned on (`RELAY_FEDERATION=on`).
+  With any other relay, every federation feature stays hidden.
+- That relay doesn't support spectators yet (the view-code and view-link
+  buttons stay hidden), and seats up to 10 editors per session.
+- Web join links don't cross servers.
+
+## 1.16.1 — 2026-10-26
+
+The first release from this fork (`Jaydewg/cardmirror`). It contains
+everything in CardMirror 1.16.0 (see its entry in `CHANGELOG.md`), plus
+the changes listed here.
+
+### Added
+
+- **Word documents autosave.** With autosave on, a `.docx` file now
+  saves once you pause editing (about 30 seconds), as soon as you switch
+  to another window, and when you close it. A `.cmir` file still saves a
+  few seconds after each edit. Word files wait longer because writing
+  them takes longer, and saving while you type would slow typing on
+  large files.
+
+- **Closing saves for you.** With autosave on, closing a document or
+  window (or quitting) saves it without asking. You only see the Save /
+  Don't Save prompt if that save fails, or if autosave couldn't have
+  saved the document anyway.
+
+- **Word documents with live links don't autosave.** A `.docx` can't
+  hold live views or linked copies, and saving would turn them into
+  plain cards, so autosave never makes that call for you. If you turn
+  autosave on for such a document, or add the first live link while
+  it's on, a dialog explains this and offers **Save as .cmir…** (keeps
+  the links, and autosave works), **Undo the link**, or **Turn autosave
+  off**.
+
+- **Turn a highlight color into Locked Highlighting.** The Docs menu's
+  standardize list has a new item, **Turn *color* into Locked
+  Highlighting** (it shows the color you've chosen). It turns every
+  highlight of that color into the gray locked shading that Lock
+  Highlighting uses. With a selection it works on the selection;
+  otherwise on the whole document. Other highlight colors are left
+  alone. Choose the color in Settings → Editing → **Locked highlights
+  trigger color** (light gray by default). In the command bar it's
+  **Convert Specific Colored Highlights to Locked Highlighting**, with
+  no default shortcut.
+
+### Changed
+
+- **Updates, downloads and help links point to this fork.** The update
+  check, the Releases link, and the Manual, Privacy and Terms links now
+  go to `github.com/Jaydewg/cardmirror`.
+
+### Fixed
+
+- **A formatting change in the middle of a word no longer counts as two
+  words.** When underlining ended partway through a highlighted word, or
+  the highlight color changed mid-word, the word counts and read times
+  counted the word twice. Now it counts once. Highlighting only some
+  letters (`*U*nited *S*tates`) still counts each highlighted piece, as
+  before.
+
 ## 1.16.0 — 2026-10-24
 
 ### Added
