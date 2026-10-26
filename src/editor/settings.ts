@@ -1746,6 +1746,12 @@ export interface Settings {
    *  selection (presence). Off = the doc still syncs, just without
    *  the cursor overlay. */
   collabShowCursors: boolean;
+  /** Federation: "Copy Session Share Code" (and the code copied when a
+   *  session starts) produce the cross-server form (`cmshare2f…@relay`)
+   *  instead of the classic code. Off by default — classic codes are
+   *  readable by every build; "Copy Cross-Server Session Code" makes
+   *  one on request either way. Inert unless the relay federates. */
+  collabCrossServerCodes: boolean;
   /** Pairing: machines you can send to (their code + your nickname). */
   pairingPartners: PairingPartner[];
   /** Pairing: named groups of partners for one-drop fan-out sends. */
@@ -2130,6 +2136,7 @@ const DEFAULTS: Settings = {
   pairingOwnCode: '',
   pairingDisplayName: '',
   collabShowCursors: true,
+  collabCrossServerCodes: false,
   pairingPartners: [],
   pairingGroups: [],
   pairingBlockedCodes: [],
@@ -4437,6 +4444,17 @@ export const SETTING_METADATA: SettingMeta[] = [
     dependsOn: 'pairingEnabled',
   },
   {
+    key: 'collabCrossServerCodes',
+    label: 'Share cross-server session codes',
+    description:
+      'When your relay connects to other servers: "Copy Session Share Code" (and the code copied when you start a session) give the code that names your server, so people on other servers can ask to join — you accept each of them, or let them in read-only. Off keeps the classic code every CardMirror version reads; "Copy Cross-Server Session Code" makes one on request either way.',
+    kind: 'toggle',
+    category: 'pairing',
+    electronOnly: true,
+    dependsOn: 'pairingEnabled',
+    aliases: ['federation', 'other server', 'cross-server', 'cmshare2f'],
+  },
+  {
     key: 'pairingReceiveFlash',
     label: 'Flash the Receive pill on a new card',
     description:
@@ -5525,6 +5543,7 @@ function sanitize(s: Settings): Settings {
     pairingDisplayName:
       typeof s.pairingDisplayName === 'string' ? s.pairingDisplayName.trim().slice(0, 80) : '',
     collabShowCursors: s.collabShowCursors !== false,
+    collabCrossServerCodes: s.collabCrossServerCodes === true,
     pairingPartners: sanitizePairingPartners(s.pairingPartners),
     pairingGroups: sanitizePairingGroups(s.pairingGroups, s.pairingPartners),
     pairingBlockedCodes: Array.isArray(s.pairingBlockedCodes)

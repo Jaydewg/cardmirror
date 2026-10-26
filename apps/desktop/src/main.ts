@@ -39,6 +39,7 @@ import { bundlePathFromExe, launchSwapHelper, macBundleSelfUpdatable } from './m
 import { registerVoiceIpc } from './voice/ipc';
 import { registerFlowIpc } from './flow-bridge.js';
 import { registerPairingIpc, relayUrl } from './pairing-ipc.js';
+import { flaggedVersion } from './federation-main.js';
 import { LITE_BUILD } from './lite-build.js';
 import {
   readAccessibilityTreeEnabled,
@@ -1959,6 +1960,10 @@ async function pruneHistoryFiles(): Promise<void> {
 }
 
 void app.whenReady().then(() => {
+  // The native About panel (Help/app menu → About) shows the version
+  // people see everywhere else: with this build's feature flags
+  // (`1.15.0-f`). The manifest — and so the updater — stays numeric.
+  app.setAboutPanelOptions({ applicationVersion: flaggedVersion(app.getVersion()) });
   // Lite enforcement, desktop edition: the CSP equivalent. Every
   // http(s)/ws request from ANY renderer session is cancelled at the
   // network layer — "does not talk to the internet" as a property of
@@ -3264,7 +3269,7 @@ function runUpdateCheck(opts: UpdateCheckOpts): void {
       type: 'info',
       title: 'No updates',
       message: "You're on the latest version.",
-      detail: `CardMirror ${app.getVersion()}`,
+      detail: `CardMirror ${flaggedVersion(app.getVersion())}`,
     });
   };
 

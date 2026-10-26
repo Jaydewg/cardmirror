@@ -1714,9 +1714,63 @@ idle session rooms after about a week. Sender codes are self-declared, so
 To run your own relay: the `relay/` folder of the repo deploys standalone
 (one `docker compose up`; see its README). Set **Custom relay URL** (e.g.
 `https://relay.example.com/relay`) and **Custom relay token** (the
-`RELAY_TOKEN` you configured on it) in Settings → Collaboration. Everyone
-collaborating must point at the same relay; leave both fields empty to use
-the official relay.
+`RELAY_TOKEN` you configured on it) in Settings → Collaboration. Leave both
+fields empty to use the official relay. People on the same relay can always
+collaborate; people on *different* relays can too when both relays connect
+to other servers — see below.
+
+### Working across servers
+
+A self-hosted relay can be set up to **connect to other servers**
+(federation). When yours is, Settings → Collaboration shows **Your server:**
+under your pairing code, and you can share cards and co-edit with people
+whose CardMirror uses a different relay. If either relay doesn't connect to
+other servers, nothing changes: you work with people on your own relay
+exactly as before.
+
+**Your cross-server code.** Next to **Copy** under your pairing code,
+**Copy cross-server code** gives your code with your server's address on the
+end (`cmk1f.…@https://…`). Give that to someone on another server; people on
+your own server can keep using the plain code. A cross-server code is tied
+to its server: if someone moves to a different server, their old code stops
+reaching them and they need to send you their new one. Contacts on another
+server show that server next to their name in the Send pill.
+
+**Sharing cards** works the same as on one server. If their server can't be
+reached right now, the card is queued and delivered if it comes back within
+a few hours; if your relay doesn't connect to theirs, the Send pill says so.
+
+**Co-editing across servers.** The classic share code only works for people
+on the session's own server. For someone elsewhere, click **Cross-server
+code** in the Send pill (next to **Copy code**, on any document that's in a
+session), or run **Copy Cross-Server Session Code** — the code ends in `@`
+and the session's server address. Or invite a
+contact on another server from the Send pill, which picks the right code
+automatically. To make every copied code cross-server, turn on **Share
+cross-server session codes** in Settings → Collaboration.
+
+People on the session's own server join as usual. Someone from **another
+server has to be let in**: when they paste the code, they see *Waiting to be
+let in*, and everyone in the session on its own server gets a prompt with
+their name and their server:
+
+- **Accept** — they join and can edit.
+- **Accept (read-only)** — they can follow along and their cursor shows,
+  but they can't change the document.
+- **Decline** — they're told the session declined.
+- **Decide later** — closes the prompt; run **Review Session Join Requests**
+  to see it again. Unanswered requests expire after a day.
+
+**Review Session Join Requests** also goes through everyone already let in
+from other servers, so you can switch them between read-only and editing, or
+**Remove from session** (they keep their copy; the session goes on without
+them). Changes reach them immediately.
+
+A server's display name is its own claim, so CardMirror always shows it with
+the server's address, e.g. *Debate Club (relay.example.org)*. Once you've
+been let in, rejoining later (from the Sessions list or the same code)
+doesn't need another approval. Only the person who started a session can end
+it; people from other servers leave rather than end.
 
 ---
 

@@ -123,6 +123,16 @@ export interface CollabSessionCallbacks {
   /** A catch-up just imported a LARGE offline backlog (`count` update
    *  blobs) — the merge-visibility hook for "you were gone a while". */
   onBacklogMerged?: (count: number) => void;
+  /** Federation (remote participant): the host switched this peer
+   *  between read-only and editing, live. The session has already
+   *  applied it; the UI updates the editor. */
+  onAccessChanged?: (mode: 'write' | 'read') => void;
+  /** Federation (remote participant): access revoked by the host.
+   *  Terminal — onEnded follows immediately (this copy is yours alone). */
+  onRevoked?: () => void;
+  /** Federation (home-side participant): cross-server join requests
+   *  changed — re-list them (the stream's `j` nudge, and every hello). */
+  onJoinRequests?: () => void;
 }
 
 export interface CollabSessionOptions {
@@ -209,6 +219,11 @@ export class CollabSession {
   }
 
   private stream: RoomStream | null = null;
+  /** Federation: a remote participant admitted read-only. While set the
+   *  session never posts updates or snapshots (the home relay would
+   *  refuse them) and the UI keeps the editor read-only; presence still
+   *  flows. Flipped live by the host (`setAccess`). */
+  private readOnlyMode = false;
   /** Room guest pass (web-collab Phase 3): minted at host-create when
    *  the relay's flip is on, carried in invite links, persisted with
    *  the session record so resume keeps the credential. Null when the
@@ -436,6 +451,10 @@ export class CollabSession {
     stallMs?: number;
     maxBackoffMs?: number;
     updateByteLimit?: number;
+    /** Rejoining a session THIS user started (the recent-rooms record says
+     *  host): keep the host role — End for everyone, compaction — instead
+     *  of coming back as a participant who can only leave. */
+    role?: 'host' | 'participant';
   }): Promise<CollabSession> {
     const key = await importRoomKey(opts.keyBytes);
     const loroDoc = new LoroDoc();
@@ -443,7 +462,7 @@ export class CollabSession {
     const session = new CollabSession({
       ...opts,
       key,
-      role: 'participant',
+      role: opts.role ?? 'participant',
       loroDoc,
     });
     // Strict initial sync: steady-state catchUp() swallows network
@@ -605,6 +624,9 @@ export class CollabSession {
       routingCode: this.client.opts.routingCode,
       credentials: this.client.opts.credentials,
       fetchImpl: this.client.opts.fetchImpl,
+      extraHeaders: this.client.opts.extraHeaders,
+      versionHeader: this.client.opts.versionHeader,
+      federated: this.client.opts.federated,
       roomId: this.roomId,
       sid: this.streamSid,
       minBackoffMs: this.streamOpts.minBackoffMs,
@@ -623,6 +645,9 @@ export class CollabSession {
           this.emitStatus();
           void this.catchUp();
           void this.drainQueue();
+          // Requests that arrived while we were offline have no live
+          // nudge to replay — every connect re-lists.
+          this.callbacks.onJoinRequests?.();
         },
         onUpdate: (u) => {
           if (u.seq > this.maxStreamSeq) this.maxStreamSeq = u.seq;
@@ -640,6 +665,12 @@ export class CollabSession {
         },
         onEnded: () => this.handleEnded(),
         onAuthDead: () => this.handleAuthDead(),
+        onRevoked: () => this.handleRevoked(),
+        onAccessChanged: (mode) => {
+          this.setAccess(mode);
+          this.callbacks.onAccessChanged?.(mode);
+        },
+        onJoinRequests: () => this.callbacks.onJoinRequests?.(),
         onFull: () => {
           this.callbacks.onFull?.();
         },
@@ -669,6 +700,30 @@ export class CollabSession {
     const audit = (): void => void this.catchUp().then(() => this.auditRoomHistory());
     this.auditKickoff = setTimeout(audit, this.auditDelayMs);
     this.auditTimer = setInterval(audit, 30 * 60_000);
+  }
+
+  /** True while this (remote) participant is admitted read-only. */
+  get readOnly(): boolean {
+    return this.readOnlyMode;
+  }
+
+  /** Apply a read-only / editing admission (initial join, or a live
+   *  change from the host). Upgrading flushes anything held back. */
+  setAccess(mode: 'write' | 'read'): void {
+    const ro = mode === 'read';
+    if (ro === this.readOnlyMode) return;
+    this.readOnlyMode = ro;
+    if (!ro && !this.ended) {
+      this.flush();
+      void this.drainQueue(); // a queue held back by a mid-send downgrade
+    }
+  }
+
+  /** Access revoked (federation): end this copy's link to the room. */
+  private handleRevoked(): void {
+    if (this.ended) return;
+    this.callbacks.onRevoked?.();
+    this.handleEnded();
   }
 
   /** Leave the session (participant) or just stop syncing: final flush
@@ -871,6 +926,9 @@ export class CollabSession {
    *  Synchronous by design so `applyRemote` can call it pre-import. */
   flush(): void {
     if (this.ended) return;
+    // Read-only participants never send (their editor blocks local
+    // edits; anything else stays local until an upgrade flushes it).
+    if (this.readOnlyMode) return;
     this.loroDoc.commit();
     const version = this.loroDoc.version();
     // An empty diff still exports a ~22-byte header blob, so gate on the
@@ -892,7 +950,7 @@ export class CollabSession {
   private stopping = false;
 
   private drainQueue(): Promise<void> {
-    if (this.sending || this.ended) return this.drainPromise ?? Promise.resolve();
+    if (this.sending || this.ended || this.readOnlyMode) return this.drainPromise ?? Promise.resolve();
     const p = this.drainQueueInner().finally(() => {
       if (this.drainPromise === p) this.drainPromise = null;
     });
@@ -978,6 +1036,18 @@ export class CollabSession {
             // (relay idle-GC). Both terminal — the stream already treats
             // them identically.
             this.handleEnded();
+            return;
+          }
+          // Federation: the home relay's decision about this participant.
+          if (err instanceof RoomsError && err.code === 'join-denied') {
+            this.handleRevoked();
+            return;
+          }
+          if (err instanceof RoomsError && err.code === 'read-only') {
+            // Downgraded before the live frame reached us: hold the queue
+            // (an upgrade sends it) and stop posting.
+            this.readOnlyMode = true;
+            this.callbacks.onAccessChanged?.('read');
             return;
           }
           if (err instanceof RoomsError && (err.status === 401 || err.status === 403)) {
@@ -1397,6 +1467,11 @@ export class CollabSession {
       this.connected = this.stream ? this.stream.connected : true;
       this.emitStatus();
     } catch (err) {
+      if (err instanceof RoomsError && err.code === 'join-denied') {
+        this.handleRevoked();
+        if (rethrow) throw err;
+        return;
+      }
       if (err instanceof RoomsError && (err.status === 410 || err.status === 404)) {
         this.handleEnded();
         // A STRICT initial sync (join/first resume tick) must NOT silently
@@ -1435,7 +1510,8 @@ export class CollabSession {
    *  The audit reads only blob METADATA (no full import) and reposting
    *  is idempotent, so a false positive costs one oversized update. */
   async auditRoomHistory(): Promise<void> {
-    if (this.ended || this.outQueue.length > 0) return;
+    // Read-only participants can't repost (and own no ops to protect).
+    if (this.ended || this.outQueue.length > 0 || this.readOnlyMode) return;
     try {
       // Cheap self-contained probe (~100B): the room's current compaction
       // epoch, plus any tail rows past our cursor (folded, not imported —

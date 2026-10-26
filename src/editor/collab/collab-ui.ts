@@ -40,11 +40,13 @@ import {
   setCollabFocusChangeHandler,
   setCollabShareCodeGetter,
   setCollabInviteLinkGetter,
+  setCollabCrossServerCodeGetter,
+  setCollabClassicCodeGetter,
   collabRoomClaimKey,
 } from './collab-hooks.js';
 import { RoomsError } from './room-client.js';
 import { getElectronHost } from '../host/index.js';
-import { ensureBakedRelay, relayClient, relayClientWithGuestPass, endRoomOnRelay } from './collab-relay.js';
+import { ensureBakedRelay, relayBaseUrl, relayClient, relayClientWithGuestPass, endRoomOnRelay } from './collab-relay.js';
 import { buildJoinLink, parseJoinLinkHash } from './join-link.js';
 import { relayClient as pairingRelayClient } from '../pairing/relay-client.js';
 import { resolveStarredTarget } from '../pairing/send-to-starred.js';
@@ -67,13 +69,41 @@ import {
   deletePrefetch,
   saveRecentRoom,
   deleteRecentRoom,
+  loadRecentRoom,
 } from './collab-store.js';
 import { loadRejoinCandidates, pickSessionToJoin } from './rejoin-picker.js';
 import { importRoomKey, decryptBlob } from './collab-crypto.js';
 import { resetSessionCommentIds } from '../comments-plugin.js';
 import { collabEnabled } from './collab-gate.js';
-import { decodeShareCode } from './collab-crypto.js';
+import { decodeShareCode, encodeShareCode, stripShareCodeHome } from './collab-crypto.js';
 import { CollabSession } from './collab-session.js';
+import type { JoinMode, RoomsClient } from './room-client.js';
+import {
+  collabReadOnlyPlugin,
+  createJoinRequestWatcher,
+  federationFailureMessage,
+  forgetRoomPass,
+  noteRoomPassMode,
+  refreshEditable,
+  remoteHomeOf,
+  remoteRoomClient,
+  requestRemoteAdmission,
+  storedRoomPass,
+  type JoinRequestWatcher,
+} from '../federation/collab-federation.js';
+import { refreshOwnRelayFederation, selfRelayUrl } from '../federation/self.js';
+import {
+  markChipEnded,
+  renderChipSession,
+  setChipActivator,
+  type ChipLink,
+  type ChipPeer,
+  type ChipSessionModel,
+} from './session-chip.js';
+import { refreshSessionPanel, toggleSessionPanel } from './session-panel.js';
+import { ringClasses } from './session-chip.js';
+import { refusalWhy, relayLabel } from '../federation/address.js';
+import { pairingCodeRelay } from '../pairing/pairing-ids.js';
 import { compareAppVersions } from '../relay-protocol.js';
 import { appVersion } from '../install-info.js';
 
@@ -111,6 +141,8 @@ export interface CollabUiDeps {
    *  never stranded). Returns false to join in THIS window (starter open, or
    *  single-window / web). */
   spawnJoinWindow?(shareCode: string): boolean;
+  /** Go to the Home screen (the session panel's Leave / End). */
+  goHome?(): void;
 }
 
 /** One live co-editing session, owned by a single open doc (the map key). A
@@ -139,6 +171,17 @@ interface ActiveSession {
   offlineTimer: ReturnType<typeof setTimeout> | null;
   /** Container-safe undo ledger (undo-guard.ts); disposed at teardown. */
   undoGuardDispose: () => void;
+  /** Federation: the room's home relay when it is ANOTHER server (this
+   *  participant reaches it through its own relay); null = a local room. */
+  home: string | null;
+  /** Federation (local rooms only): prompts this participant to decide
+   *  cross-server join requests. Null when not applicable. */
+  joinWatcher: JoinRequestWatcher | null;
+  /** The relay refused our credentials mid-session (chip: red ring);
+   *  cleared once the stream connects again. */
+  authRejected: boolean;
+  /** The UI deps this session was installed with (panel Leave → Home). */
+  deps: CollabUiDeps;
 }
 
 const sessions = new Map<string, ActiveSession>();
@@ -194,7 +237,9 @@ setCollabCopresenceProvider((uid) => {
     // the flows also stamp lastStatus so an offline join/resume reads correctly.
     connected: sess.lastStatus?.connected ?? true,
     queued: sess.lastStatus?.queuedUpdates ?? 0,
-    peers: sess.cursors.presence().map((p) => ({ name: p.name, color: p.color, self: p.self })),
+    peers: chipPeers(sess),
+    // The status ring around your own dot in the slot footer.
+    ring: ringClasses(chipModel(sess)),
   };
 });
 
@@ -313,72 +358,168 @@ function actionSession(): ActiveSession | null {
 // The Send pill's session action ("Start session" vs "Copy session
 // code") keys off the FOCUSED doc's live session — an action, so it
 // uses actionSession(), never the display fallback (see above).
-setCollabShareCodeGetter(() => actionSession()?.shareCode ?? null);
+setCollabShareCodeGetter(() => {
+  const s = actionSession();
+  return s ? defaultCopyCode(s) : null;
+});
+setCollabCrossServerCodeGetter(() => {
+  const s = actionSession();
+  return s ? crossServerShareCode(s) : null;
+});
+setCollabClassicCodeGetter(() => {
+  const s = actionSession();
+  return s ? stripShareCodeHome(s.shareCode) : null;
+});
 setCollabInviteLinkGetter(() => {
   const s = actionSession();
   if (!s) return null;
   return buildJoinLink({ shareCode: s.shareCode, guestPass: s.session.guestPass });
 });
 
-function chipEl(): HTMLElement | null {
-  return document.getElementById('collab-chip');
+/** The chip's model for a session: connection state for the status
+ *  ring (streaming / polling / reconnecting / credentials), queued edits,
+ *  read-only, remote, who's here, and joiners waiting. `status` (the
+ *  callers' fresh status) wins over the session's last stored one. */
+function chipModel(
+  sess: ActiveSession,
+  status?: { connected: boolean; queuedUpdates: number } | null,
+): ChipSessionModel {
+  const st = status ?? sess.lastStatus ?? { connected: true, queuedUpdates: 0 };
+  let link: ChipLink;
+  if (sess.authRejected) link = 'auth';
+  else if (st.connected) link = 'streaming';
+  else {
+    // Stream down: "polling" while the relay still answers plain requests
+    // (the session keeps posting and catching up), "reconnecting" when it
+    // doesn't.
+    const t = sess.session.debugState().transport;
+    const httpOk = t.lastOkAt > 0 && Date.now() - t.lastOkAt < 45_000 && t.lastOkAt >= t.lastErrorAt;
+    link = httpOk ? 'degraded' : 'reconnecting';
+  }
+  return {
+    link,
+    queued: st.queuedUpdates,
+    readOnly: sess.session.readOnly,
+    remote: sess.home !== null,
+    peers: chipPeers(sess),
+    pendingJoins: (sess.joinWatcher?.rows() ?? []).filter((r) => r.state === 'pending').length,
+  };
+}
+
+/** Who's here, for the chip / panel / footers: a partner whose announced
+ *  relay isn't the session's home joined from another server (their own
+ *  claim — the relay-verified list is the panel's "From other servers"). */
+function chipPeers(sess: ActiveSession): ChipPeer[] {
+  const roomHome = sess.home ?? selfRelayUrl();
+  return sess.cursors.presence().map((p) => {
+    const remote = !p.self && !!p.relay && !!roomHome && p.relay !== roomHome;
+    return {
+      name: p.name,
+      color: p.color,
+      self: p.self,
+      ...(remote ? { remote: true, server: relayLabel(p.relay!) } : {}),
+      ...(p.readOnly && !p.self ? { readOnly: true } : {}),
+    };
+  });
 }
 
 function updateChip(status: { connected: boolean; queuedUpdates: number } | null): void {
-  const chip = chipEl();
-  if (!chip) return;
-  if (!status) {
-    chip.hidden = true;
-    chip.replaceChildren();
+  const sess = chipSession();
+  renderChipSession(sess ? chipModel(sess, status) : null);
+  refreshSessionPanel();
+}
+
+/** Re-render the chip (and an open panel) from live state — the presence
+ *  timer's tick: peers join/leave, polling ↔ reconnecting ages out. */
+function refreshPresenceDots(): void {
+  updateChip(null);
+}
+
+/** Clicking the session chip: the expanded panel for that session. */
+setChipActivator((anchor) => {
+  const sess = chipSession();
+  if (!sess) return;
+  toggleSessionPanel(anchor, {
+    model: () => {
+      const s2 = sessions.get(sess.ownerUid);
+      return s2 ? chipModel(s2) : null;
+    },
+    role: sess.session.role,
+    homeLabel: relayLabel(sess.home ?? selfRelayUrl() ?? relayBaseUrl()),
+    watcher: sess.joinWatcher,
+    codes: () => ({
+      current: defaultCopyCode(sess),
+      classic: stripShareCodeHome(sess.shareCode),
+      cross: crossServerShareCode(sess),
+    }),
+    copy: (kind) => {
+      if (kind === 'current') {
+        void copyShareCodeFlowFor(sess);
+        return;
+      }
+      const code = kind === 'classic' ? stripShareCodeHome(sess.shareCode) : crossServerShareCode(sess);
+      if (!code) return;
+      const done =
+        kind === 'cross'
+          ? 'Cross-server code copied — people on other servers will need your OK to join'
+          : sess.home
+            ? `Classic code copied — it works only for people on ${relayLabel(sess.home)}`
+            : 'Classic code copied — works with every CardMirror version on your server';
+      void navigator.clipboard?.writeText(code).then(
+        () => showToast(done),
+        () => showToast('Could not copy the code'),
+      );
+    },
+    leave: () => void leaveToHome(sess),
+    // Same-server participants trust each other (and the relay lets any of
+    // them end the room): the way out when the host is gone / role lost.
+    ...(sess.session.role !== 'host' && !sess.home ? { endForEveryone: () => void endForEveryoneToHome(sess) } : {}),
+  });
+});
+
+/** Panel Leave ▾ → "End for everyone…" (a participant on the session's
+ *  own server): confirmed, then the same end as a host's — tombstone the
+ *  room, everyone keeps their copy — and Home. */
+async function endForEveryoneToHome(sess: ActiveSession): Promise<void> {
+  const ok = await confirmDialog(
+    'You didn’t start this session, but you can end it if whoever did is gone. ' +
+      'Everyone keeps their copy; no one can sync or rejoin.',
+    { title: 'End this session for everyone?', okLabel: 'End for everyone' },
+  );
+  if (!ok || !sessions.has(sess.ownerUid)) return;
+  sess.cursors.farewell();
+  await sess.session.stop();
+  try {
+    await endRoomOnRelay(sess.session.roomId);
+  } catch (err) {
+    sess.session.start();
+    showToast(`Couldn't end the session — check your connection and try again. (${err instanceof Error ? err.message : err})`);
     return;
   }
-  chip.hidden = false;
-  const text = status.connected
-    ? status.queuedUpdates > 0
-      ? `Session: sending ${status.queuedUpdates}…`
-      : 'Session: synced'
-    : status.queuedUpdates > 0
-      ? `Session: offline — ${status.queuedUpdates} queued`
-      : 'Session: offline';
-  // Chip = a text label + a presence-dots strip (kept as stable children so
-  // the dots can refresh on their own timer without rebuilding the label).
-  let label = chip.querySelector('.pmd-collab-chip-label');
-  let dots = chip.querySelector('.pmd-collab-chip-dots');
-  if (!(label instanceof HTMLElement) || !(dots instanceof HTMLElement)) {
-    chip.replaceChildren();
-    label = document.createElement('span');
-    label.className = 'pmd-collab-chip-label';
-    chip.appendChild(label);
-    dots = document.createElement('span');
-    dots.className = 'pmd-collab-chip-dots';
-    chip.appendChild(dots);
-  }
-  label.textContent = text;
-  renderPresenceDots(dots as HTMLElement);
+  await teardownSession(sess, false, /* roomOver */ true);
+  refreshChipForFocus();
+  if (sess.deps.refreshPluginsForUid) sess.deps.refreshPluginsForUid(sess.ownerUid);
+  else sess.deps.refreshPlugins();
+  showToast('Session ended for everyone — your copy is kept');
+  sess.deps.goHome?.();
 }
 
-/** One colored dot per person in the room, hover for the name. */
-function renderPresenceDots(container: HTMLElement): void {
-  const peers = chipSession()?.cursors.presence() ?? [];
-  // Skip the DOM rebuild when the roster is unchanged (the 3s presence
-  // timer and every chip update land here).
-  const sig = peers.map((p) => `${p.peer}\u0000${p.name}\u0000${p.color}\u0000${p.self ? 1 : 0}`).join('\n');
-  if (container.dataset['sig'] === sig) return;
-  container.dataset['sig'] = sig;
-  container.replaceChildren();
-  for (const p of peers) {
-    const dot = document.createElement('span');
-    dot.className = 'pmd-collab-presence-dot' + (p.self ? ' pmd-collab-presence-dot-self' : '');
-    dot.style.background = p.color;
-    dot.title = p.self ? `${p.name} (you)` : p.name;
-    container.appendChild(dot);
+/** Panel "Leave session" / "End session": leave (participant) or end
+ *  for everyone (host, confirmed), then go to the Home screen. */
+async function leaveToHome(sess: ActiveSession): Promise<void> {
+  if (sess.session.role === 'host') {
+    const ok = await confirmDialog(
+      'Everyone in the session keeps their copy, but no one can sync or rejoin.',
+      { title: 'End this co-editing session for everyone?', okLabel: 'End session' },
+    );
+    if (!ok) return;
   }
-}
-
-/** Re-render just the dots (peers join/leave/expire between chip updates). */
-function refreshPresenceDots(): void {
-  const dots = chipEl()?.querySelector('.pmd-collab-chip-dots');
-  if (dots instanceof HTMLElement) renderPresenceDots(dots);
+  if (!sessions.has(sess.ownerUid)) return;
+  if (!(await endOrLeaveSession(sess))) return; // couldn't end — kept live; its toast explains
+  if (sess.deps.refreshPluginsForUid) sess.deps.refreshPluginsForUid(sess.ownerUid);
+  else sess.deps.refreshPlugins();
+  showToast(sess.session.role === 'host' ? 'Session ended — your copy is kept' : 'Left the session — your copy is kept');
+  sess.deps.goHome?.();
 }
 
 let presenceTimer: ReturnType<typeof setInterval> | null = null;
@@ -517,7 +658,12 @@ function installSeams(
     undefined,
     { onFailure: (n) => noteWriterFailure('collab-history-failing', 'session history', n) },
   );
-  const cursors = installCursorPresence(session, ownerView);
+  // Roster identity: the relay this app joined through (others compare it
+  // with the session's home for the other-server marker) + read-only.
+  const cursors = installCursorPresence(session, ownerView, () => ({
+    relay: selfRelayUrl(),
+    readOnly: session.readOnly,
+  }));
   const unloadCleanup = installUnloadHooks(session, cursors);
   // One shared timer refreshes the focused session's chip dots AND every slot
   // footer's copresence (peers join/leave/expire between status updates).
@@ -538,6 +684,22 @@ function installSeams(
     if (e.by === 'local' || session.role === 'host') return;
     queueMicrotask(() => adoptSharedTitle(deps, session));
   });
+  // Federation: where the room lives, relative to this app's relay. A
+  // LOCAL room's participants decide cross-server join requests.
+  const decodedCode = decodeShareCode(shareCode);
+  const home = remoteHomeOf(decodedCode?.home);
+  let joinWatcher: JoinRequestWatcher | null = null;
+  if (!home && decodedCode) {
+    const local = relayClient();
+    if (local) {
+      joinWatcher = createJoinRequestWatcher({
+        roomId: session.roomId,
+        client: local,
+        keyBytes: decodedCode.keyBytes,
+        docTitle: () => sessionDocTitle(ownerUid) || sharedDocTitle(session),
+      });
+    }
+  }
   const sess: ActiveSession = {
     session,
     shareCode,
@@ -553,8 +715,16 @@ function installSeams(
     offlineSince: null,
     offlineTimer: null,
     undoGuardDispose: () => undoGuard.dispose(),
+    home,
+    joinWatcher,
+    authRejected: false,
+    deps,
   };
   sessions.set(ownerUid, sess);
+  // A waiting joiner changes the chip's badge.
+  joinWatcher?.onChange(() => {
+    if (isChipSession(ownerUid)) updateChip(null);
+  });
   // Cross-window live-session claim: while this session is live, other
   // windows' Sessions rows (and join-by-code) refuse the same room and focus
   // this window instead — same registry as the duplicate-file-open guard.
@@ -596,6 +766,9 @@ function installSeams(
       ),
       commentsSync.plugin,
       ...cursors.plugins(),
+      // Federation: a read-only admission blocks local edits (remote
+      // content still lands — see collab-federation.ts).
+      collabReadOnlyPlugin(() => session.readOnly),
     ],
     ownsUndo: () => true,
     canRedo: () => undoManager.canRedo(),
@@ -603,9 +776,9 @@ function installSeams(
     // undo transactions carry the binding meta (→ sync-origin) and would
     // otherwise sail through the read-mode lock and revert real edits.
     undo: (state, dispatch, view) =>
-      readModePlugin.getState(state)?.on ? true : undoGuard.undo(state, dispatch, view),
+      readModePlugin.getState(state)?.on || session.readOnly ? true : undoGuard.undo(state, dispatch, view),
     redo: (state, dispatch, view) =>
-      readModePlugin.getState(state)?.on ? true : undoGuard.redo(state, dispatch, view),
+      readModePlugin.getState(state)?.on || session.readOnly ? true : undoGuard.redo(state, dispatch, view),
   });
   return sess;
 }
@@ -630,6 +803,8 @@ function teardownSession(
   // window was no longer in (2026-09-01 review). stop() is idempotent, so
   // the End/Leave/close paths that already stopped are unaffected.
   sess.cursors.farewell(); // departure frame needs the stream — before stop()
+  sess.joinWatcher?.dispose();
+  if (roomOver && sess.home) forgetRoomPass(sess.session.roomId);
   if (sess.offlineTimer !== null) clearTimeout(sess.offlineTimer);
   sess.undoGuardDispose();
   clearNotice('collab-offline');
@@ -726,6 +901,7 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
       // Reconnected → re-announce presence (partners saw us absent until
       // the 15s keepalive otherwise).
       if (s.connected && !sess.lastStatus?.connected) sess.cursors.rebroadcast();
+      if (s.connected) sess.authRejected = false;
       // Prolonged-disconnect notice (see offlineNoticeMs).
       if (!s.connected && sess.lastStatus?.connected !== false) {
         sess.offlineSince = Date.now();
@@ -766,6 +942,38 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
       notifyCollabCopresenceChange();
     },
     onPresence: (bytes: Uint8Array) => getSess()?.cursors.applyRemote(bytes),
+    onJoinRequests: () => {
+      const sess = getSess();
+      if (!sess) return;
+      // Local room: re-list cross-server requests. Remote room: re-check
+      // our own admission (a change made while we were offline has no
+      // live frame to replay).
+      if (sess.joinWatcher) sess.joinWatcher.poke();
+      else if (sess.home) void syncRemoteAccess(deps, sess);
+    },
+    onAccessChanged: (mode: JoinMode) => {
+      const sess = getSess();
+      if (!sess) return;
+      sess.cursors.announce(); // partners' rosters learn the new access
+      refreshEditable(deps.getViewForUid?.(sess.ownerUid) ?? deps.getView());
+      showToast(
+        mode === 'read'
+          ? 'You can now only view this session (read-only)'
+          : 'You can now edit in this session',
+      );
+    },
+    onRevoked: () => {
+      const sess = getSess();
+      if (sess) forgetRoomPass(sess.session.roomId);
+      postNotice({
+        severity: 'warning',
+        title: 'Removed from the session',
+        body:
+          'The session no longer lets you in from your server. ' +
+          'This copy of the document is yours to keep.',
+        key: 'collab-revoked',
+      });
+    },
     onGuestAuthExpired: () => {
       // Terminal-cause notice for a guest whose (immutable, 7-day) pass
       // the relay refused: onEnded fires right after this and its toast
@@ -774,13 +982,18 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
         severity: 'error',
         title: 'Session invite expired',
         body:
-          'Your invite to this session has expired, so it can’t reconnect. ' +
+          'Your invite to this session has expired, so it can’t auto-reconnect. ' +
           'Ask the host for a fresh invite link if the session is still going. ' +
-          'This copy of the document is yours to keep.',
+          'You may save this copy of the document.',
         key: 'collab-guest-expired',
       });
     },
     onAuthRejected: () => {
+      const rejected = getSess();
+      if (rejected) {
+        rejected.authRejected = true;
+        if (isChipSession(rejected.ownerUid)) updateChip(null);
+      }
       // Mid-session 401/403 — without this the endless retry loop reads
       // exactly like being offline (audit find, 2026-07-10). Fired once
       // per session by CollabSession.
@@ -839,8 +1052,10 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
       const sess = getSess();
       if (!sess || !sessions.has(sess.ownerUid)) return;
       const wasHost = sess.session.role === 'host';
+      const wasChip = isChipSession(sess.ownerUid);
       void teardownSession(sess, false, /* roomOver */ true).catch((e) => surfaceError('collab teardown', e));
       refreshChipForFocus(); // repaint from live truth (a stale snapshot left ghost chips — field find, 2026-08-12)
+      if (wasChip) markChipEnded(); // red "Session ended" bar until dismissed
       // Rebuild the OWNER doc's plugin stack — refreshing the focused view
       // left an unfocused owner pane holding dead session plugins (audit
       // find, 2026-07-10).
@@ -855,7 +1070,7 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
     onFull: () => {
       const sess = getSess();
       if (!sess || !sessions.has(sess.ownerUid)) {
-        showToast('That session is full (10 participants)');
+        showToast('That session is full -- maximum number of coeditors reached');
         return;
       }
       // The join/resume half-succeeded over REST before the stream's 409:
@@ -868,7 +1083,7 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
       if (deps.refreshPluginsForUid) deps.refreshPluginsForUid(sess.ownerUid);
       else deps.refreshPlugins();
       showToast(
-        'The session is full (10 people) — your copy is saved; rejoin from the ' +
+        'The session is full. Your copy is saved; rejoin from the ' +
           'Sessions list when someone leaves.',
       );
     },
@@ -883,6 +1098,10 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
  *  account" and "self-host, wrong token", so the message names both
  *  without asserting which. Any non-401 keeps its raw reason. */
 export function relayFailureMessage(err: unknown, opts: { initiating: boolean; verb: string }): string {
+  // Federation refusals carry their own codes — say what actually
+  // happened rather than "credentials rejected".
+  const fed = err instanceof RoomsError && err.code ? federationFailureMessage(err, 'that server') : null;
+  if (fed) return fed;
   if (err instanceof RoomsError && err.status === 401) {
     return opts.initiating
       ? 'Starting a collaboration session requires a relay. ' + RELAY_FIX_PATH
@@ -1010,8 +1229,9 @@ async function startSessionFlowInner(
     // a browser; the link carries the guest pass so an account-less
     // joiner works). Desktop keeps the bare code — its partners are
     // other installs, and the code paste-flow is muscle memory there.
+    const crossCode = settings.get('collabCrossServerCodes') ? crossServerShareCode(sess) : null;
     const inviteText = getElectronHost()
-      ? shareCode
+      ? (crossCode ?? shareCode)
       : buildJoinLink({ shareCode, guestPass: session.guestPass });
     const copied = await navigator.clipboard?.writeText(inviteText).then(
       () => true,
@@ -1154,7 +1374,7 @@ async function joinSessionWithCodeInner(
   }
   const decoded = decodeShareCode(code);
   if (!decoded) {
-    showToast('That does not look like a share code');
+    showToast('That does not look like a share code. Check that it is correct.');
     return false;
   }
   // v2 codes carry the room's compatibility floor. (Old builds never
@@ -1174,6 +1394,46 @@ async function joinSessionWithCodeInner(
   if (await loadSessionRecord(decoded.roomId)) {
     return resumeSessionFlow(deps, decoded.roomId);
   }
+  // Federation: a room homed on ANOTHER server is reached through this
+  // app's relay, and only once someone there lets us in (Accept, or
+  // Accept read-only). A code naming our own relay is an ordinary join.
+  if (decoded.home) await refreshOwnRelayFederation();
+  const remoteHome = remoteHomeOf(decoded.home);
+  let joinClient: RoomsClient = client;
+  let joinMode: JoinMode = 'write';
+  if (remoteHome) {
+    const out = await requestRemoteAdmission({
+      roomId: decoded.roomId,
+      home: remoteHome,
+      keyBytes: decoded.keyBytes,
+    });
+    if (out.kind === 'cancelled') {
+      showToast('Join request cancelled');
+      return false;
+    }
+    if (out.kind === 'ended') {
+      showToast('That co-editing session has ended — ask for a fresh invite to start a new one.');
+      return true; // a dead room's invite is spent
+    }
+    if (out.kind === 'refused') {
+      showToast(out.message);
+      return false;
+    }
+    if (out.kind === 'error') {
+      showToast(relayFailureMessage(out.err, { initiating: false, verb: 'join' }));
+      return false;
+    }
+    joinClient = out.client;
+    joinMode = out.mode;
+  }
+  // Rejoining a session you started and then LEFT (Leave / close cleared
+  // its saved record; recent rooms remembers you hosted it and marks when
+  // you left): stay the host — coming back as a participant left no one
+  // able to end it. While your hosting session is still live (no leftAt),
+  // another window joining it is a participant, as before.
+  const recent = await loadRecentRoom(decoded.roomId).catch(() => null);
+  const rejoinRole: 'host' | 'participant' =
+    recent?.role === 'host' && recent.leftAt !== undefined && !remoteHome ? 'host' : 'participant';
   // Resolved after newSessionDoc/installSeams; callbacks read it lazily.
   let sessRef: ActiveSession | null = null;
   try {
@@ -1182,9 +1442,11 @@ async function joinSessionWithCodeInner(
     try {
       session = await CollabSession.join({
         ...decoded,
-        client,
+        client: joinClient,
         callbacks: sessionCallbacks(deps, () => sessRef),
+        role: rejoinRole,
       });
+      session.setAccess(joinMode);
       session.guestPass = opts?.guestPass ?? null;
     } catch (err) {
       // An ENDED (410) or expired/GC'd (404) room is not an offline
@@ -1202,13 +1464,14 @@ async function joinSessionWithCodeInner(
       session = await CollabSession.resume({
         roomId: decoded.roomId,
         keyBytes: decoded.keyBytes,
-        role: 'participant',
+        role: rejoinRole,
         snapshot: blobs[0]!,
         increments: blobs.slice(1),
         lastSeq: pre.lastSeq,
-        client,
+        client: joinClient,
         callbacks: sessionCallbacks(deps, () => sessRef),
       });
+      session.setAccess(joinMode);
       joinedOffline = true;
     }
     // Create the fresh unsaved session doc — its uid is the session owner
@@ -1253,7 +1516,11 @@ async function joinSessionWithCodeInner(
     showToast(
       joinedOffline
         ? 'Joined from the prefetched copy — will sync when you reconnect'
-        : 'Joined the session',
+        : joinMode === 'read'
+          ? `Joined the session read-only (on ${relayLabel(remoteHome ?? '')})`
+          : remoteHome
+            ? `Joined the session on ${relayLabel(remoteHome)}`
+            : 'Joined the session',
     );
     deps.getView()?.focus();
     return true;
@@ -1342,6 +1609,36 @@ async function resumeSessionFlowInner(
     showToast('Saved session record is unreadable');
     return false;
   }
+  // Federation: a remote-homed room resumes through our relay with the
+  // stored admission (no new approval, and no network needed to start —
+  // the home relay still enforces it, and access changes arrive live).
+  // Without a stored admission, ask again.
+  if (decoded.home) await refreshOwnRelayFederation();
+  const remoteHome = remoteHomeOf(decoded.home);
+  let resumeClient: RoomsClient = client;
+  let resumeMode: JoinMode = 'write';
+  if (remoteHome) {
+    const stored = storedRoomPass(record.roomId, remoteHome);
+    const remote = stored?.mode ? remoteRoomClient(record.roomId, remoteHome) : null;
+    if (stored?.mode && remote) {
+      resumeClient = remote;
+      resumeMode = stored.mode;
+    } else {
+      const out = await requestRemoteAdmission({
+        roomId: record.roomId,
+        home: remoteHome,
+        keyBytes: decoded.keyBytes,
+      });
+      if (out.kind !== 'admitted') {
+        if (out.kind === 'refused') showToast(out.message);
+        else if (out.kind === 'error') showToast(relayFailureMessage(out.err, { initiating: false, verb: 'resume' }));
+        else if (out.kind === 'ended') showToast('That co-editing session has ended.');
+        return false;
+      }
+      resumeClient = out.client;
+      resumeMode = out.mode;
+    }
+  }
   let sessRef: ActiveSession | null = null;
   try {
     const session = await CollabSession.resume({
@@ -1352,9 +1649,10 @@ async function resumeSessionFlowInner(
       increments: record.increments,
       lastSeq: record.lastSeq,
       sentVersion: record.sentVersion,
-      client,
+      client: resumeClient,
       callbacks: sessionCallbacks(deps, () => sessRef),
     });
+    session.setAccess(resumeMode);
     session.guestPass = record.guestPass ?? null;
     // Host resume without a stored pass: re-mint so fresh invite links
     // stay possible (no-op 404 while the relay flip is off, and guests
@@ -1428,11 +1726,110 @@ export async function copyShareCodeFlow(): Promise<void> {
     showToast('This document has no active session');
     return;
   }
-  const ok = await navigator.clipboard?.writeText(sess.shareCode).then(
+  await copyShareCodeFlowFor(sess);
+}
+
+async function copyShareCodeFlowFor(sess: ActiveSession): Promise<void> {
+  if (settings.get('collabCrossServerCodes')) await refreshOwnRelayFederation();
+  const code = defaultCopyCode(sess);
+  const ok = await navigator.clipboard?.writeText(code).then(
     () => true,
     () => false,
   );
   showToast(ok ? 'Share code copied' : 'Could not copy the share code');
+}
+
+/** The code "Copy code" hands out — the ONE rule behind the command and
+ *  the Send pill. A room on OUR relay gives the plain code every build
+ *  reads (even when we joined it through a cross-server code naming our
+ *  relay); a room on another server keeps naming its home; and opting
+ *  into cross-server codes (Settings) gives that form for every room. */
+function defaultCopyCode(sess: { shareCode: string; home: string | null }): string {
+  if (settings.get('collabCrossServerCodes')) {
+    const cross = crossServerShareCode(sess);
+    if (cross) return cross;
+  }
+  const decoded = decodeShareCode(sess.shareCode);
+  return decoded?.home && !sess.home ? stripShareCodeHome(sess.shareCode) : sess.shareCode;
+}
+
+/** The session's code naming its home relay (`cmshare2f.…@<home>`), for
+ *  someone on ANOTHER server — produced only on request, so plain codes
+ *  stay the default every build can join. Joiners from other servers
+ *  need a session participant's OK. */
+export function crossServerShareCode(sess: { shareCode: string; home: string | null }): string | null {
+  const self = selfRelayUrl();
+  const decoded = decodeShareCode(sess.shareCode);
+  if (!decoded || !self) return null;
+  return encodeShareCode(decoded.roomId, decoded.keyBytes, decoded.minVersion, sess.home ?? self);
+}
+
+export async function copyCrossServerShareCodeFlow(): Promise<void> {
+  const sess = actionSession();
+  if (!sess) {
+    showToast('This document has no active session');
+    return;
+  }
+  await refreshOwnRelayFederation();
+  const code = crossServerShareCode(sess);
+  if (!code) {
+    showToast('Your relay doesn’t connect to other servers, so there is no cross-server code.');
+    return;
+  }
+  const ok = await navigator.clipboard?.writeText(code).then(
+    () => true,
+    () => false,
+  );
+  showToast(
+    ok
+      ? 'Cross-server code copied — people on other servers will need your OK to join'
+      : 'Could not copy the code',
+  );
+}
+
+/** Prompt again for cross-server join requests put off with "Decide
+ *  later", then offer each admitted remote participant's access for
+ *  change (local rooms only — only the home server's participants
+ *  decide). */
+export async function reviewJoinRequestsFlow(): Promise<void> {
+  const sess = actionSession();
+  if (!sess) {
+    showToast('This document has no active session');
+    return;
+  }
+  if (sess.home) {
+    showToast('Only people on the session’s own server can let others in.');
+    return;
+  }
+  await refreshOwnRelayFederation();
+  if (!sess.joinWatcher || !selfRelayUrl()) {
+    showToast('Your relay doesn’t connect to other servers, so there are no join requests.');
+    return;
+  }
+  await sess.joinWatcher.review();
+}
+
+/** Re-check this REMOTE participant's admission (on every reconnect):
+ *  a mode change made while we were offline has no live frame to
+ *  replay. A revocation surfaces through the session's own refusals. */
+async function syncRemoteAccess(deps: CollabUiDeps, sess: ActiveSession): Promise<void> {
+  if (!sess.home) return;
+  const client = remoteRoomClient(sess.session.roomId, sess.home);
+  if (!client) return;
+  try {
+    const st = await client.joinStatus(sess.session.roomId);
+    if (st.state !== 'approved' || !st.mode) return;
+    noteRoomPassMode(sess.session.roomId, st.mode);
+    const current: JoinMode = sess.session.readOnly ? 'read' : 'write';
+    if (st.mode === current) return;
+    sess.session.setAccess(st.mode);
+    refreshEditable(deps.getViewForUid?.(sess.ownerUid) ?? deps.getView());
+    showToast(
+      st.mode === 'read' ? 'You can now only view this session (read-only)' : 'You can now edit in this session',
+    );
+  } catch {
+    /* offline — the next reconnect re-checks */
+  }
 }
 
 /** Re-publish the owner doc's display name to its live session's meta
@@ -1488,21 +1885,44 @@ async function sendInviteTo(
   shareCode: string,
   ownerUid: string | null | undefined,
 ): Promise<void> {
-  const item = buildRoomInviteItem({
-    shareCode,
-    title: sessionDocTitle(ownerUid),
-  });
+  const title = sessionDocTitle(ownerUid);
   // Movable-format rooms carry the higher floor: a pre-movable build
   // joining one couldn't read its containers at all, so it must get
   // the decline-with-update-toast instead of a broken join.
-  const format = actionSession()?.session.childrenFormat() ?? 'list';
-  const res = await pairingRelayClient.send(target.codes, item, {
-    via: target.via,
-    minReceiverVersion: roomInviteFloor(format),
-  });
-  if (res.fail === 0) showToast(`Invited ${target.label} ✓`);
-  else if (res.ok === 0) showToast(`Couldn't reach ${target.label}`);
-  else showToast(`Invited ${target.label} (${res.fail} failed)`);
+  const active = actionSession();
+  const format = active?.session.childrenFormat() ?? 'list';
+  // Federation: a recipient on the room's own server gets the plain code
+  // every build reads; anyone else needs the code naming the room's home
+  // (and will need a participant's OK to join).
+  await refreshOwnRelayFederation();
+  const self = selfRelayUrl();
+  const roomHome = active?.home ?? self;
+  const crossCode = active && self ? crossServerShareCode(active) : null;
+  const plainCode = active && !active.home ? stripShareCodeHome(shareCode) : shareCode;
+  const groups = new Map<string, string[]>();
+  for (const code of target.codes) {
+    const recipientRelay = pairingCodeRelay(code) ?? self;
+    const invite = crossCode && recipientRelay !== roomHome ? crossCode : plainCode;
+    groups.set(invite, [...(groups.get(invite) ?? []), code]);
+  }
+  let ok = 0;
+  let fail = 0;
+  let peerFail = 0;
+  let peerReason = '';
+  for (const [invite, codes] of groups) {
+    const res = await pairingRelayClient.send(codes, buildRoomInviteItem({ shareCode: invite, title }), {
+      via: target.via,
+      minReceiverVersion: roomInviteFloor(format),
+    });
+    ok += res.ok;
+    fail += res.fail;
+    peerFail += res.peerFail ?? 0;
+    peerReason ||= res.peerReason ?? '';
+  }
+  if (fail === 0) showToast(`Invited ${target.label} ✓`);
+  else if (peerFail === fail) showToast(`Your relay can't reach ${target.label}'s server${refusalWhy(peerReason)}`);
+  else if (ok === 0) showToast(`Couldn't reach ${target.label}`);
+  else showToast(`Invited ${target.label} (${fail} failed)`);
 }
 
 /** Send a session invite to the starred partner/group. */

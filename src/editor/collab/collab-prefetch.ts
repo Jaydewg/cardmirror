@@ -24,7 +24,10 @@ const STALE_MS = 60 * 60 * 1000;
  *  `cmshare2.<roomId>.<key>.<minVersion>`) — a string split, so light
  *  consumers don't need the crypto module. */
 export function roomIdFromShareCode(code: string): string | null {
-  const parts = code.trim().split('.');
+  // Federation codes carry `@<home>`; the room id sits before it, and the
+  // `f` flag rides on the generation (`cmshare2f`).
+  const parts = code.trim().split('@')[0]!.split('.');
+  if (parts[0]?.endsWith('f')) parts[0] = parts[0].slice(0, -1);
   if (parts.length === 3 && parts[0] === 'cmshare1' && parts[1]) return parts[1];
   // v2 floors contain dots ("1.0.0"), so 4+ parts.
   if (parts.length >= 4 && parts[0] === 'cmshare2' && parts[1]) return parts[1];
@@ -34,6 +37,9 @@ export function roomIdFromShareCode(code: string): string | null {
 const inFlight = new Set<string>();
 
 export async function prefetchInviteSeed(shareCode: string): Promise<void> {
+  // A room on another server can't be read before someone there lets
+  // us in (relay/FEDERATION.md §6.1) — nothing to prefetch.
+  if (shareCode.includes('@')) return;
   const roomId = roomIdFromShareCode(shareCode);
   if (!roomId || inFlight.has(roomId)) return;
   inFlight.add(roomId);

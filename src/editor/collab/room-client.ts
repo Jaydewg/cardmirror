@@ -17,9 +17,16 @@
  * full (stop; the caller surfaces it).
  */
 
-import { base64ToBytes } from './collab-crypto.js';
+import { base64ToBytes, bytesToBase64 } from './collab-crypto.js';
 import { appVersion } from '../install-info.js';
-import { RELAY_CLIENT_ROUTING_HEADER, RELAY_CLIENT_VERSION_HEADER } from '../relay-protocol.js';
+import { RELAY_CLIENT_ROUTING_HEADER, RELAY_CLIENT_VERSION_HEADER, numericVersion } from '../relay-protocol.js';
+
+/** Response header every federation proxy response carries
+ *  (relay/FEDERATION.md §6) — tells a home relay's "no such room" 404
+ *  apart from an older relay's "no such route" 404. */
+export const FEDERATION_RESPONSE_HEADER = 'X-CardMirror-Federation';
+/** Request header carrying a remote participant's room pass. */
+export const ROOM_PASS_HEADER = 'X-CardMirror-Room-Pass';
 
 export type RoomsFetch = typeof fetch;
 
@@ -32,20 +39,24 @@ const boundFetch: RoomsFetch = (input, init) => fetch(input, init);
 /** Best-effort ' — <detail>' suffix from a non-2xx body (FastAPI's
  *  `{detail}` or the mock's `{error}`; a non-JSON body contributes a
  *  short trimmed prefix). Never throws; at most 512 bytes read. */
-async function errorDetail(res: Response): Promise<string> {
+async function errorDetail(res: Response): Promise<{ detail: string; code: string; reason: string }> {
   try {
     const text = (await res.text()).slice(0, 512).trim();
-    if (!text) return '';
+    if (!text) return { detail: '', code: '', reason: '' };
     try {
-      const parsed = JSON.parse(text) as { detail?: unknown; error?: unknown };
+      const parsed = JSON.parse(text) as { detail?: unknown; error?: unknown; reason?: unknown };
       const d = parsed.detail ?? parsed.error;
-      if (typeof d === 'string' && d) return ` — ${d}`;
-      return '';
+      // Federation refusals carry a machine-readable `error` code (and,
+      // for policy refusals, the `reason`).
+      const code = typeof parsed.error === 'string' ? parsed.error : '';
+      const reason = typeof parsed.reason === 'string' ? parsed.reason : '';
+      if (typeof d === 'string' && d) return { detail: ` — ${d}`, code, reason };
+      return { detail: '', code, reason };
     } catch {
-      return /^</.test(text) ? '' : ` — ${text.slice(0, 120)}`;
+      return { detail: /^</.test(text) ? '' : ` — ${text.slice(0, 120)}`, code: '', reason: '' };
     }
   } catch {
-    return '';
+    return { detail: '', code: '', reason: '' };
   }
 }
 
@@ -73,10 +84,38 @@ export class RoomsError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** Machine-readable refusal code (federation: `join-pending`,
+     *  `join-denied`, `read-only`, `home-unreachable`, …); '' if none. */
+    readonly code: string = '',
+    /** Federation policy refusals: why (`private-address`, …); '' if none. */
+    readonly reason: string = '',
   ) {
     super(message);
     this.name = 'RoomsError';
   }
+}
+
+/** Status for "this relay has no federation routes" — a 404 that did
+ *  NOT come from a federation proxy. Distinct from 404 "no such room"
+ *  so it never reads as "the session ended". */
+export const RELAY_NOT_FEDERATING_STATUS = 501;
+
+export type JoinRequestState = 'pending' | 'approved' | 'denied' | 'expired' | 'withdrawn';
+export type JoinMode = 'write' | 'read';
+
+export interface JoinRequestStatus {
+  requestId: string;
+  state: JoinRequestState;
+  mode: JoinMode | null;
+}
+
+/** A cross-server join request as the home relay lists it to local
+ *  participants. `blob` is the joiner's room-key-sealed intro. */
+export interface JoinRequestListing extends JoinRequestStatus {
+  origin: string;
+  originNickname: string | null;
+  blob: Uint8Array;
+  createdAt: number;
 }
 
 export interface RoomUpdate {
@@ -119,6 +158,16 @@ export interface RoomsClientOptions {
    *  back. Absent/false for tokens and entitlements, which CAN renew. */
   guestAuth?: boolean;
   fetchImpl?: RoomsFetch;
+  /** Extra headers on every request and stream (federation: the room
+   *  pass of a remote participant). Re-read per request. */
+  extraHeaders?: () => Record<string, string>;
+  /** The X-CardMirror-Version value (default: the plain numeric app
+   *  version; see relay-protocol.ts wireVersion). */
+  versionHeader?: () => string;
+  /** True when `baseUrl` is a federation proxy base
+   *  (`…/federation/v1/via/<home>`): a 404 without the proxy's response
+   *  header then means "this relay can't federate", not "room gone". */
+  federated?: boolean;
   /** Per-request deadline for reads/small posts (default 15s) and for
    *  the multi-MB update/snapshot posts (default 120s — school uplinks).
    *  A request that never settles (half-open TCP after a lid-close or
@@ -157,8 +206,9 @@ export class RoomsClient {
     const token = cred ? cred.token : this.opts.token();
     return {
       Authorization: `Bearer ${token}`,
-      [RELAY_CLIENT_VERSION_HEADER]: appVersion,
+      [RELAY_CLIENT_VERSION_HEADER]: this.opts.versionHeader?.() ?? numericVersion(appVersion),
       ...(routing ? { [RELAY_CLIENT_ROUTING_HEADER]: routing } : {}),
+      ...this.opts.extraHeaders?.(),
       ...extra,
     };
   }
@@ -222,7 +272,14 @@ export class RoomsClient {
       // the field (2026-09-01 review). Bounded read: an interceptor's
       // HTML page must not be inhaled whole. Reading also releases the
       // connection back to the pool (an abandoned body holds it).
-      const e = new RoomsError(res.status, `rooms request failed: ${res.status}${await errorDetail(res)}`);
+      const { detail, code, reason } = await errorDetail(res);
+      // A federated base whose 404 lacks the proxy marker: the RELAY has
+      // no federation routes (older / federation off) — never "room gone".
+      const notFederating =
+        this.opts.federated === true && res.status === 404 && !res.headers.get(FEDERATION_RESPONSE_HEADER);
+      const e = notFederating
+        ? new RoomsError(RELAY_NOT_FEDERATING_STATUS, 'your relay does not connect to other servers', 'relay-not-federating')
+        : new RoomsError(res.status, `rooms request failed: ${res.status}${detail}`, code, reason);
       this.noteFailure(e);
       throw e;
     }
@@ -361,6 +418,85 @@ export class RoomsClient {
   async deleteRoom(roomId: string): Promise<void> {
     await this.request(`/rooms/${roomId}`, { method: 'DELETE', headers: this.headers() });
   }
+
+  // ── Cross-server join requests (relay/FEDERATION.md §6.1) ──
+
+  /** Joiner side (federated base): ask into a remote-homed room. `pass`
+   *  is the joiner-minted secret (idempotent: resending it returns the
+   *  same request); `intro` is room-key ciphertext the host decrypts. */
+  async requestJoin(roomId: string, pass: string, intro: Uint8Array): Promise<JoinRequestStatus> {
+    const path = `/rooms/${roomId}/join-requests`;
+    const res = await this.request(path, {
+      method: 'POST',
+      headers: this.headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ pass, blob: bytesToBase64(intro) }),
+    });
+    return parseJoinStatus(await this.readJson<unknown>(res, path));
+  }
+
+  /** Joiner side: the current state of our own request (the pass rides
+   *  in `extraHeaders`). */
+  async joinStatus(roomId: string): Promise<JoinRequestStatus> {
+    const path = `/rooms/${roomId}/join-requests/self`;
+    const res = await this.request(path, { headers: this.headers() });
+    return parseJoinStatus(await this.readJson<unknown>(res, path));
+  }
+
+  /** Joiner side: withdraw (cancel while pending; leave for good). */
+  async withdrawJoin(roomId: string): Promise<void> {
+    await this.request(`/rooms/${roomId}/join-requests/self`, { method: 'DELETE', headers: this.headers() });
+  }
+
+  /** Home side (local participants): requests awaiting a decision, and
+   *  the remote participants already admitted. */
+  async listJoinRequests(roomId: string): Promise<JoinRequestListing[]> {
+    const path = `/rooms/${roomId}/join-requests`;
+    const res = await this.request(path, { headers: this.headers() });
+    const body = await this.readJson<{ requests?: unknown[] }>(res, path);
+    const out: JoinRequestListing[] = [];
+    for (const r of body.requests ?? []) {
+      const st = parseJoinStatus(r);
+      const o = r as { origin?: unknown; originNickname?: unknown; blob?: unknown; createdAt?: unknown };
+      if (typeof o.origin !== 'string' || typeof o.blob !== 'string') continue;
+      let blob: Uint8Array;
+      try {
+        blob = base64ToBytes(o.blob);
+      } catch {
+        continue;
+      }
+      out.push({
+        ...st,
+        origin: o.origin,
+        originNickname: typeof o.originNickname === 'string' ? o.originNickname : null,
+        blob,
+        createdAt: typeof o.createdAt === 'number' ? o.createdAt : 0,
+      });
+    }
+    return out;
+  }
+
+  /** Home side: accept (`write` / `read`), decline, or revoke. */
+  async decideJoinRequest(
+    roomId: string,
+    requestId: string,
+    decision: JoinMode | 'deny' | 'revoke',
+  ): Promise<void> {
+    await this.request(`/rooms/${roomId}/join-requests/${encodeURIComponent(requestId)}`, {
+      method: 'POST',
+      headers: this.headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ decision }),
+    });
+  }
+}
+
+function parseJoinStatus(raw: unknown): JoinRequestStatus {
+  const o = (raw ?? {}) as { requestId?: unknown; state?: unknown; mode?: unknown };
+  const states: JoinRequestState[] = ['pending', 'approved', 'denied', 'expired', 'withdrawn'];
+  if (typeof o.requestId !== 'string' || !states.includes(o.state as JoinRequestState)) {
+    throw new RoomsError(0, 'malformed join-request response');
+  }
+  const mode = o.mode === 'write' || o.mode === 'read' ? o.mode : null;
+  return { requestId: o.requestId, state: o.state as JoinRequestState, mode };
 }
 
 // --- SSE stream ---
@@ -392,6 +528,15 @@ export interface RoomStreamCallbacks {
    *  stream itself keeps its backoff retry unless the callback stops
    *  it. May fire again on later consecutive refusals. */
   onAuthDead?: () => void;
+  /** Federation: a remote participant's access changed live (the host
+   *  switched them between read-only and editing). */
+  onAccessChanged?: (mode: JoinMode) => void;
+  /** Federation: a remote participant's access was revoked (stream
+   *  `x` frame, or a `join-denied` refusal). Terminal. */
+  onRevoked?: () => void;
+  /** Federation: cross-server join requests for this room changed — a
+   *  nudge (local participants only) to re-list them. */
+  onJoinRequests?: () => void;
 }
 
 export interface RoomStreamOptions {
@@ -409,6 +554,10 @@ export interface RoomStreamOptions {
   fetchImpl?: RoomsFetch;
   /** Optional combined credential supplier (see RoomsClientOptions). */
   credentials?: () => { token: string; routingCode: string };
+  /** See RoomsClientOptions.extraHeaders / versionHeader / federated. */
+  extraHeaders?: () => Record<string, string>;
+  versionHeader?: () => string;
+  federated?: boolean;
   /** Backoff bounds, injectable for tests. */
   minBackoffMs?: number;
   maxBackoffMs?: number;
@@ -630,6 +779,14 @@ export class RoomStream {
       } else if (frame.t === 'end') {
         this.stopped = true;
         this.opts.callbacks.onEnded();
+      } else if (frame.t === 'x') {
+        this.stopped = true;
+        this.opts.callbacks.onRevoked?.();
+      } else if (frame.t === 'a') {
+        const mode = (frame as { mode?: unknown }).mode;
+        if (mode === 'write' || mode === 'read') this.opts.callbacks.onAccessChanged?.(mode);
+      } else if (frame.t === 'j') {
+        this.opts.callbacks.onJoinRequests?.();
       }
     } catch {
       console.warn('[room-stream] undecodable frame; ignoring');
@@ -660,8 +817,9 @@ export class RoomStream {
         headers: {
           Accept: 'text/event-stream',
           Authorization: `Bearer ${token}`,
-          [RELAY_CLIENT_VERSION_HEADER]: appVersion,
+          [RELAY_CLIENT_VERSION_HEADER]: this.opts.versionHeader?.() ?? numericVersion(appVersion),
           ...(routing ? { [RELAY_CLIENT_ROUTING_HEADER]: routing } : {}),
+          ...this.opts.extraHeaders?.(),
         },
         signal: this.controller.signal,
       });
@@ -669,6 +827,18 @@ export class RoomStream {
       // its pool connection until GC — one per retry, for hours, during
       // an outage (2026-09-01 review).
       const drop = (): void => void res.body?.cancel().catch(() => {});
+      if (
+        this.opts.federated === true &&
+        res.status === 404 &&
+        !res.headers.get(FEDERATION_RESPONSE_HEADER)
+      ) {
+        // Our relay has no federation routes (downgraded / federation
+        // turned off): NOT "session ended" — keep retrying; the session
+        // layer surfaces the cause from its own failing requests.
+        drop();
+        this.scheduleRetry();
+        return;
+      }
       if (res.status === 410 || res.status === 404) {
         // Tombstoned (or GC'd all the way to gone): the session is over.
         drop();
@@ -703,11 +873,21 @@ export class RoomStream {
         // (i.e. after a full backoff interval) fires onAuthDead, and
         // the wifi-login case self-heals through the ordinary retry.
         let relayShaped = false;
+        let code = '';
         try {
           const parsed = JSON.parse(await res.text()) as unknown;
           relayShaped = !!parsed && typeof parsed === 'object';
+          const c = relayShaped ? (parsed as { error?: unknown }).error : undefined;
+          code = typeof c === 'string' ? c : '';
         } catch {
           /* HTML / empty / opaque body — not the relay speaking */
+        }
+        // Federation: the home relay's decision about THIS participant,
+        // not a credential problem — terminal, no retry storm.
+        if (code === 'join-denied') {
+          this.stopped = true;
+          this.opts.callbacks.onRevoked?.();
+          return;
         }
         if (relayShaped && ++this.authFails >= 2) {
           this.opts.callbacks.onAuthDead?.();

@@ -171,6 +171,64 @@ describe('M4 presence cursors', () => {
   });
 });
 
+describe('roster: who is here, independent of cursors', () => {
+  it('partners stay listed with no cursor; carry relay + read-only; leave removes them', async () => {
+    const { session: a, shareCode } = await CollabSession.host({
+      pmDoc: simpleDoc('roster doc'),
+      client,
+      flushMs: 40,
+      minBackoffMs: 30,
+      maxBackoffMs: 60,
+    });
+    let bCursors: ReturnType<typeof installCursorPresence> | null = null;
+    const b = await CollabSession.join({
+      ...decodeShareCode(shareCode)!,
+      client,
+      flushMs: 40,
+      minBackoffMs: 30,
+      maxBackoffMs: 60,
+      callbacks: { onPresence: (bytes) => bCursors?.applyRemote(bytes) },
+    });
+    const A_RELAY = 'https://relay-b.example/relay';
+    let aReadOnly = true;
+    const aCursors = installCursorPresence(a, () => aView, () => ({ relay: A_RELAY, readOnly: aReadOnly }));
+    bCursors = installCursorPresence(b, () => bView);
+    const aView = mkView([...a.plugins(), ...aCursors.plugins()]);
+    const bView = mkView([...b.plugins(), ...bCursors.plugins()]);
+    await settle();
+    a.start();
+    b.start();
+    await sleep(300);
+
+    // A never touches its editor (no selection, no cursor): it is still
+    // on B's roster once it announces (the app announces on connect).
+    aCursors.announce();
+    await sleep(300);
+    const seen = bCursors.presence().find((p) => !p.self);
+    expect(seen?.peer).toBe(a.loroDoc.peerIdStr);
+    expect(seen?.relay).toBe(A_RELAY);
+    expect(seen?.readOnly).toBe(true);
+    // Read-only admissions can't run repairs: not a repair-leader candidate.
+    expect(bCursors.visiblePeers()).not.toContain(a.loroDoc.peerIdStr);
+    aReadOnly = false;
+    aCursors.announce();
+    await sleep(300);
+    expect(bCursors.visiblePeers()).toContain(a.loroDoc.peerIdStr);
+
+    // Departure leaves the roster at once.
+    aCursors.farewell();
+    await sleep(300);
+    expect(bCursors.presence().filter((p) => !p.self)).toHaveLength(0);
+
+    aCursors.dispose();
+    bCursors.dispose();
+    await a.stop();
+    await b.stop();
+    aView.destroy();
+    bView.destroy();
+  }, 20_000);
+});
+
 describe('presence departure + reconnect re-broadcast (2026-09-01 review, PH-A10)', () => {
   it('farewell() removes this peer from partners immediately instead of after the 45s expiry', async () => {
     const { session: a, shareCode } = await CollabSession.host({

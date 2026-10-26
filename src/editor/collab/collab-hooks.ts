@@ -163,6 +163,32 @@ export function collabActiveShareCode(): string | null {
   return shareCodeGetter?.() ?? null;
 }
 
+/** Focused doc's session code for someone on ANOTHER server
+ *  (`cmshare…f…@<home>`), or null when there is no session or this
+ *  app's relay doesn't federate. The Send pill offers it beside the
+ *  default "Copy code", so plain codes stay the default. */
+let crossServerCodeGetter: (() => string | null) | null = null;
+
+export function setCollabCrossServerCodeGetter(fn: (() => string | null) | null): void {
+  crossServerCodeGetter = fn;
+}
+
+export function collabActiveCrossServerCode(): string | null {
+  return crossServerCodeGetter?.() ?? null;
+}
+
+/** Focused doc's session code in its CLASSIC form (`cmshare1.` /
+ *  `cmshare2.`, no server address), or null without a session. */
+let classicCodeGetter: (() => string | null) | null = null;
+
+export function setCollabClassicCodeGetter(fn: (() => string | null) | null): void {
+  classicCodeGetter = fn;
+}
+
+export function collabActiveClassicCode(): string | null {
+  return classicCodeGetter?.() ?? null;
+}
+
 /** Focused doc's session INVITE LINK (share code + guest pass packed
  *  for the web joiner) — same registration pattern as the share code. */
 let inviteLinkGetter: (() => string | null) | null = null;
@@ -186,7 +212,10 @@ export interface CollabCopresence {
   role: 'host' | 'participant';
   connected: boolean;
   queued: number;
-  peers: { name: string; color: string; self: boolean }[];
+  peers: { name: string; color: string; self: boolean; remote?: boolean; server?: string }[];
+  /** Classes for the status ring around your own dot (session-chip.ts
+   *  ringClasses); absent from older providers. */
+  ring?: string;
 }
 
 let copresenceProvider: ((uid: string) => CollabCopresence | null) | null = null;

@@ -52,7 +52,7 @@ manual; [`PRIVACY.md`](./PRIVACY.md) for how CardMirror handles your data;
 [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design;
 [`PROJECT.md`](./PROJECT.md) for project orientation.
 
-(Federated Versions) Go to [`relay/FEDERATION.md`](https://github.com/Jaydewg/cardmirror/blob/server-federation/relay/FEDERATION.md) for details on federation (Federated branches ONLY).
+(Federated Versions) Go to [`relay/FEDERATION.md`](./relay/FEDERATION.md) for details on federation (Federated branches ONLY).
 
 You can find a video walkthrough of CardMirror's basic functions [here](https://www.youtube.com/playlist?list=PLXM5iwKNQkSs). 
 
@@ -221,10 +221,9 @@ Translation key. Configure it under Settings → Editing → Translation.
 ## Run from source
 
 You **always need this for now**. It's easy, and as long as your computer is recent (and you're not 
-running a Windows ARM or Apple Intel computer), you can share
-(contribute, run a development branch, or use the editor on a
-platform we don't publish binaries for). For day-to-day use,
-download a release above.
+running a Windows ARM or Apple Intel computer), you can share a generated executable.
+Feel free to contribute, run a development branch, or use the editor on a
+platform we don't publish binaries for.
 
 ### 1. Install Node.js
 

@@ -17,6 +17,7 @@
  */
 
 import { bytesToBase64, base64ToBytes } from '../../ooxml/base64.js';
+import { FEDERATION_FLAG, parseCodePrefix, splitRelaySuffix } from '../federation/address.js';
 
 export const ROOM_KEY_BYTES = 32;
 
@@ -94,21 +95,45 @@ function fromBase64Url(s: string): Uint8Array {
  *  (found live, 2026-08-14). Old builds cannot be taught a better
  *  message; new builds read the floor and say "update". List rooms keep
  *  minting v1 codes so old builds can still join them. */
-export function encodeShareCode(roomId: string, keyBytes: Uint8Array, minVersion?: string): string {
+export function encodeShareCode(
+  roomId: string,
+  keyBytes: Uint8Array,
+  minVersion?: string,
+  home?: string | null,
+): string {
+  // Federation (relay/FEDERATION.md §2.1): the `f` flag rides on the
+  // generation — cmshare1f / cmshare2f — and the code ends `@<home>`.
+  // Only minted when asked for (cross-server copy, remote invites):
+  // plain codes stay the default so every older build can still join.
+  const flag = home ? FEDERATION_FLAG : '';
+  const tail = home ? `@${home}` : '';
   if (minVersion) {
-    return `${SHARE_CODE_PREFIX_V2}.${roomId}.${toBase64Url(keyBytes)}.${minVersion}`;
+    return `${SHARE_CODE_PREFIX_V2}${flag}.${roomId}.${toBase64Url(keyBytes)}.${minVersion}${tail}`;
   }
-  return `${SHARE_CODE_PREFIX}.${roomId}.${toBase64Url(keyBytes)}`;
+  return `${SHARE_CODE_PREFIX}${flag}.${roomId}.${toBase64Url(keyBytes)}${tail}`;
 }
 
-export function decodeShareCode(
-  code: string,
-): { roomId: string; keyBytes: Uint8Array; minVersion?: string } | null {
-  const parts = code.trim().split('.');
+export interface DecodedShareCode {
+  roomId: string;
+  keyBytes: Uint8Array;
+  minVersion?: string;
+  /** Canonical home relay URL — present only on `f` codes. */
+  home?: string;
+}
+
+export function decodeShareCode(code: string): DecodedShareCode | null {
+  const { body, relay } = splitRelaySuffix(code.trim());
+  const parts = body.split('.');
+  const prefix = parseCodePrefix(parts[0] ?? '');
+  if (!prefix || prefix.kind !== 'cmshare' || (prefix.gen !== 1 && prefix.gen !== 2)) return null;
+  // Flags this build understands: none, or `f` with a valid home URL.
+  if (prefix.flags === '' ? relay !== null : prefix.flags !== FEDERATION_FLAG || typeof relay !== 'string') {
+    return null;
+  }
   // The version itself contains dots ("1.0.0"), so a v2 code splits
   // into 4+ parts: everything past the key is the floor, rejoined.
-  const v2 = parts.length >= 4 && parts[0] === SHARE_CODE_PREFIX_V2;
-  if (!v2 && (parts.length !== 3 || parts[0] !== SHARE_CODE_PREFIX)) return null;
+  const v2 = prefix.gen === 2;
+  if (v2 ? parts.length < 4 : parts.length !== 3) return null;
   const roomId = parts[1]!;
   if (!/^[0-9a-f]{16,64}$/.test(roomId)) return null;
   const minVersion = v2 ? parts.slice(3).join('.') : undefined;
@@ -116,8 +141,17 @@ export function decodeShareCode(
   try {
     const keyBytes = fromBase64Url(parts[2]!);
     if (keyBytes.byteLength !== ROOM_KEY_BYTES) return null;
-    return v2 ? { roomId, keyBytes, minVersion } : { roomId, keyBytes };
+    const out: DecodedShareCode = v2 ? { roomId, keyBytes, minVersion } : { roomId, keyBytes };
+    if (relay) out.home = relay;
+    return out;
   } catch {
     return null;
   }
+}
+
+/** The same code without its home (`f` → plain), for display/storage
+ *  paths that must stay readable by every build. */
+export function stripShareCodeHome(code: string): string {
+  const d = decodeShareCode(code);
+  return d?.home ? encodeShareCode(d.roomId, d.keyBytes, d.minVersion) : code.trim();
 }
