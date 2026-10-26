@@ -5,6 +5,60 @@ changes in each release, written for users of the editor. For
 in-depth rationale and implementation context behind each entry,
 see `DETAILED_CHANGELOG.md`.
 
+## 1.16.1 — 2026-10-26
+
+The first release from this fork (`Jaydewg/cardmirror`). It contains
+everything in CardMirror 1.16.0 (see its entry in `CHANGELOG.md`), plus
+the changes listed here.
+
+### Added
+
+- **Word documents autosave.** With autosave on, a `.docx` file now
+  saves once you pause editing (about 30 seconds), as soon as you switch
+  to another window, and when you close it. A `.cmir` file still saves a
+  few seconds after each edit. Word files wait longer because writing
+  them takes longer, and saving while you type would slow typing on
+  large files.
+
+- **Closing saves for you.** With autosave on, closing a document or
+  window (or quitting) saves it without asking. You only see the Save /
+  Don't Save prompt if that save fails, or if autosave couldn't have
+  saved the document anyway.
+
+- **Word documents with live links don't autosave.** A `.docx` can't
+  hold live views or linked copies, and saving would turn them into
+  plain cards, so autosave never makes that call for you. If you turn
+  autosave on for such a document, or add the first live link while
+  it's on, a dialog explains this and offers **Save as .cmir…** (keeps
+  the links, and autosave works), **Undo the link**, or **Turn autosave
+  off**.
+
+- **Turn a highlight color into Locked Highlighting.** The Docs menu's
+  standardize list has a new item, **Turn *color* into Locked
+  Highlighting** (it shows the color you've chosen). It turns every
+  highlight of that color into the gray locked shading that Lock
+  Highlighting uses. With a selection it works on the selection;
+  otherwise on the whole document. Other highlight colors are left
+  alone. Choose the color in Settings → Editing → **Locked highlights
+  trigger color** (light gray by default). In the command bar it's
+  **Convert Specific Colored Highlights to Locked Highlighting**, with
+  no default shortcut.
+
+### Changed
+
+- **Updates, downloads and help links point to this fork.** The update
+  check, the Releases link, and the Manual, Privacy and Terms links now
+  go to `github.com/Jaydewg/cardmirror`.
+
+### Fixed
+
+- **A formatting change in the middle of a word no longer counts as two
+  words.** When underlining ended partway through a highlighted word, or
+  the highlight color changed mid-word, the word counts and read times
+  counted the word twice. Now it counts once. Highlighting only some
+  letters (`*U*nited *S*tates`) still counts each highlighted piece, as
+  before.
+
 ## 1.16.0 — 2026-10-24
 
 ### Added
