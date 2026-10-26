@@ -12,6 +12,8 @@ import { schema } from '../../src/schema/index.js';
 import { RoomsClient, RoomsError } from '../../src/editor/collab/room-client.js';
 import { CollabSession } from '../../src/editor/collab/collab-session.js';
 import { decodeShareCode } from '../../src/editor/collab/collab-crypto.js';
+import { remoteStepStats } from '../../src/editor/collab/remote-steps.js';
+import { LoroDoc, UndoManager } from 'loro-crdt';
 import { startRoomsMock, type RoomsMock } from './_rooms-mock.js';
 import {
   mkView,
@@ -127,7 +129,11 @@ describe('collab session end-to-end', () => {
     await host.stop();
   });
 
-  it('inbound micro-batching: a burst of frames imports as ONE binding transaction', async () => {
+  it('inbound micro-batching: a burst of frames is one binding transaction and keeps the undo stack', async () => {
+    // Field report 2026-10-24: a partner types, you delete it, Ctrl+Z does
+    // nothing. The burst used to land as one importBatch, whose
+    // checkout-to-latest clears the UndoManager — and the next local edit
+    // (the delete) never reached the stack.
     const { session: host, shareCode } = await CollabSession.host({
       pmDoc: mixedDoc(),
       client,
@@ -149,7 +155,6 @@ describe('collab session end-to-end', () => {
     document.body.appendChild(el);
     const { EditorState } = await import('prosemirror-state');
     const { EditorView } = await import('prosemirror-view');
-    const { schema } = await import('../../src/schema/index.js');
     const joinView: InstanceType<typeof EditorView> = new EditorView(el, {
       state: EditorState.create({ schema, plugins: joiner.plugins() }),
       dispatchTransaction(tx) {
@@ -160,7 +165,13 @@ describe('collab session end-to-end', () => {
     await settle();
     joiner.start();
     await sleep(400);
-    const baseline = docDispatches; // initial sync import(s)
+    const um = new UndoManager(joiner.loroDoc, { mergeInterval: 0 });
+    typeAfter(joinView, 'Second analytic', ' MINE');
+    await settle();
+    expect(um.canUndo()).toBe(true);
+    const drainsBefore = joiner.debugState().inboundDrains;
+    const baseline = docDispatches;
+    const stepsBefore = { ...remoteStepStats };
 
     // Three flush-frames' worth of typing inside one 250ms window.
     for (let i = 0; i < 3; i++) {
@@ -169,8 +180,21 @@ describe('collab session end-to-end', () => {
     }
     await sleep(600); // drain + settle
     expect(docText(joinView.state.doc)).toContain('batch2');
-    // All frames landed, but as ONE import → ONE doc-changing dispatch.
-    expect(docDispatches - baseline).toBe(1);
+    expect(joiner.debugState().inboundDrains - drainsBefore, 'one drain for the burst').toBe(1);
+    // All frames landed, each its own import, as ONE doc-changing dispatch.
+    expect(docDispatches - baseline, 'one editor transaction for the burst').toBe(1);
+    expect(remoteStepStats.exact - stepsBefore.exact, 'the burst built as exact steps').toBeGreaterThanOrEqual(1);
+    expect(remoteStepStats.fallback, 'no bounded-replace fallback').toBe(stepsBefore.fallback);
+    expect(um.canUndo(), 'the burst left my undo history alone').toBe(true);
+
+    // Delete the partner's text, then undo: it comes back.
+    const { from, to } = findText(joinView.state.doc, ' batch1');
+    joinView.dispatch(joinView.state.tr.delete(from, to));
+    await settle();
+    expect(docText(joinView.state.doc)).not.toContain('batch1');
+    expect(um.undo()).toBe(true);
+    await settle();
+    expect(docText(joinView.state.doc)).toContain('batch1');
 
     await joiner.stop();
     await host.stop();
@@ -609,19 +633,19 @@ describe('catch-up skips rows the stream already delivered', () => {
 });
 
 describe('a failed inbound import batch is not on the catch-up skip list', () => {
-  it('rows from a batch importBatch rejected are re-fetched and imported by catch-up', async () => {
+  it('rows from a batch the import rejected are re-fetched and imported by catch-up', async () => {
     // The skip list (T8) records stream-delivered seqs so catch-up does
     // not re-import them. Recording them BEFORE the import meant a batch
-    // that failed (one corrupt frame fails the whole importBatch) had
+    // that failed (one corrupt frame fails the drain) had
     // every row in it skipped by every later catch-up — a permanent gap
     // (knock-on audit 2026-09-02). Now the seqs are recorded only after a
     // successful import.
     const { host, hostView, joiner, joinView } = await hostAndJoin(simpleDoc('seed'));
     try {
-      const ldoc = (joiner as unknown as { loroDoc: { importBatch: (b: Uint8Array[]) => unknown } }).loroDoc;
-      const orig = ldoc.importBatch.bind(ldoc);
+      const ldoc = joiner.loroDoc;
+      const orig = ldoc.import.bind(ldoc);
       let failures = 0;
-      ldoc.importBatch = (b: Uint8Array[]) => {
+      ldoc.import = (b: Uint8Array) => {
         if (failures === 0) {
           failures++;
           throw new Error('simulated corrupt frame');
@@ -1321,4 +1345,28 @@ describe('incremental history audit (egress discipline, 2026-07-24)', () => {
       await freshMock.close();
     }
   }, 25_000);
+});
+
+describe('importBatch on an attached doc clears the UndoManager (why importLive exists)', () => {
+  // Canary: fails once Loro stops reporting importBatch's reattach as a checkout —
+  // then importLive can go back to importBatch.
+  it('a two-frame importBatch empties the undo stack', () => {
+    const a = new LoroDoc();
+    const b = new LoroDoc();
+    a.getText('t').insert(0, 'hi');
+    a.commit();
+    b.import(a.export({ mode: 'snapshot' }));
+    const um = new UndoManager(a, { mergeInterval: 0 });
+    a.getText('t').insert(0, 'x');
+    a.commit();
+    expect(um.canUndo()).toBe(true);
+    const frames = ['1', '2'].map((ch) => {
+      const v = b.oplogVersion();
+      b.getText('t').insert(0, ch);
+      b.commit();
+      return b.export({ mode: 'update', from: v });
+    });
+    a.importBatch(frames);
+    expect(um.canUndo()).toBe(false);
+  });
 });

@@ -5,6 +5,180 @@ changes in each release, written for users of the editor. For
 in-depth rationale and implementation context behind each entry,
 see `DETAILED_CHANGELOG.md`.
 
+## 1.16.0 — 2026-10-24
+
+### Added
+
+- **Spectators: view-only collaboration sessions.** Every session now has
+  a **view code** and a **view link** alongside its edit code and invite
+  link. Whoever joins with one watches the document live — every edit
+  as it happens, with their own caret, selection, copy and Save As — but
+  cannot change anything: typing, pasting, dragging, comments and reading
+  markers are refused in their window, and the relay refuses their
+  credential for every write as a second lock. Editors see spectators as
+  a count ("· 2 watching" on the session chip and pane footers), not as
+  cursors. Spectators have their own cap of 100 per session, separate
+  from the editing seats, and anyone in the session can hand out view
+  codes and links. The Send pill's bottom row is now a two-by-two set —
+  **Copy edit code**, **Copy edit link**, **Copy view code**, **Copy view
+  link** — with the settings gear and an icon-only **Add contact** beside
+  it, and every contact row has **Invite to spectate** next to **Invite
+  to collaborate**. The Receive pill shows a spectate invite with a
+  **Watch** button, and a view link opened in a browser offers to watch.
+  When a session is full, the "session is full" message offers to
+  **watch instead**. Leaving is **Stop Watching**; the copy stays and
+  becomes an ordinary editable document, as it does when the host ends.
+  Spectating needs 1.16 on the spectator's side: older builds don't
+  recognise view codes at all, so a view invite can never turn into an
+  editing seat by accident. Two new commands, **Copy Session View Code
+  (Spectators)** and **Copy Session View Link (Spectators)**, are
+  unbound by default.
+
+- **Collaboration sessions seat up to 30 editors**, up from 10.
+
+- **Extract Card (Alt-Shift-F8).** Select some body text inside a card
+  and the command copies it into a new card directly below, under a copy
+  of the card's tag and cite — for the passage you spot mid-read that
+  deserves a card of its own. The source card and your selection stay
+  exactly as they were and nothing scrolls; a toast confirms. Works in
+  analytic units too. It does nothing with no selection or in read mode.
+
+- **AI cite-creator prompt presets.** Settings → Comments & AI → *AI
+  cite-creator prompt* now holds up to ten named prompts, with a picker,
+  **Edit**, **New preset** (seeded from the prompt in use) and
+  **Delete**. The commands **AI Cite Creator: Use Prompt Preset 1…10**
+  and **Use Built-in Prompt** switch presets from a key or the command
+  bar. A prompt you had customised before becomes a preset named "My
+  prompt".
+
+- **Navigation Pane: Alphabetize Selected Headings.** Right-click a
+  multi-selection in the nav pane and choose **Alphabetize N headings**
+  (or bind the command). Each heading moves with its whole section,
+  sorted by heading text, into the slots the selection occupied —
+  headings you didn't select stay where they were.
+
+- **File → Open Recent and File → Rejoin Recent Session** on macOS, both
+  mirroring the home screen's Recent and Sessions lists. Open Recent ends
+  in Clear Menu; Rejoin Recent Session ends in Join or Rejoin Session….
+
+- **Insert at cursor: headings go after the current section** (Settings →
+  Editing → Insert surfaces, off by default). Cards and headings inserted
+  at the cursor from the Receive pill, the dropzone shelf, send to speech
+  or quick cards land at the first valid slot at or after the cursor — an
+  F5 hat after the end of the F5 section you're in — instead of the
+  nearest slot, which could put it above the heading you're under.
+
+- **Navigation pane follows scrolling** (Settings → Navigation pane, off
+  by default): once the cursor is out of view, the pane highlights the
+  section at the top of the window. Thanks to Shreeram (@shreerammodi)!
+
+- **Smart quotes: '24 becomes ’24.** A digit typed after an opening
+  single quote flips it to an apostrophe, so cite dates like '24 and
+  '10-13 come out right; Backspace right after the digit restores the
+  opening quote. Its own toggle, on by default. Thanks to Shreeram
+  (@shreerammodi)!
+
+- **Read mode: comments** can now be added and deleted without leaving
+  read mode.
+
+- **Read mode: copy only what is shown** (on by default). Copying from
+  read mode copies the text you see, not the hidden unread text, and a
+  partial-card copy follows the "preserve paragraph integrity" setting
+  the display uses.
+
+### Changed
+
+- **Ctrl/Cmd-click an already-selected word deselects it** (and its
+  whole selected stretch), mirroring Word's discontinuous selection.
+  Thanks to Joey Tarnowski (@joeytarnowski)!
+
+- **Large documents type smoothly.** The nav pane, word counts and
+  comment work that ran after every keystroke now wait for a real pause,
+  so a very large file no longer stalls on each key. Thanks to Shreeram
+  (@shreerammodi)!
+
+- **Three-pane: the nav pane keeps each document's outline scroll** when
+  you switch documents in a slot. Thanks to Cora (@coralynnkc)!
+
+- **Reading markers.** A marker is now recognised by what it is rather
+  than by being red, so recolouring a marker no longer loses it and red
+  text is no longer mistaken for one; each card holds one marker, and
+  tapping again where one already is clears it. Read-mode export keeps
+  the markers.
+
+- **Highlight underlined text only** now paints headings, tags, cite
+  lines and analytics whole — the setting restricts body text only.
+
+- **Folder browsing (`/`):** typing a search now lists matching folders
+  at any depth below the folder you're in, each showing where it sits,
+  not only the immediate subfolders — and at the top level, before you
+  step into a folder, the search runs across all of your file-search
+  folders at once, each result led by the folder it came from.
+
+- **Shrink skips cite lines by content** as well as by paragraph type,
+  so a cite whose paragraph type hadn't caught up can no longer be
+  shrunk; and an AI cite whose reply named no author or date to style
+  now says so instead of silently leaving the line unstyled.
+
+- **Read mode: bare-key shortcuts you've bound to commands keep working**
+  (such as Send to Speech at Cursor on the backtick).
+
+- **Subscript no longer defaults to Mod-=**, which Zoom In already owned;
+  rebind it in Settings → Keybindings if you used it.
+
+- **Replace All says so when it stopped at the 10,000-match cap.**
+
+### Fixed
+
+- **Co-editing: a burst of your partner's edits no longer wipes your
+  undo history.** Deleting text a partner had just typed, then pressing
+  Ctrl/Cmd-Z, used to do nothing whenever two or more of their edits had
+  arrived together. Thanks to Riley Reichel (@RileyReichel)!
+
+- **Web edition saving.** The browser build now asks before closing with
+  unsaved edits and flushes its recovery journals on close; three-pane
+  autosave actually writes; Quick Cards changes from two tabs no longer
+  overwrite each other; a save refuses to overwrite a file that changed
+  on disk since you opened it; and a document opened into a second
+  window keeps its file handle for in-place save and autosave.
+
+- **Saving on the desktop.** Autosave and the crash journal now fire after
+  30 seconds of continuous editing instead of being pushed back forever
+  by a busy stretch; a save re-checks the file's freshness before each
+  retry; Save As and keep-both commit to the document they saved even if
+  you clicked into another pane mid-save; switching layout mode aborts
+  cleanly if a recovery journal can't be written; the recovery sidebar
+  and Bulk Convert export .docx through the ordinary pipeline, so live
+  views and read-mode colouring come out right; Bulk Convert never
+  overwrites a same-named file and reports what it skipped; and version
+  history previews the .docx snapshots of a .docx working file.
+
+- **Import** keeps text inside smart tags, inline content controls,
+  custom XML and simple fields, honours manual line breaks and symbol
+  characters, and finds images inside alternate-content and VML
+  wrappers.
+
+- **Highlight-frequency colouring is per pane**, so panes stop recolouring
+  each other.
+
+- **AI requests time out on a stalled reply**, not only on a slow
+  connection.
+
+- **Document previews** (received cards, Recover, version history) read as
+  paper in dark-chrome/light-document mode.
+
+- **Security.** Clipboard HTML is parsed in an inert document, so markup
+  on the clipboard can't run anything (and prosemirror-view moves to
+  1.42.6); every window refuses to open new windows or navigate
+  off-origin, routing web and mail links to the system browser; the
+  desktop's write-file channel only writes documents inside folders you
+  have put in play; and a filename can no longer carry markup into a
+  dialog.
+
+- **Self-hosted relay:** gzip inflation is bounded to the payload cap
+  while decompressing, and compaction and catch-up reads take row locks
+  so a reader never sees a gap.
+
 ## 1.15.0 — 2026-10-07
 
 ### Added

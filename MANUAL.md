@@ -369,6 +369,17 @@ outline and hit restart to flip them all to "continue", so arguments
 separated by blocks number consecutively straight through (press again to
 restore the per-block restarts). 
 
+A multi-selection can also be **alphabetized**: right-click one of the
+selected headings and choose **Alphabetize N headings** (or bind
+*Navigation Pane: Alphabetize Selected Headings* to a key). Each
+selected heading moves with its whole section — a block with its cards,
+a card with its body — sorted by heading text (case-insensitive, with
+"Card 2" before "Card 10"), and the sorted sections land in the slots
+the selection occupied: headings you didn't select stay exactly where
+they were, so a scattered selection sorts in place rather than bunching
+together. Slots are positional, so a selection spanning two blocks can
+carry a card from one block into the other. One undo step.
+
 While numbering is on, a block whose count **continues** from the block
 above shows a small grey **↓** at the right edge of its heading. No glyph
 means the default: the count restarts at that block. 
@@ -586,6 +597,13 @@ the markers stay full size. Press **Mod-8** again to keep cycling smaller.
   as above.
 - **Copy Previous Cite (Alt-F8)** pulls the cite from the previous card
   into the current one — handy when cutting a long article.
+- **Extract Card (Alt-Shift-F8)** copies the selected body text into a
+  new card directly below the one you're in, under a copy of that card's
+  tag and cite — for the passage you spot mid-read that deserves a card
+  of its own. The source card and your selection stay exactly as they
+  were and nothing scrolls; a toast confirms. Works in analytic units
+  too. The selection has to be body text inside one card; with no
+  selection, or in read mode, it does nothing.
 - **Copy All Cards With Matching Cite** (unbound; run it from Search
   Everything or give it a key) copies every card in the document that
   shares the cite at the cursor — in document order, numbering removed —
@@ -665,8 +683,11 @@ is underlined or emphasized, so you can sweep across a whole paragraph
 and have just the underlined parts light up. In a word that mixes
 emphasis and plain underline, only the emphasized part is painted. The
 spaces between two painted words fill in when "Bridge formatting across
-gaps automatically" is on. Toggling a highlight off and the "no color"
-pen still clear the whole selection.
+gaps automatically" is on. Only card body text is filtered this way:
+tags, cites, analytics, and the pocket / hat / block headings always
+paint whole, since a highlight there is deliberate emphasis rather than
+a reading pass. Toggling a highlight off and the "no color" pen still
+clear the whole selection.
 
 **Paintbrush mode** (the way Word's highlighter works): click a main
 color button with *nothing* selected to arm it. The cursor changes, and
@@ -865,6 +886,9 @@ Mouse selection mirrors Word too:
   Ctrl/Cmd-click adds a word, Ctrl/Cmd-triple-click adds a whole
   paragraph, and Ctrl/Cmd-drag adds exactly what you drag over (snapped to
   whole words after a double-click, whole paragraphs after a triple-click).
+  Ctrl/Cmd-click a word that is already selected to drop the stretch it
+  belongs to — handy for fixing a mis-click without starting over.
+  Dropping the last stretch leaves the cursor where you clicked.
 
 ### Files in Dropbox and other shared folders
 
@@ -1043,13 +1067,15 @@ so you can take an insert back without closing the palette.
 
 **Browsing folders (`/`, desktop only).** When you know *where* a document
 lives but not what it is called, type `/` and a space: the palette lists
-the folders you have set up for file search. **Enter** or **Tab** steps
+the folders you have set up for file search. Type there and the search
+runs across all of them at once — folders at any depth whose name
+matches, then documents — each result led by the folder it came from. **Enter** or **Tab** steps
 into a folder, **Esc** steps back up (and closes the palette from the top
 level), and the header above the results shows where you are. Only folders
 that hold documents the file search can see are shown. Type after the prefix
 to search the folder you are in — every document beneath it, at any depth,
-plus subfolders whose name matches; each file shows the subfolder it sits
-in. Files here behave exactly as they do in an `f` search: Enter opens,
+plus every folder beneath it whose name matches, however deep; files and
+deeper folders each show the subfolder they sit in. Files here behave exactly as they do in an `f` search: Enter opens,
 Tab dives in, Alt-P pins. `/c` and a space starts in the folder of the
 document you are working in instead (it needs to be inside one of your
 file-search folders). Moving into or out of a folder clears what you had
@@ -1208,19 +1234,49 @@ entire cite* is on. Undo restores the cards.
 - It **locks the keyboard**, so a stray key or trackpad twitch at the
   podium can't edit your file.
 
-Only two editing actions are allowed in read mode. First, you can drop a
+Only a few editing actions are allowed in read mode. First, you can drop a
 **reading-position marker** — red text like "Marked 7:32" at your cursor
 (Verbatim's red-text convention), for when you stop mid-card. In read mode
 it's deliberately effortless: **Space, Enter, or Mod-Shift-D** all drop one;
 triggering it again on a marker removes it. (Red text stays visible in read
 mode, so the marker shows.)
 
+A card holds one marker at a time: dropping a new one removes any other
+marker in that card. So if a card counts as marked and you can't see why
+(a stray marker fragment, say), put the cursor in it and trigger the
+marker twice — once to replace whatever was there, once to remove the
+fresh marker — and the card is clean. Only the markers CardMirror writes
+count: text you color red yourself, red text from a Verbatim file, and
+the "redden text after a marker" tint baked into a Word export are just
+red, and never make a card marked. A marker you've typed into or half
+deleted stops counting the next time the file opens.
+
 You can also drop a marker while editing — **Mod-Shift-D** works any time
 (Space and Enter only stand in for it inside read mode).
+
+Keyboard shortcuts for commands that don't change the document you're
+reading keep working in read mode — Send to Speech (the backtick by
+default), copy, navigation, the timer — exactly as their ribbon buttons
+do. Typing is simply ignored.
 
 Second, you can perform **click-and drag** actions - move headers around in
 the document, add received cards to your document, or grab cards from the
 Dropzone.
+
+Comments work in read mode as well — add one to a selection, reply,
+resolve, or delete — since a comment only anchors to the text and never
+changes it, just as private notes, AI questions and flashcards (which
+don't live in the document at all) have always worked while reading.
+
+Copying from a document in read mode copies what you see: the
+highlighted body, the cite text, and the headings — not the whole card
+underneath. It follows the other read-mode settings (keep entire cite,
+show undertags, show background color), so the clipboard matches the
+screen — including returns: with *Read mode: preserve paragraph
+integrity* off, a card's body paragraphs copy as the single flowing
+paragraph you see; on, each keeps its own line. If you'd rather a copy
+in read mode take the full card, turn off **Read mode: copy only what is
+shown** (Settings → General).
 
 Press the eye again to exit. In the
 [multi-doc workspace](#7-the-multi-doc-workspace), read mode is
@@ -1551,11 +1607,21 @@ the pill; **Send to Recipient** (unbound by default — run it from the
 command bar or give it a key) does the same but asks which contact or
 group to send to first.
 
-The pill's bottom row does more than send. **Clicking** the pill opens it
-with two buttons there: **Add contact** (paste a pairing code, name them,
-and they join the bottom of your recipients) and **Start session** (the
-same flow as the Start Collaboration Session command, for the current
-document). While **dragging**, the same two spots become drop zones:
+The pill's bottom does more than send. **Clicking** the pill opens it
+with **Start session** (the same flow as the Start Collaboration Session
+command, for the current document) and, in a column on the right, the
+collaboration-settings gear over an **Add contact** button (the
+person-plus glyph: paste a pairing code, name them, and they join the
+bottom of your recipients). Once the document is in a session, the
+left side becomes a two-by-two set of copy buttons: **Copy edit code**
+and **Copy edit link** on the top row, **Copy view code** and **Copy
+view link** below. Codes are for teammates joining from CardMirror;
+links open the session in a browser for someone without the app. *Edit*
+gives a co-editing seat; *view* makes the person a **spectator** who sees
+every edit live but cannot change anything (see
+[Spectators](#spectators)). Each contact row carries two invite buttons
+to match: **Invite to collaborate** and **Invite to spectate**. While
+**dragging**, the bottom becomes two drop zones:
 the left sends the card to a pasted pairing code as a one-off (no contact
 saved), and hovering the right opens a list of people who **recently sent
 you** things — drop on one to send back, no pairing setup needed.
@@ -1574,8 +1640,14 @@ pill row; each row shows the card's label, who sent it, and when. From a
 row:
 
 - **Click** inserts the card at the cursor; **Alt-click** appends it at the
-  end of the document; or **drag** it in like any dropzone item. Inserting
-  copies — the card stays in the pill until you ✕ it. A bundled
+  end of the document; or **drag** it in like any dropzone item. "At the
+  cursor" snaps to where a drag would drop that content — a card between
+  cards, a hat between hats — at the nearest such slot, or at the first slot
+  after the cursor with **Insert at cursor: headings go after the current
+  section** on (Settings → Editing). Inserting
+  copies — the card stays in the pill until you ✕ it. A session invite shows
+  as its own row with a **Join** button, or **Watch** when you were invited
+  to spectate. A bundled
   multi-selection send shows a **×N** count and is taken as one piece —
   click, drag, and ✕ all act on the whole bundle.
 - **Preview** opens the card (or the whole bundle) full-size in a read-only
@@ -1609,7 +1681,7 @@ are deleted from the relay after **three hours**.
 
 ### Co-editing
 
-Up to **10 people** can edit one document live — typing,
+Up to **30 people** can edit one document live — typing,
 cursors, and comments all sync, and simultaneous edits merge automatically. 
 The document belongs to the **host**; everyone else edits a synced copy, 
 and everyone keeps their copy when the session ends. A session is not a 
@@ -1631,8 +1703,31 @@ however you like (**Copy Session Share Code** re-copies it). The other
 person runs **Join or Rejoin Collaboration Session** and pastes it. The shared
 document opens in a new window — in three-pane, you pick which pane.
 
-**Interruptions:** joiners past the 10-person cap get a "session is full"
-message until someone leaves. Offline edits queue and sync on reconnect
+### Spectators
+
+Every session also has a **view code** and a **view link** (the Send
+pill's *Copy view code* / *Copy view link*, the commands **Copy Session
+View Code (Spectators)** and **Copy Session View Link (Spectators)**, or
+a contact row's **Invite to spectate**). Whoever joins with one becomes a
+**spectator**: they see the document and every edit live, with the same
+caret, selection, copy-out and Save As as anyone else, but nothing they
+do changes the document — typing, pasting, dragging, comments and
+reading markers are all refused in their window, and the relay refuses
+their credential for every write as a second lock. Editors see spectators
+as a count ("· 2 watching" on the session chip and pane footers), not as
+cursors. Spectators have their own cap (100 per session) separate from
+the 30 editing seats, and anyone in the session can hand out view codes
+and links, not just the host. Leaving is **Stop Watching**; the copy
+stays and becomes an ordinary editable document, as it does when the
+host ends the session. Spectating needs CardMirror 1.16 or newer on the
+spectator's side: older builds don't recognise view codes at all, so a
+view invite can never turn into an editing seat by accident. View-only
+is a courtesy gate for trusted viewers, not a secrecy boundary — a
+spectator holds the same document key as everyone in the room.
+
+**Interruptions:** joiners past the 30-seat cap get a "session is full"
+message and an offer to **watch instead** (join as a spectator); a seat
+opens when someone leaves. Offline edits queue and sync on reconnect
 (a notice appears only after a real offline stretch whose sync actually
 changed the document). You can close the app entirely — the session is
 saved under **Sessions** on the home screen, and rejoining syncs your
@@ -1654,7 +1749,9 @@ the session (rejoin later from the Sessions list) or end/leave it now. The
 or just forget your copy; as guest, forgets your copy.
 
 **Rejoining:** **Join or Rejoin Collaboration Session** (or **Join session** on the
-Receive pill) opens with a box for a share code or invite link, ready to
+Receive pill, or on a Mac **File → Rejoin Recent Session**, which lists the
+same saved sessions as the home screen — **File → Open Recent** does the
+same for files) opens with a box for a share code or invite link, ready to
 paste into: paste and press Enter to join a new session. Below it are the
 sessions you can get back into: saved copies (the same ones as the home
 screen's Sessions list; rejoining syncs your offline edits) and sessions you
@@ -1680,7 +1777,8 @@ differences:
 - **Invite links.** Starting a session on the web copies an **invite
   link** (`https://cardmirror.app/#join=…`) instead of a bare share
   code; on any edition, **Copy Session Invite Link** produces one for
-  the current session. Opening the link in a desktop-layout browser
+  the current session (and **Copy Session View Link** its spectator
+  twin, which opens the session watch-only). Opening the link in a desktop-layout browser
   offers the join directly — no account, no setup; pasting it into the
   **Join or Rejoin Collaboration Session** dialog works too, so a Chromebook with
   the app already open can join from a link received in a chat. Treat
@@ -2004,6 +2102,15 @@ control is hidden, and AI features gray out cleanly when you're offline.
 | **Generate table from image** | Right-click an image | Extracts a real, editable table from a picture of one. |
 | **Draft a flashcard** | From Create Flashcard | Drafts a question/answer or cloze from the selection. |
 
+The cite-formatting prompt can be saved as up to ten named **presets**
+(Settings → Comments & AI → *AI cite-creator prompt*): one for law
+reviews, one for news, one for a teammate's house style. Switch with
+the picker there, or bind the *AI Cite Creator: Use Prompt Preset 1…10*
+commands (unbound by default; *Use Built-in Prompt* returns to the
+default). Format Cite and Reformat Every Cite both use whichever preset
+is in use. A prompt you had customized before presets existed is kept
+as a preset named "My prompt".
+
 You can set the author name AI notes are attributed under, customize
 the cite-formatting prompt, and — on the Anthropic provider — point AI
 at a specific Claude model (**AI model (advanced)** — leave blank to use
@@ -2125,7 +2232,7 @@ Keyboard shortcuts**. They appear only on Windows.
 
 ## 15. Voice control
 
-> **Experimental — and, as of 1.15.0, commands are still unreliable.** Dictation works
+> **Experimental — and, as of 1.16.0, commands are still unreliable.** Dictation works
 > well. The single-word commands do not yet: the recognizer decodes an open
 > vocabulary, so a one-word utterance often comes back as some other word
 > and nothing fires. Calibration helps only a little. A keyword-spotting pass
@@ -2611,6 +2718,14 @@ headers shown inside each tab.
   the outline by hand to look somewhere else — leaves it where you put
   it. Only the outline's scroll position moves; your cursor and the
   document stay put.
+- **Navigation pane follows scrolling** — off by default. Once you
+  scroll the document far enough that the cursor is out of sight, the
+  outline's highlight moves to the section at the top of the window, so
+  the pane shows where you are *looking* rather than where you last
+  typed. While the cursor is on screen its own section keeps the
+  highlight, so typing or arrowing that scrolls the page doesn't steal
+  it. This only moves the highlight; whether the outline scrolls to
+  show the lit row is still **Navigation pane follows the cursor**.
 - **Multi-doc layout** — with three docs open, show all three at once
   (compact) or two-and-a-bit with click-to-snap (wide). No effect with
   one or two docs.
@@ -3029,10 +3144,12 @@ Typing helpers and the behavior of the cutting and condense commands
 
 - **Highlight underlined text only** — when on, highlight and background
   color paints (F11, Mod-F11, the paintbrush, and the color pickers) only
-  land on text that is underlined or emphasized; in a word that mixes
-  emphasis and plain underline, only the emphasized part is painted.
-  Toggling off and the "no color" pen still clear the whole selection.
-  Composes with the automatic gap bridging. Off by default.
+  land on body text that is underlined or emphasized; in a word that
+  mixes emphasis and plain underline, only the emphasized part is
+  painted. Tags, cites, analytics and the pocket / hat / block headings
+  always paint whole. Toggling off and the "no color" pen still clear
+  the whole selection. Composes with the automatic gap bridging. Off by
+  default.
 
 **Standardize exceptions**
 
@@ -3068,6 +3185,13 @@ Typing helpers and the behavior of the cutting and condense commands
 - **Show quick card buttons** — show the Quick Cards ribbon cluster (off by
   default; quick cards still work while hidden, and the command bar still opens
   by shortcut).
+- **Insert at cursor: headings go after the current section** — cards and
+  headings inserted at the cursor (Receive pill, dropzone shelf, send to
+  speech, quick cards) land at the first valid slot at or after the cursor:
+  a card after the card you're in, an F5 hat after the end of the F5 section
+  you're in. Off (the default) snaps to the nearest slot in either
+  direction, which can put an F5 above the F5 heading you're under when the
+  cursor is near its top. Text and card contents are unaffected.
 
 **Translation**
 
@@ -3098,8 +3222,12 @@ remove one, **↺** to restore its default. A few window-level shortcuts
   one is retired. A malformed entry is ignored.
 - **Enable Clod mode** — the playful in-flight placeholder ("Clod is
   making toast…") while the AI composes a reply.
-- **AI cite-creator prompt** — the system prompt the cite creator uses;
-  leave blank for the built-in default.
+- **AI cite-creator prompt** — the system prompt the cite creator uses.
+  Pick the built-in default or one of up to ten named presets you've
+  saved; **Edit** changes the selected preset, **New preset** saves a
+  copy of the prompt in use under a new name, **Delete** (click twice)
+  removes it. Each preset has a bindable *AI Cite Creator: Use Prompt
+  Preset N* command, and *Use Built-in Prompt* switches back.
 
 ### Accessibility
 

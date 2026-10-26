@@ -85,7 +85,12 @@ function targetTypeFor(node: PMNode, parent: PMNode): string | null {
   return null;
 }
 
-function hasCiteMark(node: PMNode): boolean {
+/** True when `node` holds non-whitespace text carrying `cite_mark` — the
+ *  classifier's definition of "this paragraph is a cite". Exported so
+ *  shrink can refuse by CONTENT as well as by node type: cite-ness is
+ *  the mark, and a paragraph whose type has not caught up (or was never
+ *  retyped) must still be left alone. */
+export function hasCiteMark(node: PMNode): boolean {
   let has = false;
   node.descendants((child) => {
     if (has) return false;

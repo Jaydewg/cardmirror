@@ -19,17 +19,26 @@ import { newHeadingId } from '../schema/index.js';
 import { flattenSelfRefsInSlice, fragmentHasSelfRef } from './self-transclusion.js';
 import { fragmentHasZone } from './transclusion.js';
 import { rememberLinkedCopy, clearLinkedCopy } from './clipboard-link-cache.js';
+import { inlineParentOf, isReadModeCopyActive, readModeVisibleSlice } from './read-mode-copy.js';
 
 export interface DocRange {
   from: number;
   to: number;
 }
 
+/** `[from, to]` of the document as a copy sees it: in read mode (with
+ *  `readModeCopyVisible`), only what read mode shows. */
+function rangeSlice(view: EditorView, range: DocRange): Slice {
+  const doc = view.state.doc;
+  const raw = doc.slice(range.from, range.to);
+  return isReadModeCopyActive(view) ? readModeVisibleSlice(raw, inlineParentOf(doc, range.from, range.to)) : raw;
+}
+
 /** The slice a copy of `[from, to]` puts on the clipboard: live views
  *  materialized against this document. Linked copies stay as they are —
  *  the paste side unwraps them (paste-plugin.ts). */
 export function clipboardSlice(view: EditorView, range: DocRange): Slice {
-  return flattenSelfRefsInSlice(view.state.doc.slice(range.from, range.to), view.state.doc, newHeadingId);
+  return flattenSelfRefsInSlice(rangeSlice(view, range), view.state.doc, newHeadingId);
 }
 
 /** HTML + plain text for one or more ranges (concatenated in the order
@@ -43,7 +52,7 @@ export function serializeRangesForClipboard(view: EditorView, ranges: readonly D
   let original = Fragment.empty;
   let clipboard = Fragment.empty;
   for (const range of ranges) {
-    const raw = view.state.doc.slice(range.from, range.to);
+    const raw = rangeSlice(view, range);
     const flat = flattenSelfRefsInSlice(raw, view.state.doc, newHeadingId);
     tmp.appendChild(serializer.serializeFragment(flat.content));
     texts.push(flat.content.textBetween(0, flat.content.size, '\n', '\n'));
@@ -64,7 +73,9 @@ export function serializeRangesForClipboard(view: EditorView, ranges: readonly D
  *  a range copy. Never a linked copy: the nodes are already copies. */
 export function serializeNodesForClipboard(view: EditorView, nodes: readonly PMNode[]): { html: string; text: string } {
   const serializer = view.someProp('clipboardSerializer') ?? DOMSerializer.fromSchema(view.state.schema);
-  const flat = flattenSelfRefsInSlice(new Slice(Fragment.from(nodes), 0, 0), view.state.doc, newHeadingId);
+  let whole = new Slice(Fragment.from(nodes), 0, 0);
+  if (isReadModeCopyActive(view)) whole = readModeVisibleSlice(whole);
+  const flat = flattenSelfRefsInSlice(whole, view.state.doc, newHeadingId);
   const tmp = document.createElement('div');
   tmp.appendChild(serializer.serializeFragment(flat.content));
   clearLinkedCopy();

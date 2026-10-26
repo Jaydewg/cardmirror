@@ -28,7 +28,12 @@
 
 import { Fragment, type Node as PMNode, type Schema } from 'prosemirror-model';
 import { Transform } from 'prosemirror-transform';
-import { isReadingMarkerColor, READING_MARKER_COLOR } from '../editor/reading-marker.js';
+import {
+  READING_MARKER_COLOR,
+  containsReadingMarker,
+  isMarkerText,
+  isReadingMarker,
+} from '../schema/reading-marker.js';
 import { computeUnreadDecorations } from '../editor/mark-unread-plugin.js';
 
 export interface ExportTransformOptions {
@@ -185,12 +190,17 @@ function transformContainerForReadMode(container: PMNode, schema: Schema): PMNod
 }
 
 /** Walk a paragraph's inline children, keep the ones carrying the
- *  given mark, and stitch them with separator spaces wherever the
- *  CSS `::after { content: ' ' }` rule would have inserted one. */
+ *  given mark — and reading markers, which read mode keeps on screen
+ *  (text form via `isReadKept`; the atom form is never hidden) — and
+ *  stitch them with separator spaces wherever the CSS
+ *  `::after { content: ' ' }` rule would have inserted one. */
 function filterInlinesByMark(node: PMNode, markName: string, schema: Schema): PMNode[] {
   const kept: PMNode[] = [];
   node.forEach((child) => {
-    if (child.isText && child.marks.some((m) => m.type.name === markName)) {
+    if (
+      (child.isText && child.marks.some((m) => m.type.name === markName)) ||
+      isReadingMarker(child)
+    ) {
       appendToMergeBuffer(kept, child, schema);
     }
   });
@@ -218,26 +228,6 @@ function appendToMergeBuffer(buffer: PMNode[], next: PMNode, schema: Schema): vo
 // Save Marked Cards extracts just those cards, flat (cards are doc-level
 // siblings; the heading hierarchy is implied by order, so dropping the headings
 // leaves a bare list of the cards the user marked). Analytics are never kept.
-
-/** True iff any text node in `node`'s subtree carries the reading-marker run. */
-function containsReadingMarker(node: PMNode): boolean {
-  let found = false;
-  node.descendants((n) => {
-    if (found) return false;
-    if (
-      n.isText &&
-      n.marks.some(
-        (m) =>
-          m.type.name === 'font_color' &&
-          isReadingMarkerColor(m.attrs['color'] as string | undefined),
-      )
-    ) {
-      found = true;
-    }
-    return !found;
-  });
-  return found;
-}
 
 /** Build a doc of just the doc-level `card` nodes containing a reading marker,
  *  in document order. Kept whole; everything else (headings, unmarked cards,

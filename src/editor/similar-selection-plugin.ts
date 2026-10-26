@@ -568,15 +568,22 @@ export function selectSimilar(effectivePt: EffectivePtResolver): Command {
  * PM cursor inside the first one, so `getOperatingRanges` returns the shadow and
  * the existing format commands (and the copy handler above) act across all of
  * them. Drives the Ctrl/Cmd discontinuous-selection interaction in
- * `word-selection-plugin.ts`. Clears the shadow when nothing is left to select.
+ * `word-selection-plugin.ts`. Clears the shadow when nothing is left to select;
+ * `caretWhenEmpty`, if given, is where the cursor lands in that case (so
+ * deselecting the last range leaves the caret where the user clicked).
  */
 export function setManualShadowSelection(
   view: EditorView,
   ranges: RangePair[],
+  caretWhenEmpty?: number,
 ): void {
   const merged = mergeRanges(ranges.filter((r) => r.to > r.from));
   if (merged.length === 0) {
-    view.dispatch(view.state.tr.setMeta(META_KEY, { type: 'clear' } as Meta));
+    const tr = view.state.tr.setMeta(META_KEY, { type: 'clear' } as Meta);
+    if (caretWhenEmpty !== undefined) {
+      tr.setSelection(TextSelection.create(view.state.doc, caretWhenEmpty));
+    }
+    view.dispatch(tr);
     return;
   }
   const tr = view.state.tr

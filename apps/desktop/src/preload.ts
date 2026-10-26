@@ -858,6 +858,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setMenuBindings: (bindings: Record<string, string | null>) =>
     ipcRenderer.invoke('host:set-menu-bindings', bindings),
 
+  /** Push the renderer's recent files + saved sessions so File → Open
+   *  Recent / Rejoin Recent Session mirror the home screen. Sent on boot
+   *  and whenever either store changes. */
+  setMenuRecents: (payload: {
+    files: { label: string; handle: string }[];
+    sessions: { label: string; roomId: string; role: string }[];
+  }) => ipcRenderer.invoke('host:set-menu-recents', payload),
+
+  /** Subscribe to picks from those two submenus. */
+  onMenuOpenRecent(handler: (pick: { kind: 'file' | 'session'; id: string }) => void): () => void {
+    const listener = (_evt: unknown, pick: { kind: 'file' | 'session'; id: string }): void => handler(pick);
+    ipcRenderer.on('menu-open-recent', listener);
+    return () => ipcRenderer.removeListener('menu-open-recent', listener);
+  },
+
   /** Subscribe to native-menu commands. Main process broadcasts
    *  `'menu-command'` events to the focused window's webContents
    *  whenever the user picks File → Open / Save / etc. The

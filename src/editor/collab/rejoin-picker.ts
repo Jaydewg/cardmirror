@@ -26,12 +26,13 @@ import {
   type PersistedSessionRecord,
   type RecentRoomRecord,
 } from './collab-store.js';
+import type { SessionRole } from './session-role.js';
 
 export interface RejoinCandidate {
   roomId: string;
   shareCode: string;
   guestPass: string | null;
-  role: 'host' | 'participant';
+  role: SessionRole;
   title: string;
   /** 'saved': a local copy to resume; 'left': a remembered room to rejoin. */
   kind: 'saved' | 'left';
@@ -171,7 +172,7 @@ export function pickSessionToJoin(candidates: RejoinCandidate[]): Promise<Rejoin
         row.title = c.kind === 'saved' ? 'Rejoin with your saved copy (syncs your edits)' : 'Rejoin this session';
         const chip = document.createElement('span');
         chip.className = 'pmd-home-recent-format pmd-home-session-role';
-        chip.textContent = c.role === 'host' ? 'HOST' : 'JOINED';
+        chip.textContent = c.role === 'host' ? 'HOST' : c.role === 'spectator' ? 'WATCHING' : 'JOINED';
         row.appendChild(chip);
         const name = document.createElement('span');
         name.className = 'pmd-home-recent-name';

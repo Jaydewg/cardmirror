@@ -21,7 +21,7 @@ interface CardAt {
   pos: number;
 }
 
-class AudibleInlineBuilder {
+export class AudibleInlineBuilder {
   readonly nodes: PMNode[] = [];
   private pendingSpaceMarks: readonly Mark[] | null = null;
 
@@ -76,7 +76,7 @@ function selectedCards(state: EditorState): CardAt[] {
   return [];
 }
 
-function convertCard(card: PMNode): PMNode {
+export function convertCard(card: PMNode): PMNode {
   const schema = card.type.schema;
   const separateParagraphs = settings.get('readModeParagraphIntegrity');
   const sourceTag = card.firstChild!;

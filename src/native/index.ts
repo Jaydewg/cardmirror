@@ -41,6 +41,7 @@ import {
   dropEmptyZones,
   stripImageVisualMarks,
 } from '../schema/migrate.js';
+import { normalizeReadingMarkers } from '../schema/reading-marker.js';
 import type { Thread } from '../editor/comments-plugin.js';
 import { gzip, gzipAsync, gunzip, isGzip } from './codec.js';
 
@@ -316,13 +317,18 @@ function parseNativeImpl(
   let doc: PMNode;
   let dropped: DroppedNode[] | undefined;
   try {
-    doc = stripImageVisualMarks(
-      dropEmptyZones(
-        healTables(
-          healCards(
-            healAnalyticUnits(
-              flattenNestedZones(
-                splitInCardAnalytics(dedupeHeadingIds(stampMissingHeadingIds(schema.nodeFromJSON(file.doc)))),
+    // Last: reading markers get their role exactly where a marker is
+    // (legacy red `Marked h:mm` runs gain it; mangled markers lose it) —
+    // see schema/reading-marker.ts.
+    doc = normalizeReadingMarkers(
+      stripImageVisualMarks(
+        dropEmptyZones(
+          healTables(
+            healCards(
+              healAnalyticUnits(
+                flattenNestedZones(
+                  splitInCardAnalytics(dedupeHeadingIds(stampMissingHeadingIds(schema.nodeFromJSON(file.doc)))),
+                ),
               ),
             ),
           ),

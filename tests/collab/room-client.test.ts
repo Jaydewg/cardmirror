@@ -154,6 +154,79 @@ describe('RoomStream', () => {
     expect(stream.running).toBe(false);
   });
 
+  it('spectators: hello/`w` watcher counts, and a full room’s 409 carries the view pass', async () => {
+    mock.setViewPass('VIEW-PASS');
+    try {
+      const made = await client.createRoom();
+      expect(made.viewPass).toBe('VIEW-PASS');
+      expect(await client.fetchViewPass(made.roomId)).toBe('VIEW-PASS');
+      const watchers: number[] = [];
+      const editor = new RoomStream({
+        baseUrl: () => mock.url,
+        token: () => mock.token,
+        roomId: made.roomId,
+        minBackoffMs: 20,
+        maxBackoffMs: 50,
+        callbacks: {
+          onHello: () => {},
+          onUpdate: () => {},
+          onPresence: () => {},
+          onEnded: () => {},
+          onFull: () => {},
+          onWatchers: (n) => watchers.push(n),
+        },
+      });
+      editor.start();
+      await sleep(50);
+      expect(watchers).toEqual([0]);
+      const viewer = new RoomStream({
+        baseUrl: () => mock.url,
+        token: () => 'VIEW-PASS',
+        roomId: made.roomId,
+        minBackoffMs: 20,
+        maxBackoffMs: 50,
+        callbacks: { onHello: () => {}, onUpdate: () => {}, onPresence: () => {}, onEnded: () => {}, onFull: () => {} },
+      });
+      viewer.start();
+      await sleep(60);
+      expect(watchers).toEqual([0, 1]);
+      expect(mock.viewerCount(made.roomId)).toBe(1);
+      // The view pass cannot write.
+      const viewerClient = new RoomsClient({ baseUrl: () => mock.url, token: () => 'VIEW-PASS' });
+      await expect(viewerClient.postUpdate(made.roomId, bytes('nope'))).rejects.toMatchObject({ status: 403 });
+      viewer.stop();
+      await sleep(60);
+      expect(watchers).toEqual([0, 1, 0]);
+      editor.stop();
+
+      // Fill the editor cap; the refused editor learns the view pass.
+      const streams: RoomStream[] = [];
+      for (let i = 0; i < 10; i++) {
+        const st = new RoomStream({
+          baseUrl: () => mock.url, token: () => mock.token, roomId: made.roomId, sid: `s${i}`,
+          minBackoffMs: 20, maxBackoffMs: 50,
+          callbacks: { onHello: () => {}, onUpdate: () => {}, onPresence: () => {}, onEnded: () => {}, onFull: () => {} },
+        });
+        st.start();
+        streams.push(st);
+      }
+      await sleep(80);
+      let fullWith: string | null | undefined;
+      const over = new RoomStream({
+        baseUrl: () => mock.url, token: () => mock.token, roomId: made.roomId, sid: 'over',
+        minBackoffMs: 20, maxBackoffMs: 50,
+        callbacks: { onHello: () => {}, onUpdate: () => {}, onPresence: () => {}, onEnded: () => {}, onFull: (vp) => { fullWith = vp; } },
+      });
+      over.start();
+      await sleep(60);
+      expect(fullWith).toBe('VIEW-PASS');
+      for (const st of streams) st.stop();
+      over.stop();
+    } finally {
+      mock.setViewPass(null);
+    }
+  });
+
   it('reconnects after a transport outage and re-hellos', async () => {
     const { roomId } = await client.createRoom();
     const hellos: number[] = [];

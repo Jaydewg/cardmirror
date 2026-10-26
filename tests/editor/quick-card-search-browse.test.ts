@@ -129,6 +129,37 @@ describe('palette folder browse', () => {
     expect(empty()).toContain('Nothing in this folder matches');
   });
 
+  it('at the roots level a query searches EVERY root: matching roots, then folders at any depth, then files, each led by its root', async () => {
+    hostState.files = [
+      ...hostState.files,
+      { path: '/other/Impact/Impact Defense/ID 2026.cmir', relPath: 'Impact/Impact Defense/ID 2026.cmir', mtimeMs: 5, size: 1 },
+    ];
+    settings.set('fileSearchRoots', ['/root', '/other']);
+    openPalette();
+    await settle();
+    type('/ impact');
+    await settle();
+    // No root is named "impact"; the folders inside /other match by name
+    // (shallowest first), then the file whose path carries the token.
+    expect(rows()).toEqual(['DIR Impact', 'DIR Impact Defense', 'CMIR ID 2026']);
+    const metas = [...document.querySelectorAll<HTMLElement>('.pmd-qcs-row')].map((r) => r.textContent ?? '');
+    expect(metas[0]).toContain('other');
+    expect(metas[1]).toContain('other / Impact');
+    // Tab steps into the matched folder in ITS root; the header shows it.
+    key('ArrowDown');
+    key('Tab');
+    await settle();
+    expect(header()).toContain('Impact Defense');
+    // A root whose own name matches still leads the list (fresh open).
+    openPalette(); // toggles closed
+    await settle();
+    openPalette();
+    await settle();
+    type('/ root');
+    await settle();
+    expect(rows()[0]).toBe('ROOT root');
+  });
+
   it('Esc steps up a level, drops the query, and closes from the roots', async () => {
     openPalette();
     await settle();
@@ -167,11 +198,12 @@ describe('palette folder browse', () => {
     await settle();
     expect(header()).toContain('Neg'); // still Neg: only a prefix change relocates
     expect(rows()).toEqual(['DOCX Warming Neg']);
-    // Dropping the c IS a prefix change: back to the roots.
+    // Dropping the c IS a prefix change: back to the roots — where a query
+    // now searches every root (2026-10-24), each hit led by its root.
     type('/ warm');
     await settle();
-    expect(rows()).toEqual([]);
-    expect(empty()).toContain('No file-search folder matches');
+    expect(rows()).toEqual(['CMIR Warming Aff', 'DOCX Warming Neg']);
+    expect(document.querySelector('.pmd-qcs-row')?.textContent).toContain('root');
     type('/ ');
     await settle();
     expect(rows()).toEqual(['ROOT root']);

@@ -10,6 +10,8 @@
 // Usage:  BASE=http://127.0.0.1:8411/relay TOKEN=<token> [HB=1] node dev/relay-contract.mjs
 // (HB=1 adds the 25s heartbeat check; omit for fast runs.)
 const BASE = process.env.BASE || 'http://127.0.0.1:8300/relay';
+// Relay MAX_STREAMS_PER_ROOM (relay_rooms.py); override with ROOM_CAP when testing another build.
+const ROOM_CAP_DEFAULT = 30;
 const TOK = process.env.TOKEN || 'dev-pairing-token';
 const AUTH = { Authorization: `Bearer ${TOK}` };
 let pass = 0, fail = 0;
@@ -249,7 +251,7 @@ if (process.env.ROOMS !== '0') {
 
   // 12. participant cap: MAX streams hold, the next connect is 409.
   {
-    const CAP = Number(process.env.ROOM_CAP || 10);
+    const CAP = Number(process.env.ROOM_CAP || ROOM_CAP_DEFAULT);
     const ctls = [];
     let opened = 0;
     for (let i = 0; i < CAP; i++) {
@@ -379,11 +381,12 @@ if (process.env.ROOMS !== '0') {
     ctls.push(ctl);
     return res.status;
   };
+  const CAP = Number(process.env.ROOM_CAP || ROOM_CAP_DEFAULT);
   const statuses = [];
-  for (let i = 0; i < 10; i++) statuses.push(await open(`sid${i}`));
-  check('rooms: 10 streams open', statuses.every((st) => st === 200), statuses.join(','));
-  const eleventh = await open('sid-new');
-  check('rooms: 11th distinct sid → 409', eleventh === 409, String(eleventh));
+  for (let i = 0; i < CAP; i++) statuses.push(await open(`sid${i}`));
+  check(`rooms: ${CAP} streams open`, statuses.every((st) => st === 200), statuses.join(','));
+  const over = await open('sid-new');
+  check(`rooms: ${CAP + 1}th distinct sid → 409`, over === 409, String(over));
   // Drop sid0 abruptly (no server-side reap yet) and reconnect AS sid0.
   ctls[0].abort();
   await new Promise((r2) => setTimeout(r2, 50));
@@ -516,6 +519,94 @@ if (process.env.ROOMS !== '0') {
     const unknown = await deliver({ member: { current: { uuid: 'nobody-here', status: 'paid' } } });
     check('webhook: unknown member → 200, updated=0', unknown.status === 200 && unknown.body?.updated === 0, JSON.stringify(unknown.body));
   }
+}
+
+// 16. spectators (view passes, 2026-10-24): a room-scoped read-only
+// credential. Streams and catch-up reads accept it; every write is 403;
+// viewers count against their own cap, not the editor cap; editors see
+// a watcher count (hello + `w` frames); a refused editor's 409 carries
+// a view pass for the "watch instead" fallback. Needs RELAY_GUEST_PASS=1
+// on the relay under test (CI sets it).
+{
+  const CAP = Number(process.env.ROOM_CAP || ROOM_CAP_DEFAULT);
+  const made = await (await fetch(`${BASE}/rooms`, { method: 'POST', headers: AUTH })).json();
+  check('view: room create carries guestPass + viewPass', typeof made.guestPass === 'string' && typeof made.viewPass === 'string', JSON.stringify(Object.keys(made)));
+  const roomId = made.roomId;
+  const VIEW = { Authorization: `Bearer ${made.viewPass}` };
+  const GUEST = { Authorization: `Bearer ${made.guestPass}` };
+  const vp = await fetch(`${BASE}/rooms/${roomId}/view-pass`, { headers: AUTH });
+  const vpBody = vp.status === 200 ? await vp.json() : {};
+  check('view: GET view-pass 200 with a room credential', vp.status === 200 && typeof vpBody.viewPass === 'string', String(vp.status));
+  const vp2 = await fetch(`${BASE}/rooms/${roomId}/view-pass`, { headers: VIEW });
+  check('view: a viewer can mint view passes too (any participant shares)', vp2.status === 200, String(vp2.status));
+  const otherRoom = (await (await fetch(`${BASE}/rooms`, { method: 'POST', headers: AUTH })).json()).roomId;
+  const wrong = await fetch(`${BASE}/rooms/${otherRoom}/updates?after=0`, { headers: VIEW });
+  check('view: a view pass is scoped to its room (401 elsewhere)', wrong.status === 401, String(wrong.status));
+  const up = await fetch(`${BASE}/rooms/${roomId}/updates`, { method: 'POST', headers: { ...VIEW, 'Content-Type': 'application/octet-stream' }, body: Buffer.from('nope') });
+  check('view: POST updates → 403', up.status === 403, String(up.status));
+  const pr = await fetch(`${BASE}/rooms/${roomId}/presence`, { method: 'POST', headers: { ...VIEW, 'Content-Type': 'application/octet-stream' }, body: Buffer.from('cursor') });
+  check('view: POST presence → 403', pr.status === 403, String(pr.status));
+  const sn = await fetch(`${BASE}/rooms/${roomId}/snapshot`, { method: 'POST', headers: { ...VIEW, 'Content-Type': 'application/json' }, body: JSON.stringify({ blob: 'AA==', coversThroughSeq: 0 }) });
+  check('view: POST snapshot → 403', sn.status === 403, String(sn.status));
+  const upOk = await fetch(`${BASE}/rooms/${roomId}/updates`, { method: 'POST', headers: { ...GUEST, 'Content-Type': 'application/octet-stream' }, body: Buffer.from('edit-guest') });
+  check('view: an EDIT guest pass still posts (202)', upOk.status === 202, String(upOk.status));
+  const rd = await fetch(`${BASE}/rooms/${roomId}/updates?after=0`, { headers: VIEW });
+  const rdBody = rd.status === 200 ? await rd.json() : {};
+  check('view: GET updates 200 and sees the edit', rd.status === 200 && rdBody.updates?.length === 1, `${rd.status} ${JSON.stringify(rdBody).slice(0, 80)}`);
+
+  // Watcher count: an editor's stream hears hello.watchers and a `w`
+  // frame when a viewer connects and when it leaves.
+  const ctls = [];
+  const openSse = async (headers, sid) => {
+    const ctl = new AbortController();
+    ctls.push(ctl);
+    const res = await fetch(`${BASE}/rooms/${roomId}/stream?sid=${sid}`, { headers, signal: ctl.signal });
+    const out = { res, hello: null, frames: [] };
+    if (res.status === 200) {
+      (async () => {
+        let buf = ''; const dec = new TextDecoder();
+        try {
+          for await (const chunk of res.body) {
+            buf += dec.decode(chunk, { stream: true });
+            let i;
+            while ((i = buf.indexOf('\n\n')) >= 0) {
+              const frame = buf.slice(0, i); buf = buf.slice(i + 2);
+              if (frame.includes('event: hello')) out.hello = JSON.parse(frame.slice(frame.indexOf('data:') + 5).trim());
+              else if (frame.startsWith('data:')) out.frames.push(JSON.parse(frame.slice(5).trim()));
+            }
+          }
+        } catch { /* aborted */ }
+      })();
+    }
+    return out;
+  };
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const editor = await openSse(AUTH, 'ed0');
+  await wait(300);
+  check('view: editor hello carries watchers=0', editor.res.status === 200 && editor.hello?.watchers === 0, JSON.stringify(editor.hello));
+  const viewer = await openSse(VIEW, 'v0');
+  await wait(300);
+  check('view: viewer stream 200, hello carries watchers=1', viewer.res.status === 200 && viewer.hello?.watchers === 1, `${viewer.res.status} ${JSON.stringify(viewer.hello)}`);
+  check('view: editor got a w frame with n=1', editor.frames.some((f) => f.t === 'w' && f.n === 1), JSON.stringify(editor.frames));
+  // A viewer sees updates (and would see presence) like anyone on the stream.
+  await fetch(`${BASE}/rooms/${roomId}/updates`, { method: 'POST', headers: { ...AUTH, 'Content-Type': 'application/octet-stream' }, body: Buffer.from('for-the-viewer') });
+  await wait(300);
+  check('view: viewer receives update frames', viewer.frames.some((f) => f.t === 'u'), JSON.stringify(viewer.frames));
+  ctls[ctls.length - 1].abort(); // the viewer leaves
+  await wait(400);
+  check('view: editor got a w frame with n=0 after the viewer left', editor.frames.some((f) => f.t === 'w' && f.n === 0), JSON.stringify(editor.frames));
+
+  // Separate caps: fill the EDITOR cap, then a viewer still connects and
+  // the refused editor's 409 body carries a view pass.
+  for (let i = 1; i < CAP; i++) await openSse(AUTH, `ed${i}`);
+  const overflow = await fetch(`${BASE}/rooms/${roomId}/stream?sid=ed-over`, { headers: AUTH });
+  const overBody = overflow.status === 409 ? await overflow.json() : {};
+  check('view: editor past the cap → 409 with detail + viewPass', overflow.status === 409 && overBody.detail === 'room is full' && typeof overBody.viewPass === 'string', `${overflow.status} ${JSON.stringify(overBody).slice(0, 80)}`);
+  const lateViewer = await openSse(VIEW, 'v1');
+  check('view: a viewer still connects when the editor cap is full', lateViewer.res.status === 200, String(lateViewer.res.status));
+  const asViewer = await openSse({ Authorization: `Bearer ${overBody.viewPass}` }, 'ed-over-as-viewer');
+  check('view: the 409 viewPass opens a viewer stream', asViewer.res.status === 200, String(asViewer.res.status));
+  for (const c of ctls) c.abort();
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

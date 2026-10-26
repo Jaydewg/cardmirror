@@ -339,6 +339,12 @@ export function buildCiteTransaction(
   return tr;
 }
 
+/** True when the built cite transaction applied no `cite_mark` at all:
+ *  the reply listed no tokens, or every listed token failed to locate. */
+export function citeLeftUnstyled(result: AiCiteResult, tr: Transaction): boolean {
+  return result.tokens.length === 0 || tr.getMeta(CITE_TOKENS_MARKED_META) === 0;
+}
+
 /** Dispatch the cite transaction onto the live view. */
 export function applyCiteToSelection(
   view: EditorView,
@@ -350,13 +356,16 @@ export function applyCiteToSelection(
   const tr = buildCiteTransaction(view.state, from, to, result);
   if (!tr) return false;
   dispatch(tr);
-  // A cite whose tokens all failed to locate carries no cite_mark, so
-  // it stays an ordinary body paragraph (correctly — cite-ness IS the
-  // mark) and shrink will treat it as body text. That must never be
+  // A cite with no located tokens — the model listed none, or none
+  // could be found in the cite text — carries no cite_mark, so it stays
+  // an ordinary body paragraph (correctly — cite-ness IS the mark) and
+  // reads as body text to shrink and the cite style. That must never be
   // silent: tell the user so they can F8 the author/date themselves.
-  if (result.tokens.length > 0 && tr.getMeta(CITE_TOKENS_MARKED_META) === 0) {
+  if (citeLeftUnstyled(result, tr)) {
     showToast(
-      'Cite created, but the author/date couldn’t be located to style — select them and press F8.',
+      result.tokens.length === 0
+        ? 'Cite created, but the AI named no author/date to style — select them and press F8.'
+        : 'Cite created, but the author/date couldn’t be located to style — select them and press F8.',
       { durationMs: 4000 },
     );
   }

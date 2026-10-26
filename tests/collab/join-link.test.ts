@@ -28,6 +28,15 @@ describe('join links', () => {
   const CODE = 'cmshare2.abc-DEF_123';
   const PASS = 'eyJh.eyJi.c2ln';
 
+  it('a view (spectator) code rides the same fragment and parses', () => {
+    const link = buildJoinLink({ shareCode: 'cmview1.abc-DEF_123', guestPass: PASS });
+    expect(link).toContain('#join=cmview1.abc-DEF_123&pass=');
+    const parts = parseJoinLinkHash(new URL(link).hash)!;
+    expect(parts.shareCode).toBe('cmview1.abc-DEF_123');
+    expect(parts.guestPass).toBe(PASS);
+    expect(parseJoinLinkHash('#join=cmnope.x')).toBeNull();
+  });
+
   it('builds and parses round-trip, pass included', () => {
     const link = buildJoinLink({ shareCode: CODE, guestPass: PASS });
     expect(link.startsWith('https://cardmirror.app/#')).toBe(true);

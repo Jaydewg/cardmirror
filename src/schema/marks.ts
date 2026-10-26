@@ -455,12 +455,22 @@ export const marks: { [name: string]: MarkSpec } = {
         validate: (v: unknown) =>
           typeof v === 'string' && /^[0-9a-fA-F]{6}$/.test(v),
       },
+      // 'marker' on the red `Marked h:mm` run the reading-position marker
+      // command writes (schema/reading-marker.ts); null on every other
+      // colored run. The role, not the red, is what makes a run a marker.
+      // Builds without this attr drop it on load and see plain red text.
+      // Different attrs keep a marker run from merging with adjacent red.
+      role: {
+        default: null,
+        validate: (v: unknown) => v === null || v === 'marker',
+      },
     },
     parseDOM: [
       {
         tag: 'span[data-color]',
         getAttrs: (dom: HTMLElement) => ({
           color: dom.getAttribute('data-color') ?? '000000',
+          role: dom.getAttribute('data-role') === 'marker' ? 'marker' : null,
         }),
       },
     ],
@@ -487,6 +497,7 @@ export const marks: { [name: string]: MarkSpec } = {
         'data-color': color,
         'data-color-band': colorBand(color),
       };
+      if (mark.attrs['role'] === 'marker') attrs['data-role'] = 'marker';
       if (color !== '000000') attrs['style'] = `color: #${color}`;
       return ['span', attrs, 0];
     },

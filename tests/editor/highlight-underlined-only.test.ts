@@ -94,6 +94,39 @@ describe('restrictToUnderlinedText', () => {
     expect(restrictToUnderlinedText(doc, [{ from: 1, to: 6 }])).toEqual([{ from: 1, to: 3 }]);
   });
 
+  it('paints headings, tags, cites and analytics whole — the filter is for body text', () => {
+    const id = (n: number) => ({ id: `h${n}` });
+    const doc = schema.nodes['doc']!.createChecked(null, [
+      schema.nodes['pocket']!.create(id(1), schema.text('Pocket')),
+      schema.nodes['hat']!.create(id(2), schema.text('Hat')),
+      schema.nodes['block']!.create(id(3), schema.text('Block')),
+      schema.nodes['card']!.createChecked(null, [
+        schema.nodes['tag']!.create(id(4), schema.text('Tag words')),
+        schema.nodes['cite_paragraph']!.create(null, [schema.text('Smith', [C()]), schema.text(' 2024')]),
+        schema.nodes['card_body']!.create(null, [schema.text('aa '), schema.text('bb', [U()]), schema.text(' cc')]),
+      ]),
+      schema.nodes['analytic_unit']!.createChecked(null, [
+        schema.nodes['analytic']!.create(id(5), schema.text('analytic line')),
+        schema.nodes['card_body']!.create(null, [schema.text('xx '), schema.text('yy', [U()])]),
+      ]),
+    ]);
+    const kept = restrictToUnderlinedText(doc, [{ from: 0, to: doc.content.size }]);
+    const text = kept.map((r) => doc.textBetween(r.from, r.to, '|')).join('|');
+    expect(text).toBe('Pocket|Hat|Block|Tag words|Smith 2024|bb|analytic line|yy');
+  });
+
+  it('clips an exempt textblock to the range like any other', () => {
+    const doc = schema.nodes['doc']!.createChecked(null, [
+      schema.nodes['card']!.createChecked(null, [
+        schema.nodes['tag']!.create({ id: 't1' }, schema.text('Tag words here')),
+        schema.nodes['card_body']!.create(null, schema.text('body')),
+      ]),
+    ]);
+    const i = doc.textContent.indexOf('words');
+    const kept = restrictToUnderlinedText(doc, [{ from: 2 + i, to: 2 + i + 5 }]);
+    expect(kept.map((r) => doc.textBetween(r.from, r.to))).toEqual(['words']);
+  });
+
   it('clips to the requested range', () => {
     const doc = docOf(['abcdef', [U()]]);
     expect(restrictToUnderlinedText(doc, [{ from: 3, to: 5 }])).toEqual([{ from: 3, to: 5 }]);
@@ -115,6 +148,20 @@ describe('Highlight underlined text only — commands', () => {
     const doc = docOf(['aa '], ['bb', [U()]], [' cc']);
     const next = run(doc, 'aa bb cc', applyHighlight(yellow));
     expect(mask(next.doc, 'highlight')).toBe('________');
+  });
+
+  it('on: F11 across a tag and its body paints the whole tag and only the underlined body word', () => {
+    const doc = schema.nodes['doc']!.createChecked(null, [
+      schema.nodes['card']!.createChecked(null, [
+        schema.nodes['tag']!.create({ id: 't1' }, schema.text('Tag text')),
+        schema.nodes['card_body']!.create(null, [schema.text('aa '), schema.text('bb', [U()]), schema.text(' cc')]),
+      ]),
+    ]);
+    const state = EditorState.create({ doc });
+    const whole = state.apply(state.tr.setSelection(TextSelection.create(doc, 2, doc.content.size - 2)));
+    const next = apply(whole, applyHighlight(yellow));
+    // 'Tag text' fully painted; body: only 'bb'.
+    expect(mask(next.doc, 'highlight')).toBe('________' + '   __   ');
   });
 
   it('on: F11 over a mixed paragraph paints only the underlined word', () => {

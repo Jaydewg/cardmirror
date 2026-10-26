@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { schema, newHeadingId } from '../../src/schema/index.js';
-import { READING_MARKER_COLOR } from '../../src/editor/reading-marker.js';
+import { READING_MARKER_COLOR, READING_MARKER_ROLE } from '../../src/editor/reading-marker.js';
 import { computeUnreadDecorations } from '../../src/editor/mark-unread-plugin.js';
 import type { Node as PMNode } from 'prosemirror-model';
 
@@ -11,7 +11,17 @@ function cardBody(...inline: PMNode[]) {
   return schema.nodes['card_body']!.create(null, inline);
 }
 function marker() {
-  return schema.text('Marked 7:32', [schema.marks['font_color']!.create({ color: READING_MARKER_COLOR })]);
+  return schema.text('Marked 7:32', [
+    schema.marks['font_color']!.create({ color: READING_MARKER_COLOR, role: READING_MARKER_ROLE }),
+  ]);
+}
+/** Red text that is NOT a marker (hand-colored body, baked unread red, a
+ *  Verbatim file's own red) — must never start the tint. */
+function plainRed(text: string) {
+  return schema.text(text, [schema.marks['font_color']!.create({ color: READING_MARKER_COLOR })]);
+}
+function markerNode() {
+  return schema.nodes['reading_marker']!.create({ time: '7:32' });
 }
 function card(...c: PMNode[]) { return schema.nodes['card']!.createChecked(null, c); }
 function makeDoc(...c: PMNode[]) { return schema.nodes['doc']!.createChecked(null, c); }
@@ -55,6 +65,18 @@ describe('computeUnreadDecorations', () => {
     const doc = makeDoc(
       card(tag('TAG'), cardBody(schema.text('before '), marker(), schema.text(' after'))),
     );
+    expect(decoratedText(doc)).toEqual([' after']);
+  });
+});
+
+describe('computeUnreadDecorations — what is NOT a marker', () => {
+  it('plain red text never starts the tint (hand-colored, baked unread red, Verbatim red)', () => {
+    const doc = makeDoc(card(tag('T'), cardBody(plainRed('Marked 7:32 and all of this is red.'), schema.text(' tail'))));
+    expect(decoratedText(doc)).toEqual([]);
+  });
+
+  it('the dormant reading_marker node is a marker', () => {
+    const doc = makeDoc(card(tag('T'), cardBody(schema.text('before '), markerNode(), schema.text(' after'))));
     expect(decoratedText(doc)).toEqual([' after']);
   });
 });

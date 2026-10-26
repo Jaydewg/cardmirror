@@ -2812,6 +2812,83 @@ function dispatchMenuCommand(command: string): void {
   win.webContents.send('menu-command', command);
 }
 
+/** A pick from File → Open Recent / Rejoin Recent Session. The renderer
+ *  resolves the id against its own stores (a path handle, a room id). */
+function dispatchMenuOpenRecent(kind: 'file' | 'session', id: string): void {
+  const win = BrowserWindow.getFocusedWindow() ?? mainWindow;
+  if (!win) return;
+  win.webContents.send('menu-open-recent', { kind, id });
+}
+
+/** Renderer-pushed mirror of the home screen's Recent and Sessions lists
+ *  (`host:set-menu-recents`, see src/editor/menu-recents.ts). Main keeps
+ *  only strings it was handed and rebuilds the two submenus from them. */
+interface MenuRecents {
+  files: { label: string; handle: string }[];
+  sessions: { label: string; roomId: string; role: string }[];
+}
+let menuRecents: MenuRecents = { files: [], sessions: [] };
+
+function sanitizeMenuRecents(raw: unknown): MenuRecents {
+  const out: MenuRecents = { files: [], sessions: [] };
+  if (!raw || typeof raw !== 'object') return out;
+  const r = raw as { files?: unknown; sessions?: unknown };
+  if (Array.isArray(r.files)) {
+    for (const f of r.files.slice(0, 10)) {
+      if (f && typeof f === 'object' && typeof (f as { label?: unknown }).label === 'string' && typeof (f as { handle?: unknown }).handle === 'string') {
+        out.files.push({ label: (f as { label: string }).label.slice(0, 120), handle: (f as { handle: string }).handle });
+      }
+    }
+  }
+  if (Array.isArray(r.sessions)) {
+    for (const s of r.sessions.slice(0, 10)) {
+      if (s && typeof s === 'object' && typeof (s as { label?: unknown }).label === 'string' && typeof (s as { roomId?: unknown }).roomId === 'string') {
+        out.sessions.push({
+          label: (s as { label: string }).label.slice(0, 120),
+          roomId: (s as { roomId: string }).roomId,
+          role: String((s as { role?: unknown }).role ?? ''),
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/** File → Open Recent: the home screen's Recent list, newest first, with
+ *  a Clear Menu at the bottom (macOS convention). */
+function openRecentSubmenu(): MenuItemConstructorOptions[] {
+  const items: MenuItemConstructorOptions[] = menuRecents.files.map((f) => ({
+    label: f.label,
+    toolTip: f.handle,
+    click: () => dispatchMenuOpenRecent('file', f.handle),
+  }));
+  if (items.length === 0) items.push({ label: 'No Recent Files', enabled: false });
+  items.push({ type: 'separator' });
+  items.push({
+    label: 'Clear Menu',
+    enabled: menuRecents.files.length > 0,
+    click: () => dispatchMenuCommand('clearRecents'),
+  });
+  return items;
+}
+
+/** File → Rejoin Recent Session: the home screen's Sessions list (saved
+ *  session records), plus the code / link prompt for anything else. */
+function rejoinSessionSubmenu(): MenuItemConstructorOptions[] {
+  const items: MenuItemConstructorOptions[] = menuRecents.sessions.map((s) => ({
+    label: s.label,
+    click: () => dispatchMenuOpenRecent('session', s.roomId),
+  }));
+  if (items.length === 0) items.push({ label: 'No Saved Sessions', enabled: false });
+  items.push({ type: 'separator' });
+  items.push({
+    label: 'Join or Rejoin Session…',
+    accelerator: menuAccelerator('collabJoinSession'),
+    click: () => dispatchMenuCommand('collabJoinSession'),
+  });
+  return items;
+}
+
 /** Current renderer-reported keybinding for each menu-bound ribbon
  *  command, in PM keymap form (`Mod-o`, `CmdOrCtrl+Alt+N`, etc.).
  *  Renderer pushes this map via `host:set-menu-bindings` whenever
@@ -2860,6 +2937,8 @@ function buildMenu(): Menu {
         accelerator: menuAccelerator('openFile'),
         click: () => dispatchMenuCommand('openFile'),
       },
+      { label: 'Open Recent', submenu: openRecentSubmenu() },
+      { label: 'Rejoin Recent Session', submenu: rejoinSessionSubmenu() },
       {
         label: 'New Document',
         accelerator: menuAccelerator('newDocument'),
@@ -3112,6 +3191,12 @@ function buildMenu(): Menu {
  *  keybindings (after rebinds via Settings → Keybindings) show
  *  next to each menu item. Idempotent — safe to call on every
  *  settings change. */
+ipcMain.handle('host:set-menu-recents', async (_event, payload: unknown) => {
+  menuRecents = sanitizeMenuRecents(payload);
+  // macOS only — see the note on the bindings handler below.
+  Menu.setApplicationMenu(process.platform === 'darwin' ? buildMenu() : null);
+});
+
 ipcMain.handle(
   'host:set-menu-bindings',
   async (_event, bindings: Record<string, string | null>) => {

@@ -15,6 +15,8 @@ interface Room {
   snapshot: { blob: string; coversThroughSeq: number } | null;
   tombstoned: boolean;
   streams: Set<http.ServerResponse>;
+  /** Subset of `streams` held by view-pass (spectator) bearers. */
+  viewers: Set<http.ServerResponse>;
 }
 
 export interface RoomsMock {
@@ -29,6 +31,12 @@ export interface RoomsMock {
   /** When set, createRoom responses carry this guestPass — simulates
    *  the relay's guest_pass flip for web-collab tests. */
   setGuestPass(value: string | null): void;
+  /** When set, the mock mints spectators: createRoom and GET view-pass
+   *  carry this viewPass, a bearer equal to it may stream and read but
+   *  every write is 403, viewers count against their own cap and are
+   *  broadcast as `w` frames, and an editor's 409 carries the pass. */
+  setViewPass(value: string | null): void;
+  viewerCount(roomId: string): number;
   close(): Promise<void>;
   streamCount(roomId: string): number;
   updateCount(roomId: string): number;
@@ -67,6 +75,7 @@ export interface RoomsMock {
 }
 
 const MAX_STREAMS_PER_ROOM = 10;
+const MAX_VIEW_STREAMS_PER_ROOM = 100;
 const PAGE = 200;
 
 export function startRoomsMock(): Promise<RoomsMock> {
@@ -77,6 +86,7 @@ export function startRoomsMock(): Promise<RoomsMock> {
   let paused = false;
   let helloDelayMs = 0;
   let guestPassValue: string | null = null;
+  let viewPassValue: string | null = null;
   let streamAttempts = 0;
   let pushMuted = false;
   let portalMode = false;
@@ -135,23 +145,41 @@ export function startRoomsMock(): Promise<RoomsMock> {
       res.end('<html><body>Please sign in to campus wifi</body></html>');
       return;
     }
-    if (req.headers.authorization !== `Bearer ${token}`) {
+    // A view-pass bearer is a SPECTATOR: room-data reads only.
+    const isViewer =
+      viewPassValue !== null && req.headers.authorization === `Bearer ${viewPassValue}`;
+    if (!isViewer && req.headers.authorization !== `Bearer ${token}`) {
       return json(res, 401, { error: 'unauthorized' });
     }
-    const m = /^\/relay\/rooms(?:\/([^/]+)(?:\/([a-z]+))?)?$/.exec(path);
+    const m = /^\/relay\/rooms(?:\/([^/]+)(?:\/([a-z-]+))?)?$/.exec(path);
     if (!m) return json(res, 404, { error: 'not found' });
     const [, roomId, sub] = m;
+    if (isViewer) {
+      const readOnlyOk =
+        (req.method === 'GET' && (sub === 'stream' || sub === 'updates' || sub === 'view-pass'));
+      if (!readOnlyOk) return json(res, 403, { detail: 'view-only session: this pass cannot write' });
+    }
+    const pushWatchers = (room: Room): void => {
+      const frame = `data: {"t":"w","n":${room.viewers.size}}\n\n`;
+      for (const s of room.streams) s.write(frame);
+    };
 
     if (req.method === 'POST' && !roomId) {
       const id = randomUUID().replace(/-/g, '');
-      rooms.set(id, { updates: [], snapshot: null, tombstoned: false, streams: new Set() });
-      return json(
-        res,
-        201,
-        guestPassValue ? { roomId: id, guestPass: guestPassValue } : { roomId: id },
-      );
+      rooms.set(id, { updates: [], snapshot: null, tombstoned: false, streams: new Set(), viewers: new Set() });
+      return json(res, 201, {
+        roomId: id,
+        ...(guestPassValue ? { guestPass: guestPassValue } : {}),
+        ...(viewPassValue ? { viewPass: viewPassValue } : {}),
+      });
     }
     if (!roomId) return json(res, 404, { error: 'not found' });
+
+    if (req.method === 'GET' && sub === 'view-pass') {
+      if (!viewPassValue) return json(res, 404, { detail: 'no such room' });
+      if (!roomOr(res, roomId)) return;
+      return json(res, 200, { viewPass: viewPassValue });
+    }
 
     if (req.method === 'DELETE' && !sub) {
       const room = rooms.get(roomId);
@@ -259,8 +287,14 @@ export function startRoomsMock(): Promise<RoomsMock> {
       streamAttempts++;
       const room = roomOr(res, roomId);
       if (!room) return;
-      if (room.streams.size >= MAX_STREAMS_PER_ROOM) {
-        return json(res, 409, { error: 'room is full' });
+      if (isViewer) {
+        if (room.viewers.size >= MAX_VIEW_STREAMS_PER_ROOM) return json(res, 409, { detail: 'room is full for viewers' });
+      } else if (room.streams.size - room.viewers.size >= MAX_STREAMS_PER_ROOM) {
+        return json(res, 409, {
+          error: 'room is full',
+          detail: 'room is full',
+          ...(viewPassValue ? { viewPass: viewPassValue } : {}),
+        });
       }
       const lastSeq = room.updates.length
         ? room.updates[room.updates.length - 1]!.seq
@@ -269,13 +303,18 @@ export function startRoomsMock(): Promise<RoomsMock> {
       const sid = url.searchParams.get('sid');
       const sendHello = () => {
         if (res.writableEnded || res.destroyed) return;
-        res.write(`event: hello\ndata: {"lastSeq":${lastSeq}}\n\n`);
+        if (isViewer) room.viewers.add(res);
+        res.write(`event: hello\ndata: {"lastSeq":${lastSeq},"watchers":${room.viewers.size}}\n\n`);
         room.streams.add(res);
         if (sid !== null) streamSids.set(res, sid);
+        if (isViewer) pushWatchers(room);
       };
       if (helloDelayMs > 0) setTimeout(sendHello, helloDelayMs);
       else sendHello();
-      req.on('close', () => room.streams.delete(res));
+      req.on('close', () => {
+        room.streams.delete(res);
+        if (room.viewers.delete(res)) pushWatchers(room);
+      });
       return;
     }
 
@@ -300,6 +339,10 @@ export function startRoomsMock(): Promise<RoomsMock> {
         setGuestPass: (value) => {
           guestPassValue = value;
         },
+        setViewPass: (value) => {
+          viewPassValue = value;
+        },
+        viewerCount: (roomId) => rooms.get(roomId)?.viewers.size ?? 0,
         mutePush: (on) => {
           pushMuted = on;
         },

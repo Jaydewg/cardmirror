@@ -44,7 +44,11 @@ export function parseJoinLinkHash(hash: string): JoinLinkParts | null {
     return null;
   }
   const shareCode = (params.get('join') ?? '').trim();
-  if (!shareCode.startsWith('cmshare')) return null;
+  // Share codes (`cmshare…`) and spectator codes (`cmview…`) both ride
+  // the same `join` param; the code's prefix says which. Builds before
+  // spectators saw a view link as "not a join link" — which is the safe
+  // failure (never an edit join).
+  if (!shareCode.startsWith('cmshare') && !shareCode.startsWith('cmview')) return null;
   const pass = (params.get('pass') ?? '').trim();
   return { shareCode, guestPass: pass || null };
 }

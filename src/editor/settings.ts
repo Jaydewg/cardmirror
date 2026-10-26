@@ -309,6 +309,14 @@ export const DISPLAY_COLOR_KEYS: (keyof DisplayColors)[] = [
 
 /** A user-defined keyboard macro: pressing `key` types `text` at the
  *  cursor. `id` is a stable local handle for the editor UI. */
+/** One saved AI cite-creator prompt (ai/cite-prompt-presets.ts). */
+export interface CitePromptPreset {
+  name: string;
+  prompt: string;
+}
+/** How many cite-prompt presets a user can keep. */
+export const MAX_CITE_PROMPT_PRESETS = 10;
+
 export interface KeyboardMacro {
   id: string;
   /** ProseMirror-keymap key string, e.g. `Mod-Shift-q` (same format as
@@ -469,6 +477,13 @@ export interface Settings {
    *  Scroll only: the cursor, the nav selection, and the collapsed set are
    *  untouched. On by default. */
   navFollowCursor: boolean;
+  /** When true, scrolling the editor moves the nav-pane highlight to the
+   *  section at the top of the viewport (and brings that row into view),
+   *  instead of the highlight staying on the section the cursor is in.
+   *  While the cursor itself is on screen its section keeps the highlight,
+   *  so typing or arrowing that scrolls the editor doesn't steal it.
+   *  Off by default. */
+  navFollowScroll: boolean;
   /** Master switch for drag-to-rearrange: nav-pane row drags and the
    *  editor's pickup-modifier drag. OFF turns those gestures inert
    *  (clicks still navigate; nothing moves) — for touch devices where
@@ -949,6 +964,12 @@ export interface Settings {
    *  single nearest preceding cite paragraph. Off = every cite under
    *  the source card / run (the Verbatim-style behavior). */
   copyPreviousCiteNearestOnly: boolean;
+  /** Insert at cursor (receive pill, dropzone shelf, send-to-speech,
+   *  quick cards): a card or heading lands at the first valid outline
+   *  slot AT OR AFTER the cursor — a hat after the end of the hat section
+   *  the cursor is in — instead of the nearest slot in either direction,
+   *  which can be above the current section's heading. Off by default. */
+  insertHeadingsAfterSection: boolean;
   /** "New paragraph on Enter": what pressing Enter at the END of each
    *  structural textblock creates. 'normal' keeps the default
    *  behavior (a plain paragraph — or, for tag/analytic, the
@@ -1043,6 +1064,11 @@ export interface Settings {
    *  follows it. Off by default. Never counted toward word counts /
    *  read time: the counter excludes shaded text by design. */
   readModeShowBackground: boolean;
+  /** When true (default), copying from a view in read mode copies what
+   *  read mode shows — highlighted body, cite text, headings — not the
+   *  whole card underneath (read-mode-copy.ts; same rules as Convert
+   *  Cards to Read Mode). Off, a read-mode copy is a normal copy. */
+  readModeCopyVisible: boolean;
   /** Word-style Repeat: when true, Mod-Y with nothing left to redo
    *  re-runs the last editing action at the current selection (the
    *  last burst of typing, a formatting command, Backspace/Delete, a
@@ -1623,11 +1649,19 @@ export interface Settings {
     possessive: string;
     reflexive: string;
   };
-  /** System prompt for the AI cite creator. Editable via the
-   *  Settings dialog's "Edit prompt" modal — long enough that a
-   *  full textarea makes more sense than an inline input. Empty
-   *  string falls back to `DEFAULT_AI_CITE_PROMPT`. */
+  /** System prompt for the AI cite creator — the one IN USE. Since
+   *  presets arrived this is a mirror of `aiCitePromptPresets[
+   *  aiCitePromptActive].prompt` ('' when the built-in default is in
+   *  use); the consumers, backups and older builds read it as they
+   *  always did. Written only through ai/cite-prompt-presets.ts, and
+   *  re-derived by the sanitizer. Empty string falls back to
+   *  `DEFAULT_AI_CITE_PROMPT`. */
   aiCitePrompt: string;
+  /** Named cite-creator prompts, up to MAX_CITE_PROMPT_PRESETS. */
+  aiCitePromptPresets: CitePromptPreset[];
+  /** Index into `aiCitePromptPresets` of the prompt in use; -1 = the
+   *  built-in default. */
+  aiCitePromptActive: number;
   /** Translator backend. `'auto'` uses the AI provider when AI features
    *  are ready, otherwise MyMemory. `'mymemory'` (no key, works with AI
    *  off), `'anthropic'` (the AI-provider backend — follows the Comments
@@ -1850,8 +1884,10 @@ const DEFAULTS: Settings = {
   navSearchHideNonMatches: true,
   navSearchContent: false,
   navFollowCursor: true,
+  navFollowScroll: false,
   dragInteractions: true,
   copyPreviousCiteNearestOnly: true,
+  insertHeadingsAfterSection: false,
   showOnboardingStarter: true,
   hasSeenUiTour: false,
   hasSeenCutInPlaceNotice: false,
@@ -1981,6 +2017,7 @@ const DEFAULTS: Settings = {
   readModeKeepEntireCite: false,
   readModeShowUndertags: false,
   readModeShowBackground: false,
+  readModeCopyVisible: true,
   repeatWithModY: false,
   markUnreadAfterMarker: false,
   defaultZoomPct: 100,
@@ -2104,6 +2141,8 @@ const DEFAULTS: Settings = {
     reflexive: 'themself',
   },
   aiCitePrompt: '',
+  aiCitePromptPresets: [],
+  aiCitePromptActive: -1,
   translationProvider: 'auto',
   translationTargetLang: 'en',
   translationSourceLang: 'auto',
@@ -2508,6 +2547,16 @@ export const SETTING_METADATA: SettingMeta[] = [
     ],
   },
   {
+    key: 'navFollowScroll',
+    label: 'Navigation pane follows scrolling',
+    description:
+      'Once the cursor scrolls out of sight, the navigation pane highlights the section at the top of the window instead of the section the cursor is in',
+    kind: 'toggle',
+    category: 'general',
+    section: 'Workspace',
+    aliases: ['scroll spy', 'scrollspy', 'sync scroll', 'nav follows scroll', 'outline follows scroll'],
+  },
+  {
     key: 'mobileLayout',
     label: 'Layout on this device',
     description:
@@ -2586,6 +2635,16 @@ export const SETTING_METADATA: SettingMeta[] = [
     category: 'general',
     section: 'Editor behavior',
     aliases: ['background read mode', 'shading read mode', 'show background', 'show shading', 'read mode background', 'rehighlight read mode'],
+  },
+  {
+    key: 'readModeCopyVisible',
+    label: 'Read mode: copy only what is shown',
+    description:
+      'When on, copying from a document in read mode copies the text read mode shows — highlighted body, cite text, headings — instead of the whole card underneath. Follows the other read-mode settings (keep entire cite, show undertags, show background color). Off, a copy in read mode is a normal copy. On by default.',
+    kind: 'toggle',
+    category: 'general',
+    section: 'Editor behavior',
+    aliases: ['read mode copy', 'copy visible', 'copy highlighted only', 'copy read mode', 'clipboard read mode'],
   },
   {
     key: 'repeatWithModY',
@@ -4081,7 +4140,7 @@ export const SETTING_METADATA: SettingMeta[] = [
     key: 'highlightUnderlinedOnly',
     label: 'Highlight underlined text only',
     description:
-      'When on, Toggle Highlight and Toggle Background Color (F11 / Ctrl+F11, the paintbrush, and the color pickers) only paint text that is underlined or emphasized, so painting over a mix of underlined and plain text highlights just the underlined parts. In a word that mixes emphasis and plain underline, only the emphasized part is painted. Toggling off and "No highlight" still clear the whole selection. Composes with the automatic gap bridging above.',
+      'When on, Toggle Highlight and Toggle Background Color (F11 / Ctrl+F11, the paintbrush, and the color pickers) only paint body text that is underlined or emphasized, so painting over a mix of underlined and plain text highlights just the underlined parts. In a word that mixes emphasis and plain underline, only the emphasized part is painted. Tags, cites, analytics and the pocket / hat / block headings are always painted whole. Toggling off and "No highlight" still clear the whole selection. Composes with the automatic gap bridging above.',
     kind: 'toggle',
     category: 'editing',
     section: 'Highlighting',
@@ -4156,6 +4215,16 @@ export const SETTING_METADATA: SettingMeta[] = [
     kind: 'toggle',
     category: 'editing',
     section: 'Insert surfaces',
+  },
+  {
+    key: 'insertHeadingsAfterSection',
+    label: 'Insert at cursor: headings go after the current section',
+    description:
+      'Cards and headings inserted at the cursor — from the Receive pill, the dropzone shelf, send to speech, or quick cards — land at the first valid slot at or after the cursor: a card after the card you\'re in, an F5 hat after the end of the F5 section you\'re in. Normally they snap to the nearest slot in either direction, which puts an F5 above the F5 heading you\'re under when the cursor is near its top — disorienting when compiling several documents into one. Text and card contents are unaffected. Off by default.',
+    kind: 'toggle',
+    category: 'editing',
+    section: 'Insert surfaces',
+    aliases: ['insert at cursor', 'insert below', 'insert after section', 'receive pill placement', 'dropzone placement', 'hat above', 'nearest slot'],
   },
   {
     key: 'showQuickCardButtons',
@@ -4967,6 +5036,7 @@ function sanitize(s: Settings): Settings {
     navSearchHideNonMatches: s.navSearchHideNonMatches !== false,
     navSearchContent: s.navSearchContent === true,
     navFollowCursor: s.navFollowCursor !== false,
+    navFollowScroll: s.navFollowScroll === true,
     dragInteractions: s.dragInteractions !== false,
     readerReduceMotion: s.readerReduceMotion === true,
     // Default-on: preserve `false` only when explicitly set so the
@@ -5140,6 +5210,7 @@ function sanitize(s: Settings): Settings {
     flashcardDueDot: s.flashcardDueDot === false ? false : true,
     editorSpellcheck: !!s.editorSpellcheck,
     copyPreviousCiteNearestOnly: s.copyPreviousCiteNearestOnly === false ? false : true,
+    insertHeadingsAfterSection: !!s.insertHeadingsAfterSection,
     smartQuotes: !!s.smartQuotes,
     smartQuoteDatesAsApostrophes:
       s.smartQuoteDatesAsApostrophes === undefined
@@ -5187,6 +5258,7 @@ function sanitize(s: Settings): Settings {
     readModeKeepEntireCite: !!s.readModeKeepEntireCite,
     readModeShowUndertags: !!s.readModeShowUndertags,
     readModeShowBackground: !!s.readModeShowBackground,
+    readModeCopyVisible: s.readModeCopyVisible !== false,
     repeatWithModY: !!s.repeatWithModY,
     markUnreadAfterMarker: !!s.markUnreadAfterMarker,
     // A legacy persisted `zoomPct` is deliberately ignored — live body
@@ -5464,8 +5536,7 @@ function sanitize(s: Settings): Settings {
       ? (s.aiPersonaPronouns as Settings['aiPersonaPronouns'])
       : DEFAULTS.aiPersonaPronouns,
     aiPersonaCustomPronouns: sanitizeCustomPronouns(s.aiPersonaCustomPronouns),
-    aiCitePrompt:
-      typeof s.aiCitePrompt === 'string' ? s.aiCitePrompt : DEFAULTS.aiCitePrompt,
+    ...sanitizeCitePromptState(s),
     translationProvider: (['auto', 'mymemory', 'anthropic', 'google'] as const).includes(
       s.translationProvider as Settings['translationProvider'],
     )
@@ -6032,6 +6103,40 @@ function sanitizeExternalAppConsents(raw: unknown): ExternalAppConsent[] {
 }
 
 /** Keep only well-formed `{ id, key, text }` macro entries. */
+/** Presets + active index + the `aiCitePrompt` mirror, made consistent:
+ *  a pre-preset settings file whose `aiCitePrompt` is a custom prompt
+ *  becomes one preset ("My prompt", active); the list is capped and
+ *  each entry's name/prompt typed; an out-of-range active index falls
+ *  back to the built-in default; the mirror is re-derived from the
+ *  active preset. */
+function sanitizeCitePromptState(
+  s: Settings,
+): Pick<Settings, 'aiCitePrompt' | 'aiCitePromptPresets' | 'aiCitePromptActive'> {
+  const legacy = typeof s.aiCitePrompt === 'string' ? s.aiCitePrompt : '';
+  let presets: CitePromptPreset[] = [];
+  if (Array.isArray(s.aiCitePromptPresets)) {
+    for (const r of s.aiCitePromptPresets) {
+      if (!r || typeof r !== 'object') continue;
+      const p = r as Partial<CitePromptPreset>;
+      if (typeof p.prompt !== 'string') continue;
+      const name = typeof p.name === 'string' ? p.name.trim() : '';
+      presets.push({ name: name || `Preset ${presets.length + 1}`, prompt: p.prompt });
+      if (presets.length >= MAX_CITE_PROMPT_PRESETS) break;
+    }
+  }
+  let active = Number.isInteger(s.aiCitePromptActive) ? (s.aiCitePromptActive as number) : -1;
+  if (presets.length === 0 && legacy.trim() !== '') {
+    presets = [{ name: 'My prompt', prompt: legacy }];
+    active = 0;
+  }
+  if (active < -1 || active >= presets.length) active = -1;
+  return {
+    aiCitePrompt: active >= 0 ? presets[active]!.prompt : '',
+    aiCitePromptPresets: presets,
+    aiCitePromptActive: active,
+  };
+}
+
 function sanitizeKeyboardMacros(raw: unknown): KeyboardMacro[] {
   if (!Array.isArray(raw)) return [];
   const out: KeyboardMacro[] = [];

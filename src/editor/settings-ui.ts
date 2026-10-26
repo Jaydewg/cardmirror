@@ -51,6 +51,7 @@ import {
   type StyleAlignment,
   applyNumberingSeparator,
   type DynamicSpeechItem,
+  MAX_CITE_PROMPT_PRESETS,
 } from './settings.js';
 import { CATEGORY_TABS, visibleCategoryTabs, type SettingsTarget } from './settings-categories.js';
 import { compileSettingsQuery } from './settings-search.js';
@@ -1553,17 +1554,9 @@ class SettingsModal {
       });
       label.appendChild(input);
     } else if (meta.kind === 'aiCitePrompt') {
-      // A button only — the prompt editor opens in its own modal
-      // because the prompt is long enough that an inline textarea
-      // would shove the rest of the settings dialog off-screen.
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'pmd-settings-btn';
-      btn.textContent = 'Edit prompt';
-      btn.addEventListener('click', () => {
-        void import('./ai/edit-prompt-modal.js').then((m) => m.openCitePromptEditor());
-      });
-      label.appendChild(btn);
+      row.appendChild(text);
+      row.appendChild(buildCitePromptPresetEditor());
+      return row;
     } else if (meta.kind === 'pairingOwnCode') {
       row.appendChild(text);
       row.appendChild(buildPairingOwnCodeEditor());
@@ -1877,6 +1870,101 @@ function buildColorsEditor(): HTMLElement {
   const unsubscribe = settings.subscribe(refresh);
   registerRowCleanup(wrap, () => unsubscribe());
 
+  return wrap;
+}
+
+/**
+ * The AI cite-creator prompt row: a picker over the built-in default
+ * and the saved presets, plus Edit / New / Delete. Editing happens in
+ * the prompt modal (the prompt is long enough that an inline textarea
+ * would shove the rest of the settings dialog off-screen); the picker
+ * switches the prompt in use, the same thing the "Use Prompt Preset N"
+ * commands do. Re-renders on any settings change so a switch made from
+ * a command shows up here.
+ */
+function buildCitePromptPresetEditor(): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'pmd-cite-preset-editor';
+
+  const select = document.createElement('select');
+  select.className = 'pmd-cite-preset-select';
+  select.setAttribute('aria-label', 'Cite-creator prompt in use');
+  wrap.appendChild(select);
+
+  const mkBtn = (label: string): HTMLButtonElement => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'pmd-settings-btn';
+    b.textContent = label;
+    wrap.appendChild(b);
+    return b;
+  };
+  const editBtn = mkBtn('Edit');
+  const newBtn = mkBtn('New preset');
+  const delBtn = mkBtn('Delete');
+  let armedDelete: ReturnType<typeof setTimeout> | null = null;
+  const disarmDelete = (): void => {
+    if (armedDelete) clearTimeout(armedDelete);
+    armedDelete = null;
+    delBtn.textContent = 'Delete';
+    delBtn.classList.remove('pmd-settings-btn-danger');
+  };
+
+  const refresh = (): void => {
+    const presets = settings.get('aiCitePromptPresets');
+    const active = settings.get('aiCitePromptActive');
+    select.replaceChildren();
+    const builtIn = document.createElement('option');
+    builtIn.value = '-1';
+    builtIn.textContent = 'Built-in default';
+    select.appendChild(builtIn);
+    presets.forEach((p, i) => {
+      const opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = `${i + 1}. ${p.name}`;
+      select.appendChild(opt);
+    });
+    select.value = String(active);
+    editBtn.disabled = active < 0;
+    delBtn.disabled = active < 0;
+    const full = presets.length >= MAX_CITE_PROMPT_PRESETS;
+    newBtn.disabled = full;
+    newBtn.title = full ? `Up to ${MAX_CITE_PROMPT_PRESETS} presets` : 'Save the current prompt as a new preset';
+    disarmDelete();
+  };
+
+  select.addEventListener('change', () => {
+    void import('./ai/cite-prompt-presets.js').then((m) => m.activateCitePromptPreset(Number(select.value)));
+  });
+  editBtn.addEventListener('click', () => {
+    const active = settings.get('aiCitePromptActive');
+    if (active < 0) return;
+    void import('./ai/edit-prompt-modal.js').then((m) => m.openCitePromptEditor({ preset: active }));
+  });
+  newBtn.addEventListener('click', () => {
+    void import('./ai/edit-prompt-modal.js').then((m) => m.openCitePromptEditor({ preset: null }));
+  });
+  // Two clicks to delete: the first arms the button for a few seconds,
+  // the second deletes — a long prompt shouldn't vanish on a slip.
+  delBtn.addEventListener('click', () => {
+    const active = settings.get('aiCitePromptActive');
+    if (active < 0) return;
+    if (!armedDelete) {
+      delBtn.textContent = 'Delete?';
+      delBtn.classList.add('pmd-settings-btn-danger');
+      armedDelete = setTimeout(disarmDelete, 4000);
+      return;
+    }
+    disarmDelete();
+    void import('./ai/cite-prompt-presets.js').then((m) => m.deleteCitePromptPreset(active));
+  });
+
+  refresh();
+  const unsubscribe = settings.subscribe(refresh);
+  registerRowCleanup(wrap, () => {
+    disarmDelete();
+    unsubscribe();
+  });
   return wrap;
 }
 

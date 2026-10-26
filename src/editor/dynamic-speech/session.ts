@@ -20,8 +20,9 @@ import { schema } from '../../schema/index.js';
 import {
   READING_MARKER_COLOR,
   READING_MARKER_META,
+  READING_MARKER_ROLE,
   formatMarkerTime,
-  isMarkerText,
+  isReadingMarker,
 } from '../reading-marker.js';
 import { getTimerState, getVisibleRemainingMs, isStopwatch, startTimer, subscribeTimer, type TimerState } from '../timer-state.js';
 import { showToast } from '../toast.js';
@@ -369,7 +370,7 @@ export function speechTimeMark(): boolean {
   const fontColor = schema.marks['font_color'];
   if (markAt !== null && fontColor) {
     // "Read up to here", at the end of the card just finished.
-    const node = schema.text(`Marked ${formatMarkerTime(new Date(now))}`, [fontColor.create({ color: READING_MARKER_COLOR })]);
+    const node = schema.text(`Marked ${formatMarkerTime(new Date(now))}`, [fontColor.create({ color: READING_MARKER_COLOR, role: READING_MARKER_ROLE })]);
     tr = tr.insert(markAt, node).setMeta(READING_MARKER_META, true);
     closeHistory(tr);
     marker = { from: markAt, to: markAt + node.nodeSize };
@@ -432,7 +433,7 @@ export function speechUndo(): boolean {
   if (m && m.to > m.from && m.to <= state.doc.content.size) {
     let allMarker = true;
     state.doc.nodesBetween(m.from, m.to, (node) => {
-      if (node.isText && !isMarkerText(node)) allMarker = false;
+      if (node.isLeaf && !isReadingMarker(node)) allMarker = false;
     });
     if (allMarker) tr = tr.delete(m.from, m.to).setMeta(READING_MARKER_META, true);
   }

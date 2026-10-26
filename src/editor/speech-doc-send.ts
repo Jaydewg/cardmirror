@@ -18,7 +18,7 @@ import { Fragment, Slice, type Node as PMNode, type ResolvedPos } from 'prosemir
 import { closeHistory } from 'prosemirror-history';
 import { schema, newHeadingId } from '../schema/index.js';
 import { rewriteHeadingIds } from './drag-controller.js';
-import { nearestValidInsertPos } from './insert-position.js';
+import { insertAtCursorPos } from './insert-position.js';
 import { flattenZonesInSlice, enclosingZonePos } from './transclusion.js';
 import { flattenSelfRefsInSlice, isSelfRef } from './self-transclusion.js';
 import { normalizeSelectionForSend } from './send-normalize.js';
@@ -410,7 +410,7 @@ export function insertSpeechSlice(
           // to a doc-level gap, card content inside the enclosing card — so it
           // lands as a clean sibling instead of splitting the cursor's card,
           // exactly where a drag-and-drop would drop it.
-          liveFrom = liveTo = nearestValidInsertPos(
+          liveFrom = liveTo = insertAtCursorPos(
             liveState.doc,
             liveState.selection.from,
             rewritten.content,
@@ -423,7 +423,7 @@ export function insertSpeechSlice(
           // card — every split half must lead with a `tag` (schema), so
           // ProseMirror synthesized empty ones: the field report's "2-3 blank
           // tag lines after the card" (2026-07-11).
-          liveFrom = liveTo = nearestValidInsertPos(
+          liveFrom = liveTo = insertAtCursorPos(
             liveState.doc,
             liveState.selection.from,
             rewritten.content,
