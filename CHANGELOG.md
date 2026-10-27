@@ -5,7 +5,11 @@ changes in each release, written for users of the editor. For
 in-depth rationale and implementation context behind each entry,
 see `DETAILED_CHANGELOG.md`.
 
-## Unreleased — federation
+## 1.16.26-f — 2026-10-26
+
+A **pre-release** with server federation, following 1.16.1-f. The last
+number now counts days from the start of the month 1.16 came out in
+(October 26 → 26), not releases, so no releases were skipped.
 
 ### Added
 
@@ -13,7 +17,9 @@ see `DETAILED_CHANGELOG.md`.
   federation builds now supports view codes and view links, the
   "· N watching" count, a separate spectator cap (100), and **watch
   instead** when a session is full. Its editor cap goes from 10 to 30,
-  matching the official relay.
+  matching the official relay. The server has to run this release's
+  relay: one from 1.16.1-f still has no spectators. Watching works
+  for people on the session's own server only (see Known limits).
 
 - **See who's watching.** Spectators announce that they're in the
   session (never their cursor). Their dots get a small purple diamond
@@ -23,6 +29,9 @@ see `DETAILED_CHANGELOG.md`.
   normal chip and panel, minus **End for everyone**. On a server that
   doesn't pass their presence along (the official relay), a spectator
   gets a pared-down light-gray chip and panel with just the basics.
+  Only spectators running this release are listed by name; spectators
+  on other builds are only counted. People in the session on other
+  builds see every spectator only in the count.
 
 - **The host can leave without ending.** In the session panel, **End
   session ▾** now holds **Leave session**: the session keeps going for
@@ -30,10 +39,25 @@ see `DETAILED_CHANGELOG.md`.
 
 ### Changed
 
-- **Federation builds no longer update themselves.** A federation build
-  could be replaced by a release without federation. The update toggle
-  and **Help → Check for Updates…** are gone from them; install newer
-  `-f` builds from the releases page.
+- **Federation builds no longer update themselves.** Starting with this
+  build, the update toggle and **Help → Check for Updates…** are gone;
+  install newer `-f` builds by hand from the releases page.
+  - **1.16.1-f** installs still check for updates, but only take later
+    `-f` pre-releases, never a stable release. They can move to this
+    build on their own and stop updating after that.
+  - **Earlier federation test builds** (shown as `1.15.0-f`, for
+    example) were on the stable update track and could be replaced by a
+    stable release, which removes federation. If that happened,
+    reinstall the `-f` build by hand.
+
+### Known limits
+
+- **No cross-server watching yet.** View codes, view links and view
+  invites work only for people on the session's own server. Someone on
+  another server joins with the cross-server code and can be accepted
+  read-only instead. A cross-server view code (`cmview1f`) is refused.
+- The session panel shows how many people are editing and watching,
+  but not the server's limits.
 
 ## 1.16.1-f — 2026-10-26
 
@@ -41,7 +65,10 @@ A **pre-release** with server federation: everything in 1.16.1 (see its
 entry in `CHANGELOG.md`), plus sharing and co-editing between people on
 different relay servers. Your app shows its version as `1.16.1-f`.
 Installs of the stable 1.16.1 release are not offered this build as an
-update.
+update, and this build only updates itself to later `-f` pre-releases,
+never to a stable release. (Earlier test builds shown as `1.15.0-f`
+could be updated to stable 1.16.1, which removes federation; reinstall
+this build by hand.)
 
 ### Added
 
@@ -91,8 +118,9 @@ update.
 
 ### Changed
 
-- **Spectators and federation together.** 1.16's spectators work as
-  before alongside read-only participants. View codes and view invites
+- **Spectators and federation together.** On the official relay, 1.16's
+  spectators work as before alongside read-only participants (the
+  self-hosted federation relay has none yet). View codes and view invites
   only work for people on the session's own server for now: inviting
   someone on another server to watch is skipped with a message. The
   Send pill keeps 1.16's two-by-two buttons, with the **▾** for code
@@ -111,7 +139,8 @@ update.
   self-hosted relay with federation turned on (`RELAY_FEDERATION=on`).
   With any other relay, every federation feature stays hidden.
 - That relay doesn't support spectators yet (the view-code and view-link
-  buttons stay hidden), and seats up to 10 editors per session.
+  buttons stay hidden), and seats up to 10 editors per session. Both
+  change in 1.16.26-f.
 - Web join links don't cross servers.
 - There is no CardMirror Lite edition of this pre-release: Lite removes
   the relay connection that everything here depends on. Lite installers

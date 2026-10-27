@@ -5,7 +5,7 @@ behavior, rationale, and (where useful) the implementation context
 behind a change. For a shorter, jargon-free summary of what's new
 in each release, see `CHANGELOG.md`.
 
-## Unreleased — federation
+## 1.16.26-f — 2026-10-26
 
 ### Added: spectators on the federation relay (contract §16 parity)
 
@@ -70,6 +70,28 @@ tests in `test_units.py`.
   sending; stamp precedence), `session-chip` (pip, minimal chip, panel
   counts, no End for everyone, minimal panel).
 
+### Spectating: what is and isn't done yet
+
+- **Same-server only.** `decodeShareCode` still refuses `cmview1f`, and
+  view invites still skip recipients on other servers. No cross-server
+  watch flow exists yet: the proxy has no view-pass route, and the join
+  request carries no `view` flag. Cross-server people are admitted
+  read-only (`accessReadOnly`) instead.
+- **Listing needs this build on both ends.** The 0x03 roster frame is
+  federation's; upstream's `applyRemote` handles only cursor and lease
+  frames and drops it. So upstream and 1.16.1-f editors show our
+  spectators only in `watchers`. Spectators on those builds never post
+  presence, so here they fall into the unlisted line.
+- **Relay version.** 1.16.1-f relays have no view passes (no
+  `rooms.viewPasses`), so the view actions stay hidden there. The client
+  doesn't gate its presence POST on `rooms.spectatorPresence`; it posts
+  and falls back to the minimal UI on the 403.
+- **Caps not shown.** `maxStreamsPerRoom` and `maxViewersPerRoom` are
+  published in `/relay/capabilities` but not yet read by the client;
+  the panel shows counts without maxima.
+- **Join-request UI unchanged.** **Accept (read-only)** is still its own
+  button; the planned Accept ▾ split isn't built.
+
 ### Added: host End session ▾ → Leave session
 
 `SessionPanelCtx.leaveKeepRunning` (host only) puts **Leave session** in
@@ -91,8 +113,22 @@ Sessions list resumes it as host (recent rooms records the host role and
 drops Check for Updates…, `host:check-for-updates` answers an error,
 the renderer skips the launch and daily checks, and Settings → About
 this install shows a note instead of the update controls. Field cause:
-a 1.15.0-f install (numeric manifest) took stable 1.16.1 as an update
-and lost federation.
+a 1.15.0-f install (numeric manifest `1.15.0`, so on the `latest`
+channel) took stable 1.16.1 as an update and lost federation.
+
+Installed builds without the lockout behave as follows (electron-updater
+6.8.3, `GitHubProvider`):
+- **1.15.0-f and earlier** (numeric manifest): `allowPrerelease` is
+  false, so they take the newest stable release and lose federation.
+  They have to be reinstalled by hand.
+- **1.16.1-f**: `allowPrerelease` turns on by itself (the version has a
+  prerelease component). The current channel is `f`, which is neither
+  alpha nor beta, so `getLatestVersion` takes only the newest feed tag
+  whose prerelease id is `f`. Stable tags (channel `null`) are skipped.
+  It then reads `f.yml`, falling back to the release's `latest*.yml`
+  (which is what `v1.16.1-f` ships). So 1.16.1-f installs update only to
+  the next `-f` pre-release, never to stable, and stop once on a build
+  with the lockout.
 
 ## 1.16.1-f — 2026-10-26
 
@@ -111,10 +147,14 @@ it to stable 1.16.1 installs. Everything inside the app still reads it as
 1.16.1 plus flag `f`: `splitVersionFlags` takes the trailing `-f` as flags,
 `numericVersion` / `compareAppVersions` (version floors, the plugin API,
 relay headers to non-federating relays) see `1.16.1`, and `flaggedVersion`
-displays `1.16.1-f` (flags are de-duplicated, so not `-f-f`). Caveat: a
-1.16.1-f install that checks for updates sees pre-releases, and would be
-offered a later stable release (≥ 1.16.1, without federation) if one is
-published to the same repo.
+displays `1.16.1-f` (flags are de-duplicated, so not `-f-f`). Updates
+from a 1.16.1-f install: `allowPrerelease` turns on by itself and the
+channel is `f`, so `GitHubProvider` takes only later `-f` tags and never
+a stable release. (An earlier version of this entry wrongly said it
+could take a later stable release.) Builds before this one had a numeric
+manifest and sat on the `latest` channel, so they could be replaced by a
+stable release; see the in-app update lockout in the next federation
+entry.
 
 No Lite build: `release.yml` on this branch drops the "Build and upload
 CardMirror Lite installer" step. Lite (`src/editor/lite.ts`) removes
@@ -530,8 +570,9 @@ read-only participant's comment-thread edits stay local; the official
 relay only federates if it runs this protocol. The self-hosted federation
 relay has no view passes yet, so spectating isn't available on it (the
 view actions stay hidden), and its editor cap is still 10
-(`RELAY_MAX_STREAMS_PER_ROOM`). Cross-server spectating (`cmview1f`) is
-not implemented.
+(`RELAY_MAX_STREAMS_PER_ROOM`). Both changed in 1.16.26-f
+(above). Cross-server spectating (`cmview1f`) is not
+implemented, and still isn't.
 
 ## 1.16.1 — 2026-10-26
 
