@@ -278,6 +278,7 @@ import { collabEnabled } from './collab/collab-gate.js';
 import { parseJoinLinkHash } from './collab/join-link.js';
 import { setRePickOpener, setOpenSourceOpener } from './transclusion-actions.js';
 import { isLiteBuild } from './lite.js';
+import { IN_APP_UPDATES } from './relay-protocol.js';
 import { fragmentHasZone } from './transclusion.js';
 import { showConfirm } from './confirm-dialog.js';
 import { linkContextMenuPlugin } from './link-context-menu-plugin.js';
@@ -10808,6 +10809,7 @@ async function initSingleDocBoot(): Promise<void> {
     // here is renderer-side defense in depth.
     if (
       electron &&
+      IN_APP_UPDATES && // federation builds never update themselves
       settings.get('checkForUpdatesOnLaunch') &&
       settings.get('updateChecksPausedUntil') <= Date.now() // tournament pause
     ) {
@@ -10823,7 +10825,7 @@ async function initSingleDocBoot(): Promise<void> {
     // found), so an app left running for days still notices updates.
     // Re-reads the setting each tick, so turning "Check for updates
     // automatically" off stops it; first window only, like above.
-    if (electron) {
+    if (electron && IN_APP_UPDATES) {
       window.setInterval(
         () => {
           if (

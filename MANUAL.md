@@ -2727,6 +2727,12 @@ automatically** toggle in Settings → General → About this install;
 **Help → Check for Updates…** always works either way. Linux users who
 installed via the AUR update with `yay -Syu`.
 
+**Federation builds** (versions ending in `-f`) never update themselves:
+the releases they'd check include builds without federation, and an
+update could quietly replace yours with one. There's no update toggle or
+Check for Updates item in them — install newer `-f` builds by hand from
+the releases page.
+
 **Going to a tournament?** The **Pause update checks for 1 week**
 button (next to the auto-check toggle in Settings → General → About
 this install) stops all automatic checks and downloads until the shown

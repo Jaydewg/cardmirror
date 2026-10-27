@@ -82,6 +82,18 @@ Sessions list resumes it as host (recent rooms records the host role and
 `leftAt`). A failed flush keeps the session live and says so. Test:
 `session-chip.test.ts` (host panel).
 
+### Changed: federation builds never update in-app
+
+`IN_APP_UPDATES = !BUILD_VERSION_FLAGS.includes('f')` in
+`relay-protocol.ts` and its main-process twin in `federation-main.ts`
+(parity pinned in `tests/federation/address.test.ts`). When false:
+`startAutoUpdate` and `runUpdateCheck` return early, the Help menu
+drops Check for Updates…, `host:check-for-updates` answers an error,
+the renderer skips the launch and daily checks, and Settings → About
+this install shows a note instead of the update controls. Field cause:
+a 1.15.0-f install (numeric manifest) took stable 1.16.1 as an update
+and lost federation.
+
 ## 1.16.1-f — 2026-10-26
 
 Pre-release build of the `server-federation` branch: everything in 1.16.1

@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import * as renderer from '../../src/editor/federation/address.js';
 import * as main from '../../apps/desktop/src/federation-main.js';
 import {
+  IN_APP_UPDATES,
   compareAppVersions,
   flaggedVersion,
   numericVersion,
@@ -173,5 +174,14 @@ describe('version flags (FEDERATION.md §2.2)', () => {
       expect(impl.wireVersion('1.15.0', true)).toBe('1.15.0-f');
       expect(impl.wireVersion('1.16.0-beta.2', true)).toBe('1.16.0-beta.2-f');
     }
+  });
+});
+
+describe('in-app updates', () => {
+  it('a federation build never updates itself, in either process', () => {
+    // A 1.15.0-f install was silently replaced by a stable release
+    // without federation (2026-10-26). Renderer and main must agree.
+    expect(IN_APP_UPDATES).toBe(false);
+    expect(main.IN_APP_UPDATES).toBe(false);
   });
 });

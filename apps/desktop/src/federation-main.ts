@@ -14,6 +14,12 @@
 
 const FEDERATION_FLAG = 'f';
 const BUILD_VERSION_FLAGS = 'f';
+/** Whether this build may update itself in-app. Never with federation
+ *  (`f`): the release feed it would check also carries builds without
+ *  federation, and a 1.15.0-f install was silently replaced by a stable
+ *  release (field find, 2026-10-26). New federation builds are installed
+ *  by hand from the releases page. */
+export const IN_APP_UPDATES = !BUILD_VERSION_FLAGS.includes(FEDERATION_FLAG);
 const PRERELEASE_LABELS = new Set(['alpha', 'beta', 'rc']);
 
 export function canonRelayUrl(raw: unknown): string | null {

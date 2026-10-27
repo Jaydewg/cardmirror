@@ -28,6 +28,13 @@ see `DETAILED_CHANGELOG.md`.
   session ▾** now holds **Leave session**: the session keeps going for
   everyone else, and you rejoin it as the host from the Sessions list.
 
+### Changed
+
+- **Federation builds no longer update themselves.** A federation build
+  could be replaced by a release without federation. The update toggle
+  and **Help → Check for Updates…** are gone from them; install newer
+  `-f` builds from the releases page.
+
 ## 1.16.1-f — 2026-10-26
 
 A **pre-release** with server federation: everything in 1.16.1 (see its
