@@ -246,6 +246,7 @@ setCollabCopresenceProvider((uid) => {
     // The status ring around your own dot in the slot footer.
     ring: ringClasses(chipModel(sess)),
     watchers: sess.watchers,
+    minimal: spectatorMinimal(sess),
   };
 });
 
@@ -425,7 +426,14 @@ function chipModel(
     pendingJoins: (sess.joinWatcher?.rows() ?? []).filter((r) => r.state === 'pending').length,
     spectator: sess.session.role === 'spectator',
     watchers: sess.watchers,
+    minimal: spectatorMinimal(sess),
   };
+}
+
+/** A spectator whose relay refused its presence (upstream relays): it
+ *  can't be listed, so it gets the minimal chip and panel. */
+function spectatorMinimal(sess: ActiveSession): boolean {
+  return sess.session.role === 'spectator' && sess.session.spectatorPresence === 'refused';
 }
 
 /** Who's here, for the chip / panel / footers: a partner whose announced
@@ -441,6 +449,7 @@ function chipPeers(sess: ActiveSession): ChipPeer[] {
       self: p.self,
       ...(remote ? { remote: true, server: relayLabel(p.relay!) } : {}),
       ...(p.readOnly && !p.self ? { readOnly: true } : {}),
+      ...(p.spectator ? { spectator: true } : {}),
     };
   });
 }
@@ -496,8 +505,27 @@ setChipActivator((anchor) => {
     // Same-server participants trust each other (and the relay lets any of
     // them end the room): the way out when the host is gone / role lost.
     ...(sess.session.role === 'participant' && !sess.home ? { endForEveryone: () => void endForEveryoneToHome(sess) } : {}),
+    ...(sess.session.role === 'host' ? { leaveKeepRunning: () => void hostLeaveToHome(sess) } : {}),
   });
 });
+
+/** Panel End ▾ → "Leave session" (the host): leave WITHOUT ending. The
+ *  room keeps running for everyone else; this copy's record is kept, so
+ *  the Sessions list resumes it — as host, still able to end it — exactly
+ *  like closing the doc. */
+async function hostLeaveToHome(sess: ActiveSession): Promise<void> {
+  if (!sessions.has(sess.ownerUid)) return;
+  sess.cursors.farewell(); // partners see us go now, not at the expiry
+  if (!(await closeKeepResumableSession(sess.ownerUid))) {
+    sess.cursors.rebroadcast();
+    showToast('Couldn’t save your copy, so you’re still in the session.');
+    return;
+  }
+  if (sess.deps.refreshPluginsForUid) sess.deps.refreshPluginsForUid(sess.ownerUid);
+  else sess.deps.refreshPlugins();
+  showToast('Left the session — it keeps going; rejoin from the Sessions list');
+  sess.deps.goHome?.();
+}
 
 /** Panel Leave ▾ → "End for everyone…" (a participant on the session's
  *  own server): confirmed, then the same end as a host's — tombstone the
@@ -691,6 +719,7 @@ function installSeams(
   const cursors = installCursorPresence(session, ownerView, () => ({
     relay: selfRelayUrl(),
     readOnly: session.accessReadOnly,
+    spectator: session.role === 'spectator',
   }));
   const unloadCleanup = installUnloadHooks(session, cursors);
   // One shared timer refreshes the focused session's chip dots AND every slot
@@ -977,7 +1006,14 @@ function sessionCallbacks(deps: CollabUiDeps, getSess: () => ActiveSession | nul
       if (isChipSession(sess.ownerUid)) updateChip(s);
       notifyCollabCopresenceChange();
     },
-    onPresence: (bytes: Uint8Array) => getSess()?.cursors.applyRemote(bytes),
+    onPresence: (bytes: Uint8Array, viewer: boolean) => getSess()?.cursors.applyRemote(bytes, viewer),
+    onSpectatorPresence: () => {
+      // Listed or minimal: repaint everything that shows this session.
+      const sess = getSess();
+      if (!sess) return;
+      if (isChipSession(sess.ownerUid)) updateChip(sess.lastStatus);
+      notifyCollabCopresenceChange();
+    },
     onJoinRequests: () => {
       const sess = getSess();
       if (!sess) return;
@@ -1910,7 +1946,9 @@ function defaultCopyCode(sess: { shareCode: string; home: string | null }): stri
 export function crossServerShareCode(sess: { shareCode: string; home: string | null }): string | null {
   const self = selfRelayUrl();
   const decoded = decodeShareCode(sess.shareCode);
-  if (!decoded || !self) return null;
+  // A spectator's code is a VIEW code; re-encoding its room + key as a
+  // share code would hand out an editing seat. No `cmview1f` exists yet.
+  if (!decoded || decoded.view || !self) return null;
   return encodeShareCode(decoded.roomId, decoded.keyBytes, decoded.minVersion, sess.home ?? self);
 }
 

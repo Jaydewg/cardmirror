@@ -12188,6 +12188,12 @@ body.pmd-multi-nav-empty.pmd-multi-doc #status-bar {
 .pmd-pane-copresence-label {
   font-weight: 600;
 }
+.pmd-pane-copresence-minimal {
+  color: var(--pmd-collab-minimal);
+}
+.pmd-pane-copresence-minimal .pmd-pane-copresence-label {
+  font-weight: normal;
+}
 
 
 /* ---- Routing prompt overlay ---- */
@@ -15477,6 +15483,10 @@ body.pmd-multi-doc .pmd-cardcutter-trim {
   --pmd-ring-reconnecting: #8a8f98;
   --pmd-ring-auth: #d64545;
   --pmd-ring-readonly: #e6b800;
+  /* Spectators (view codes): the pip beside their dot, their panel tag. */
+  --pmd-spectator: #8e5bd8;
+  /* The minimal spectator chip / footer: a light gray in either theme. */
+  --pmd-collab-minimal: color-mix(in srgb, var(--pmd-c-text-muted) 65%, transparent);
 }
 .pmd-collab-chip {
   overflow: visible; /* the ripple extends past the dot */
@@ -15554,6 +15564,40 @@ body.pmd-multi-doc .pmd-cardcutter-trim {
 .pmd-ring-remote,
 .pmd-ring-remote > .pmd-collab-presence-dot {
   border-radius: 3px;
+}
+/* A spectator: a small diamond pip at the dot's lower right, apart from
+   the read-only pip (yellow, on the ring) and the waiting dot (orange). */
+.pmd-collab-presence-dot-spectator {
+  position: relative;
+  margin-right: 3px;
+}
+.pmd-collab-presence-dot-spectator::after {
+  content: '';
+  position: absolute;
+  right: -4px;
+  bottom: -2px;
+  width: 5px;
+  height: 5px;
+  background: var(--pmd-spectator);
+  box-shadow: 0 0 0 1px var(--pmd-c-bg);
+  transform: rotate(45deg);
+}
+/* Minimal spectator chip: a light-gray line broken by the basics. */
+.pmd-collab-chip-minimal .pmd-collab-chip-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 220px;
+  color: var(--pmd-collab-minimal);
+}
+.pmd-collab-chip-line {
+  flex: 1 1 10px;
+  min-width: 8px;
+  height: 1px;
+  background: currentColor;
+}
+.pmd-collab-chip-seg {
+  white-space: nowrap;
 }
 @keyframes pmd-ring-ripple {
   0% { transform: scale(1); opacity: 0.55; }
@@ -15722,6 +15766,21 @@ body.pmd-multi-doc .pmd-cardcutter-trim {
 }
 .pmd-collab-panel-tag-ro {
   background: color-mix(in srgb, #e6b800 25%, transparent);
+}
+.pmd-collab-panel-tag-spectator {
+  background: color-mix(in srgb, var(--pmd-spectator) 22%, transparent);
+}
+/* "· N spectating" beside the people count: the relay's number. */
+.pmd-collab-panel-section-extra {
+  font-weight: normal;
+}
+/* Spectators the relay counts but nobody can list (older builds, or a
+   relay that doesn't carry their presence). */
+.pmd-collab-panel-unlisted {
+  padding: 2px 0 0 2px;
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--pmd-c-text-muted);
 }
 .pmd-collab-panel-pending-dot {
   position: relative;

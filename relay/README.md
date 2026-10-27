@@ -116,9 +116,21 @@ python tests/run_client_federation.py     # the app against real relays
 
 - One `RELAY_TOKEN` covers both features — card sharing and co-editing
   sessions authenticate with the same shared bearer.
-- Co-editing rooms: at most **10 people** per session (enforced at
-  stream connect), 5 MB per update (the app chunks bigger ones),
-  200 MB stored per room.
+- Co-editing rooms: at most **30 editors** and **100 spectators** per
+  session (enforced at stream connect; `RELAY_MAX_STREAMS_PER_ROOM`,
+  `RELAY_MAX_VIEWERS_PER_ROOM`), 5 MB per update (the app chunks bigger
+  ones), 200 MB stored per room. A refused editor is offered a seat to
+  watch instead.
+- Room passes: each room hands out an **edit pass** (join links work
+  without the relay token) and a **view pass** (spectators: they read
+  and stream, every write is refused). Passes are signed, last 7 days,
+  and work only for their own room. They're signed with
+  `RELAY_PASS_SECRET`, or a key derived from `RELAY_TOKEN` if unset, so
+  changing the token revokes them all. `RELAY_GUEST_PASS=0` turns passes
+  (and so join links and spectating) off.
+- Spectators on this relay may announce themselves (never a cursor), so
+  people in the session see who's watching. Upstream's relay refuses
+  that; apps there show spectators as a count only.
 - Payload cap 25 MB decompressed / 30 MB gzipped per send.
 - Poll returns at most 100 messages, oldest first; the app deletes
   each message after it lands.

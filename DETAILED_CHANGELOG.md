@@ -5,6 +5,83 @@ behavior, rationale, and (where useful) the implementation context
 behind a change. For a shorter, jargon-free summary of what's new
 in each release, see `CHANGELOG.md`.
 
+## Unreleased — federation
+
+### Added: spectators on the federation relay (contract §16 parity)
+
+`relay/server.py`. **Room passes** (`cmrp1.<roomId>.<g|v>.<exp>.<hmac>`):
+stateless, HMAC-SHA256 under `RELAY_PASS_SECRET` or a key derived from
+`RELAY_TOKEN` (a token change revokes every pass), 7-day expiry
+(`room_pass_ttl_seconds`), `RELAY_GUEST_PASS=0` turns them off. Room
+routes take `room_auth` (relay token, or a pass for THIS room — another
+room's pass is 401) instead of `require_relay_token`; writes (updates,
+snapshot, DELETE) take `room_write_auth`, which 403s a view pass.
+`POST /rooms` returns `guestPass` + `viewPass`; `GET /rooms/{id}/guest-pass`
+(edit credentials only) and `GET /rooms/{id}/view-pass` (any credential)
+mint more. Streams: `_Outbox.viewer`; viewers count against
+`max_viewers_per_room` (100) and editors against `max_streams_per_room`
+(now 30); a refused LOCAL editor's 409 body carries a `viewPass` (not a
+proxied remote one — a pass for this relay means nothing to its app);
+`hello` carries `watchers`, and `_announce_watchers` pushes `{"t":"w","n"}`
+on every viewer connect / disconnect. Capabilities: `rooms.guestPasses`,
+`rooms.viewPasses`, `rooms.spectatorPresence`, `maxViewersPerRoom`.
+
+**Prompt disconnects.** Starlette's StreamingResponse only notices a
+dropped client on its next write (up to a heartbeat, 25 s), which kept a
+departed spectator in the count and a departed editor in its seat. Each
+room stream now runs `_close_on_disconnect` (waits on
+`http.disconnect`, then `_Outbox.close()` wakes the generator).
+
+**Deliberate difference from upstream:** a view pass MAY post presence
+(upstream: 403), fanned out stamped `"v":1` (`_fan_out_presence`). The
+federation peer route keeps `post_room_presence` (never a spectator).
+Tests: `relay/tests/test_spectators.py` (reads vs. writes, minting
+rules, room scoping, tampering, watcher frames incl. a bare-socket
+hang-up, stamped presence, separate caps, the 409 pass) and pass unit
+tests in `test_units.py`.
+
+### Added: spectator presence and UI (client)
+
+- `RoomStream` passes the relay's stamp: `onPresence(blob, viewer)`.
+- `CollabSession.sendPresence`: a spectator posts; a 403 sets
+  `spectatorPresence = 'refused'` (no further posts) and fires
+  `onSpectatorPresence('refused')`, the first success `'ok'`.
+- `collab-cursors.ts`: a spectator (`identity().spectator`) sends the
+  0x03 roster with `sp: true` and nothing else (no cursor, lease ad or
+  cursor farewell). Receivers mark a peer a spectator if the relay
+  stamped the frame OR the roster says `sp` (the stamp wins), drop any
+  stamped cursor/lease frame, and keep spectators out of
+  `visiblePeers()` (repair leadership). `PresencePeer.spectator`.
+- Chip (`session-chip.ts`): `.pmd-collab-presence-dot-spectator` (purple
+  diamond pip); `ChipSessionModel.minimal` renders the light-gray
+  `pmd-collab-chip-line` / `-seg` form from `minimalChipParts` (people =
+  listed editors + relay watchers; spectating; Online / Polling /
+  Offline). Pane footers mirror both.
+- Panel (`session-panel.ts`): header *In this session · N* plus
+  *· M spectating* (the relay's count); participants then spectators
+  (tagged *spectating*); an italic `pmd-collab-panel-unlisted` line for
+  `watchers − listed spectators`; *Copy view code* for a spectator; End
+  for everyone only for `role === 'participant'`; `buildMinimal` for
+  the minimal case (status + Stop watching).
+- `crossServerShareCode` refuses a view code (it would have re-encoded
+  a spectator's room + key as an editing `cmshare2f` code).
+- Tests: `collab-spectator` (refused vs. stamped paths, via
+  `_rooms-mock.setSpectatorPresence`), `collab-cursors` (roster-only
+  sending; stamp precedence), `session-chip` (pip, minimal chip, panel
+  counts, no End for everyone, minimal panel).
+
+### Added: host End session ▾ → Leave session
+
+`SessionPanelCtx.leaveKeepRunning` (host only) puts **Leave session** in
+the End button's ▾ — the mirror of a participant's Leave ▾ → End for
+everyone; spectators get neither. `hostLeaveToHome` (`collab-ui.ts`)
+sends the roster farewell, then runs the close-but-keep path
+(`closeKeepResumableSession`: stop, verified persist flush, teardown with
+the record kept), so the room stays live for everyone else and the
+Sessions list resumes it as host (recent rooms records the host role and
+`leftAt`). A failed flush keeps the session live and says so. Test:
+`session-chip.test.ts` (host panel).
+
 ## 1.16.1-f — 2026-10-26
 
 Pre-release build of the `server-federation` branch: everything in 1.16.1

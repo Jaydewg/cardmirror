@@ -129,8 +129,13 @@ export interface CollabSessionCallbacks {
    *  succeeds. Retrying continues either way — this is the signal that
    *  "edits aren't reaching the room" was previously silent. */
   onSendStuck?: (consecutive: number) => void;
-  /** Encrypted presence blob from a peer (cursor layer decodes). */
-  onPresence?: (blob: Uint8Array) => void;
+  /** Decrypted presence frame from a peer (cursor layer decodes).
+   *  `viewer`: the relay vouches it came from a spectator. */
+  onPresence?: (blob: Uint8Array, viewer: boolean) => void;
+  /** Spectator only: whether this relay takes our presence. `refused` =
+   *  it 403'd (upstream relays: spectators are a count, never listed) —
+   *  the UI falls back to its minimal form. */
+  onSpectatorPresence?: (state: 'ok' | 'refused') => void;
   /** A catch-up just imported a LARGE offline backlog (`count` update
    *  blobs) — the merge-visibility hook for "you were gone a while". */
   onBacklogMerged?: (count: number) => void;
@@ -677,6 +682,10 @@ export class CollabSession {
     return [sync];
   }
 
+  /** Spectator only: whether the relay takes this peer's presence —
+   *  `unknown` until the first post lands or is refused. */
+  spectatorPresence: 'unknown' | 'ok' | 'refused' = 'unknown';
+
   /** True for a spectator: no local edits, no outbound writes. */
   get readOnly(): boolean {
     return !roleCanEdit(this.role);
@@ -741,10 +750,10 @@ export class CollabSession {
           if (this.awaitingEcho && u.seq >= this.awaitingEcho.seq) this.awaitingEcho = null;
           void this.applyRemote(u);
         },
-        onPresence: (blob) => {
+        onPresence: (blob, viewer) => {
           void (async () => {
             try {
-              this.callbacks.onPresence?.(await decryptBlob(this.key, blob));
+              this.callbacks.onPresence?.(await decryptBlob(this.key, blob), viewer);
             } catch {
               /* wrong-key or corrupt presence frame — drop */
             }
@@ -1740,8 +1749,12 @@ export class CollabSession {
   // --- presence ---
 
   async sendPresence(blob: Uint8Array, opts: { keepalive?: boolean } = {}): Promise<void> {
-    // Spectators are a count, not cursors (and the relay would 403).
-    if (this.ended || this.readOnly) return;
+    if (this.ended) return;
+    // Spectators announce THAT they're here (the cursor layer sends them
+    // nothing else) where the relay takes it. Upstream relays refuse a
+    // view pass's presence (403): there a spectator stays a count, and
+    // stops posting for good.
+    if (this.readOnly && this.spectatorPresence === 'refused') return;
     // Presence frames are DELIVERED over the stream, so while it isn't
     // connected nobody can see ours (and we can't see theirs) — posting
     // is pure waste, and on a dead credential it was the bulk of an
@@ -1750,8 +1763,16 @@ export class CollabSession {
     if (!this.stream?.connected) return;
     try {
       await this.client.postPresence(this.roomId, await encryptBlob(this.key, blob), this.streamSid, opts);
-    } catch {
-      /* presence is fire-and-forget */
+      if (this.readOnly && this.spectatorPresence !== 'ok') {
+        this.spectatorPresence = 'ok';
+        this.callbacks.onSpectatorPresence?.('ok');
+      }
+    } catch (err) {
+      // Otherwise fire-and-forget.
+      if (this.readOnly && err instanceof RoomsError && err.status === 403) {
+        this.spectatorPresence = 'refused';
+        this.callbacks.onSpectatorPresence?.('refused');
+      }
     }
   }
 

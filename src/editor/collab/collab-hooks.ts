@@ -238,12 +238,15 @@ export interface CollabCopresence {
   role: SessionRole;
   connected: boolean;
   queued: number;
-  peers: { name: string; color: string; self: boolean; remote?: boolean; server?: string }[];
+  peers: { name: string; color: string; self: boolean; remote?: boolean; server?: string; spectator?: boolean }[];
   /** Classes for the status ring around your own dot (session-chip.ts
    *  ringClasses); absent from older providers. */
   ring?: string;
-  /** Spectators in the room (they post no cursor, so they are a count). */
+  /** Spectators in the room, per the relay (listed or not). */
   watchers: number;
+  /** A spectator whose relay won't carry its presence: the footer shows
+   *  the minimal gray form. */
+  minimal?: boolean;
 }
 
 let copresenceProvider: ((uid: string) => CollabCopresence | null) | null = null;

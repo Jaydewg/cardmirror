@@ -24,6 +24,11 @@
  * queued edits = the ring rotates (dashed) in whatever color applies;
  * read-only = a yellow pip on the ring; joined from another server = the
  * ring is a rounded square.
+ *
+ * Spectators (view codes) who announce themselves get a distinct pip
+ * beside their dot. A spectator whose relay won't carry its presence
+ * sees the MINIMAL chip instead: a light-gray line broken by the basics
+ * (people, spectators, connection) — it can't see or be seen as anyone.
  */
 
 import { relayBaseUrl } from './collab-relay.js';
@@ -47,6 +52,8 @@ export interface ChipPeer {
   server?: string;
   /** A partner admitted read-only. */
   readOnly?: boolean;
+  /** Joined with a view code (drawn with the spectator pip). */
+  spectator?: boolean;
 }
 
 export interface ChipSessionModel {
@@ -60,9 +67,11 @@ export interface ChipSessionModel {
   pendingJoins: number;
   /** You joined with a view code (a spectator: no edits, no cursor). */
   spectator?: boolean;
-  /** Spectators in the room, per the relay (they post no cursor, so
-   *  they are a count, not dots). */
+  /** Spectators in the room, per the relay — listed or not. */
   watchers?: number;
+  /** You're a spectator and the relay won't carry your presence: the
+   *  minimal chip / panel. */
+  minimal?: boolean;
 }
 
 const LINK_TEXT: Record<ChipLink, string> = {
@@ -97,6 +106,25 @@ export function chipStateDetail(link: ChipLink): string {
   return LINK_DETAIL[link];
 }
 
+/** Partners on the roster who aren't spectators (self excluded). */
+function editorsSeen(m: Pick<ChipSessionModel, 'peers'>): number {
+  return m.peers.filter((p) => !p.self && !p.spectator).length;
+}
+
+/** The minimal chip's segments: what a spectator without presence can
+ *  still know — who's editing (from their announcements), how many are
+ *  watching (the relay's count, self included), and the connection. */
+export function minimalChipParts(m: Pick<ChipSessionModel, 'link' | 'peers' | 'watchers'>): string[] {
+  const watchers = m.watchers ?? 0;
+  const people = editorsSeen(m) + watchers;
+  return [
+    'Watching',
+    `${people} ${people === 1 ? 'person' : 'people'}`,
+    `${watchers} spectating`,
+    m.link === 'streaming' ? 'Online' : m.link === 'degraded' ? 'Polling' : 'Offline',
+  ];
+}
+
 /** Ring classes for your own dot (shared with the three-pane footers). */
 export function ringClasses(
   m: Pick<ChipSessionModel, 'link' | 'queued' | 'readOnly' | 'remote'> & Partial<Pick<ChipSessionModel, 'spectator'>>,
@@ -122,7 +150,9 @@ export function renderPresenceInto(
   const ring = self ? ringClasses(self) : '';
   const sig =
     `${ring}\n` +
-    peers.map((p) => `${p.name}\u0000${p.color}\u0000${p.self ? 1 : 0}\u0000${p.server ?? ''}\u0000${p.readOnly ? 1 : 0}`).join('\n');
+    peers
+      .map((p) => `${p.name}\u0000${p.color}\u0000${p.self ? 1 : 0}\u0000${p.server ?? ''}\u0000${p.readOnly ? 1 : 0}\u0000${p.spectator ? 1 : 0}`)
+      .join('\n');
   if (container.dataset['sig'] === sig) return;
   container.dataset['sig'] = sig;
   container.replaceChildren();
@@ -131,11 +161,13 @@ export function renderPresenceInto(
     dot.className =
       'pmd-collab-presence-dot' +
       (p.self ? ' pmd-collab-presence-dot-self' : '') +
-      (p.remote ? ' pmd-collab-presence-dot-remote' : '');
+      (p.remote ? ' pmd-collab-presence-dot-remote' : '') +
+      (p.spectator ? ' pmd-collab-presence-dot-spectator' : '');
     dot.style.background = p.color;
+    const role = p.spectator ? ' (spectating)' : p.readOnly ? ' (read-only)' : '';
     dot.title = p.self
-      ? `${p.name} (you)`
-      : `${p.name}${p.remote && p.server ? ` — from ${p.server}` : ''}${p.readOnly ? ' (read-only)' : ''}`;
+      ? `${p.name} (you)${p.spectator ? ' — spectating' : ''}`
+      : `${p.name}${p.remote && p.server ? ` — from ${p.server}` : ''}${role}`;
     if (p.self && self) {
       const wrap = document.createElement('span');
       wrap.className = ring;
@@ -219,6 +251,31 @@ function render(): void {
     return;
   }
   const m = sessionModel;
+  chip.classList.toggle('pmd-collab-chip-minimal', !!m?.minimal);
+  if (m?.minimal) {
+    chip.hidden = false;
+    setMode(chip, 'session');
+    const segs = minimalChipParts(m);
+    const line = (): HTMLElement => {
+      const l = document.createElement('span');
+      l.className = 'pmd-collab-chip-line';
+      return l;
+    };
+    const kids: HTMLElement[] = [line()];
+    for (const text of segs) {
+      const seg = document.createElement('span');
+      seg.className = 'pmd-collab-chip-seg';
+      seg.textContent = text;
+      kids.push(seg, line());
+    }
+    label.replaceChildren(...kids);
+    chip.title = `${segs.join(' · ')}. Your relay doesn't share who's watching. Click for details.`;
+    dots.replaceChildren();
+    delete dots.dataset['sig'];
+    badge.hidden = true;
+    chip.setAttribute('role', 'button');
+    return;
+  }
   if (m) {
     chip.hidden = false;
     setMode(chip, 'session');

@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   chipStateText,
+  minimalChipParts,
   markChipEnded,
   renderChipSession,
   ringClasses,
@@ -109,6 +110,38 @@ describe('session chip', () => {
   });
 });
 
+describe('spectators on the chip', () => {
+  it('a listed spectator gets the spectator pip and says so on hover', () => {
+    renderChipSession({
+      ...base,
+      peers: [base.peers[0]!, { name: 'Sam', color: 'rgb(0, 0, 0)', self: false, spectator: true }],
+    });
+    const dot = chip().querySelector<HTMLElement>('.pmd-collab-chip-dots > .pmd-collab-presence-dot')!;
+    expect(dot.classList.contains('pmd-collab-presence-dot-spectator')).toBe(true);
+    expect(dot.title).toBe('Sam (spectating)');
+  });
+
+  it('a spectator the relay won\'t list sees the minimal line instead', () => {
+    const m: ChipSessionModel = {
+      ...base,
+      spectator: true,
+      minimal: true,
+      watchers: 3,
+      peers: [base.peers[0]!, base.peers[1]!, { name: 'Ed', color: 'rgb(1, 1, 1)', self: false }],
+    };
+    expect(minimalChipParts(m)).toEqual(['Watching', '5 people', '3 spectating', 'Online']);
+    renderChipSession(m);
+    expect(chip().classList.contains('pmd-collab-chip-minimal')).toBe(true);
+    expect([...chip().querySelectorAll('.pmd-collab-chip-seg')].map((e) => e.textContent)).toEqual(minimalChipParts(m));
+    expect(chip().querySelectorAll('.pmd-collab-chip-line')).toHaveLength(5);
+    expect(chip().querySelectorAll('.pmd-collab-presence-dot')).toHaveLength(0);
+    expect(minimalChipParts({ ...m, link: 'reconnecting' })[3]).toBe('Offline');
+    // Back to a normal session: the minimal class goes away.
+    renderChipSession(base);
+    expect(chip().classList.contains('pmd-collab-chip-minimal')).toBe(false);
+  });
+});
+
 describe('session panel', () => {
   function fakeWatcher(rows: JoinRow[]): JoinRequestWatcher & { decide: ReturnType<typeof vi.fn>; defer: ReturnType<typeof vi.fn> } {
     return {
@@ -201,5 +234,88 @@ describe('session panel', () => {
     panel().querySelector<HTMLElement>('.pmd-collab-panel-split-toggle')!.click();
     panel().querySelector<HTMLElement>('.pmd-collab-panel-menu-item')!.click();
     expect(copy).toHaveBeenCalledWith('classic');
+  });
+
+  it('spectators: a count beside the header, listed ones tagged, unlisted ones in italics; no End for everyone', () => {
+    document.body.innerHTML = '<div id="collab-chip" class="status-segment" hidden></div>';
+    const leave = vi.fn();
+    toggleSessionPanel(chip(), {
+      model: () => ({
+        ...base,
+        spectator: true,
+        watchers: 3,
+        peers: [{ ...base.peers[0]!, spectator: true }, base.peers[1]!, { name: 'Sam', color: 'rgb(9, 9, 9)', self: false, spectator: true }],
+      }),
+      role: 'spectator',
+      homeLabel: null,
+      watcher: null,
+      codes: () => ({ current: 'cmview1.x.k', classic: 'cmview1.x.k', cross: null }),
+      copy: vi.fn(),
+      leave,
+      // Offered by mistake: the panel must still not show it to a spectator.
+      endForEveryone: vi.fn(),
+    });
+    const panel = document.querySelector<HTMLElement>('.pmd-collab-panel')!;
+    const head = panel.querySelector<HTMLElement>('.pmd-collab-panel-section')!;
+    expect(head.textContent).toBe('In this session · 1 · 3 spectating');
+    expect(panel.querySelectorAll('.pmd-collab-panel-tag-spectator')).toHaveLength(2);
+    expect(panel.querySelector('.pmd-collab-panel-unlisted')!.textContent).toBe(
+      '1 more person is spectating without being listed',
+    );
+    const labels = [...panel.querySelectorAll('button')].map((b) => b.textContent);
+    expect(labels).toContain('Copy view code');
+    expect(labels).toContain('Stop watching');
+    expect(labels).not.toContain('▾'); // no Leave ▾ → End for everyone
+    expect(panel.textContent).not.toContain('End for everyone');
+  });
+
+  it('the host gets End session ▾ → Leave session (keeps it running); End stays the main action', () => {
+    document.body.innerHTML = '<div id="collab-chip" class="status-segment" hidden></div>';
+    const leave = vi.fn();
+    const leaveKeepRunning = vi.fn();
+    toggleSessionPanel(chip(), {
+      model: () => base,
+      role: 'host',
+      homeLabel: null,
+      watcher: null,
+      codes: () => ({ current: 'cmshare2.x.k.1.0.0', classic: 'cmshare2.x.k.1.0.0', cross: null }),
+      copy: vi.fn(),
+      leave,
+      leaveKeepRunning,
+    });
+    const panel = (): HTMLElement => document.querySelector<HTMLElement>('.pmd-collab-panel:not(.pmd-collab-panel-closing)')!;
+    const leaveSplit = panel().querySelector<HTMLElement>('.pmd-collab-panel-leave')!;
+    expect(leaveSplit.firstElementChild!.textContent).toBe('End session');
+    const toggle = leaveSplit.querySelector<HTMLElement>('.pmd-collab-panel-split-toggle')!;
+    expect(toggle.getAttribute('aria-label')).toBe('Leave without ending');
+    toggle.click();
+    const item = panel().querySelector<HTMLElement>('.pmd-collab-panel-menu-item')!;
+    expect(item.querySelector('.pmd-collab-panel-menu-title')!.textContent).toBe('Leave session');
+    expect(item.querySelector('.pmd-collab-panel-menu-danger')).toBeNull(); // leaving isn't destructive
+    expect(panel().textContent).not.toContain('End for everyone');
+    item.click();
+    expect(leaveKeepRunning).toHaveBeenCalled();
+    expect(leave).not.toHaveBeenCalled();
+  });
+
+  it('a spectator the relay won\'t list gets the minimal panel', () => {
+    document.body.innerHTML = '<div id="collab-chip" class="status-segment" hidden></div>';
+    const leave = vi.fn();
+    toggleSessionPanel(chip(), {
+      model: () => ({ ...base, spectator: true, minimal: true, watchers: 2 }),
+      role: 'spectator',
+      homeLabel: null,
+      watcher: null,
+      codes: () => ({ current: 'cmview1.x.k', classic: 'cmview1.x.k', cross: null }),
+      copy: vi.fn(),
+      leave,
+    });
+    const panel = document.querySelector<HTMLElement>('.pmd-collab-panel')!;
+    expect(panel.querySelector('.pmd-collab-panel-status')!.textContent).toBe('Watching · 3 people · 2 spectating · Online');
+    expect(panel.querySelector('.pmd-collab-panel-section')).toBeNull(); // nobody listed
+    const buttons = [...panel.querySelectorAll('button')];
+    expect(buttons.map((b) => b.textContent)).toEqual(['Stop watching']);
+    buttons[0]!.click();
+    expect(leave).toHaveBeenCalled();
   });
 });

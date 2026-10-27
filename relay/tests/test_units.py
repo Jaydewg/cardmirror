@@ -86,3 +86,36 @@ def test_peer_policy():
     open_cfg = server.FederationConfig(enabled=True, url="https://me.example/relay")
     assert open_cfg.permits("https://anyone.example/relay")
     assert not server.FederationConfig().permits("https://anyone.example/relay")  # off
+
+
+# ── room passes ──
+
+
+def test_room_pass_round_trip(monkeypatch):
+    monkeypatch.setenv("RELAY_TOKEN", "tok")
+    p = server.mint_room_pass("ab" * 16, "v", now=1000)
+    assert p.startswith("cmrp1." + "ab" * 16 + ".v.")
+    assert server.parse_room_pass(p, now=1001) == ("ab" * 16, "view")
+    assert server.parse_room_pass(server.mint_room_pass("cd" * 16, "g", now=0), now=1) == ("cd" * 16, "guest")
+
+
+def test_room_pass_expires(monkeypatch):
+    monkeypatch.setenv("RELAY_TOKEN", "tok")
+    p = server.mint_room_pass("ab" * 16, "g", now=0)
+    assert server.parse_room_pass(p, now=server.LIMITS.room_pass_ttl_seconds + 1) is None
+
+
+def test_room_pass_rejects_tampering_and_other_keys(monkeypatch):
+    monkeypatch.setenv("RELAY_TOKEN", "tok")
+    p = server.mint_room_pass("ab" * 16, "v", now=0)
+    assert server.parse_room_pass(p.replace(".v.", ".g."), now=1) is None
+    assert server.parse_room_pass(p[:-2] + "AA", now=1) is None
+    assert server.parse_room_pass("cmrp1.x.v.1", now=0) is None
+    assert server.parse_room_pass("tok", now=0) is None
+    # A new relay token (or RELAY_PASS_SECRET) revokes every pass.
+    monkeypatch.setenv("RELAY_TOKEN", "rotated")
+    assert server.parse_room_pass(p, now=1) is None
+    monkeypatch.setenv("RELAY_PASS_SECRET", "separate")
+    q = server.mint_room_pass("ab" * 16, "v", now=0)
+    monkeypatch.setenv("RELAY_TOKEN", "rotated-again")
+    assert server.parse_room_pass(q, now=1) == ("ab" * 16, "view")

@@ -582,10 +582,13 @@ export class SendPillController {
     const cross = collabActiveCrossServerCode();
     const out: { title: string; code: string; hint: string; isDefault: boolean }[] = [];
     if (classic) {
+      const view = classic.startsWith('cmview');
       out.push({
-        title: classic.startsWith('cmshare2') ? 'Classic code (cmshare2)' : 'Classic code (cmshare1)',
+        title: view ? 'View code (cmview1)' : classic.startsWith('cmshare2') ? 'Classic code (cmshare2)' : 'Classic code (cmshare1)',
         code: classic,
-        hint: 'For people on the session’s server — works with every CardMirror version',
+        hint: view
+          ? 'Whoever joins with it watches too — they can’t edit'
+          : 'For people on the session’s server — works with every CardMirror version',
         isDefault: classic === current,
       });
     }

@@ -5,6 +5,29 @@ changes in each release, written for users of the editor. For
 in-depth rationale and implementation context behind each entry,
 see `DETAILED_CHANGELOG.md`.
 
+## Unreleased — federation
+
+### Added
+
+- **Spectating on the self-hosted relay.** The relay that ships with
+  federation builds now supports view codes and view links, the
+  "· N watching" count, a separate spectator cap (100), and **watch
+  instead** when a session is full. Its editor cap goes from 10 to 30,
+  matching the official relay.
+
+- **See who's watching.** Spectators announce that they're in the
+  session (never their cursor). Their dots get a small purple diamond
+  pip, the session panel's header shows *In this session · 3 · 2
+  spectating*, and spectators who can't be listed appear as an italic
+  "N more spectating without being listed". Listed spectators get the
+  normal chip and panel, minus **End for everyone**. On a server that
+  doesn't pass their presence along (the official relay), a spectator
+  gets a pared-down light-gray chip and panel with just the basics.
+
+- **The host can leave without ending.** In the session panel, **End
+  session ▾** now holds **Leave session**: the session keeps going for
+  everyone else, and you rejoin it as the host from the Sessions list.
+
 ## 1.16.1-f — 2026-10-26
 
 A **pre-release** with server federation: everything in 1.16.1 (see its

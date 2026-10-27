@@ -229,6 +229,70 @@ describe('roster: who is here, independent of cursors', () => {
   }, 20_000);
 });
 
+describe('spectators: listed, never drawn', () => {
+  const roster = (ad: object): Uint8Array => {
+    const json = new TextEncoder().encode(JSON.stringify({ v: 1, ...ad }));
+    const out = new Uint8Array(json.length + 1);
+    out[0] = 0x03;
+    out.set(json, 1);
+    return out;
+  };
+
+  it('a spectator announces itself but sends no cursor or lease ad', async () => {
+    const { session } = await CollabSession.host({
+      pmDoc: simpleDoc('watched'),
+      client,
+      flushMs: 40,
+      minBackoffMs: 30,
+      maxBackoffMs: 60,
+    });
+    const sent: number[] = [];
+    const real = session.sendPresence.bind(session);
+    session.sendPresence = async (blob, opts) => {
+      sent.push(blob[0]!);
+      return real(blob, opts);
+    };
+    const cursors = installCursorPresence(session, () => view, () => ({ relay: null, readOnly: false, spectator: true }));
+    const view = mkView([...session.plugins(), ...cursors.plugins()]);
+    await settle();
+    session.start();
+    await sleep(100);
+    // Move the caret: an editor would ship a 0x01 cursor frame.
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 3)));
+    cursors.announce();
+    await sleep(300);
+    expect(sent).toContain(0x03);
+    expect(sent).not.toContain(0x01);
+    expect(sent).not.toContain(0x02);
+    cursors.dispose();
+    await session.stop();
+    view.destroy();
+  }, 15_000);
+
+  it("the relay's stamp marks a spectator whatever the frame claims; spectators can't run repairs", async () => {
+    const { session } = await CollabSession.host({
+      pmDoc: simpleDoc('watched'),
+      client,
+      flushMs: 40,
+      minBackoffMs: 30,
+      maxBackoffMs: 60,
+    });
+    const cursors = installCursorPresence(session, () => null);
+    cursors.applyRemote(roster({ peer: '11', name: 'Claims editor' }), true);
+    cursors.applyRemote(roster({ peer: '12', name: 'Says spectator', sp: true }));
+    cursors.applyRemote(roster({ peer: '13', name: 'Editor' }));
+    const byName = Object.fromEntries(cursors.presence().map((p) => [p.name, p.spectator]));
+    expect(byName).toMatchObject({ 'Claims editor': true, 'Says spectator': true, Editor: false });
+    expect(cursors.visiblePeers().sort()).toEqual(['13']);
+    // A relay-stamped cursor frame is dropped, never drawn.
+    cursors.applyRemote(new Uint8Array([0x01, 1, 2, 3]), true);
+    await sleep(100);
+    expect(cursors.presence().map((p) => p.peer).sort()).toEqual(['11', '12', '13', session.loroDoc.peerIdStr].sort());
+    cursors.dispose();
+    await session.stop();
+  });
+});
+
 describe('presence departure + reconnect re-broadcast (2026-09-01 review, PH-A10)', () => {
   it('farewell() removes this peer from partners immediately instead of after the 45s expiry', async () => {
     const { session: a, shareCode } = await CollabSession.host({

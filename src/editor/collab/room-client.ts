@@ -531,7 +531,9 @@ export interface RoomStreamCallbacks {
    *  is informational (a quick "am I behind?" check). */
   onHello: (lastSeq: number) => void;
   onUpdate: (update: RoomUpdate) => void;
-  onPresence: (blob: Uint8Array) => void;
+  /** `viewer`: the relay stamped the frame as a spectator's (`"v":1` —
+   *  its own word, unlike anything inside the encrypted blob). */
+  onPresence: (blob: Uint8Array, viewer: boolean) => void;
   /** Session ended (server tombstone or live `end` frame). Terminal. */
   onEnded: () => void;
   /** Room at participant capacity (409). Terminal. `viewPass` is the
@@ -803,11 +805,11 @@ export class RoomStream {
     }
     if (!dataText) return;
     try {
-      const frame = JSON.parse(dataText) as { t?: string; seq?: number; blob?: string; n?: number };
+      const frame = JSON.parse(dataText) as { t?: string; seq?: number; blob?: string; n?: number; v?: number };
       if (frame.t === 'u' && typeof frame.seq === 'number' && typeof frame.blob === 'string') {
         this.opts.callbacks.onUpdate({ seq: frame.seq, blob: base64ToBytes(frame.blob) });
       } else if (frame.t === 'p' && typeof frame.blob === 'string') {
-        this.opts.callbacks.onPresence(base64ToBytes(frame.blob));
+        this.opts.callbacks.onPresence(base64ToBytes(frame.blob), frame.v === 1);
       } else if (frame.t === 'w' && typeof frame.n === 'number') {
         this.opts.callbacks.onWatchers?.(frame.n);
       } else if (frame.t === 'end') {

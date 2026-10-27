@@ -12,13 +12,15 @@ A content-agnostic store-and-forward mailbox with live push:
 …plus durable ROOMS for collaboration sessions (opaque encrypted CRDT
 update logs with server-assigned delivery cursors):
 
-  POST   /relay/rooms                       create → {roomId}
+  POST   /relay/rooms                       create → {roomId, guestPass?, viewPass?}
   POST   /relay/rooms/{id}/updates          append opaque blob → {seq}
   GET    /relay/rooms/{id}/updates?after=N  snapshot (if N predates it) + tail
-  GET    /relay/rooms/{id}/stream           SSE: hello{lastSeq}, update/presence frames
+  GET    /relay/rooms/{id}/stream           SSE: hello{lastSeq, watchers}, update/presence/w frames
   POST   /relay/rooms/{id}/snapshot         {blob, coversThroughSeq} → truncates ≤ seq
   POST   /relay/rooms/{id}/presence         ephemeral fan-out, never stored
   DELETE /relay/rooms/{id}                  end session (tombstone → 410)
+  GET    /relay/rooms/{id}/guest-pass       mint an edit pass (edit credentials)
+  GET    /relay/rooms/{id}/view-pass        mint a view (spectator) pass (any credential)
 
 …plus, only when the operator turns it on, FEDERATION with other relays
 (card sharing and co-editing across servers; see FEDERATION.md for the
@@ -71,8 +73,15 @@ Rooms design notes:
     garbage-collected after ROOM_IDLE_GC — generous by design: a
     session legitimately spans a travel day + tournament weekend with
     long fully-offline gaps.
-  - At most MAX_STREAMS_PER_ROOM concurrent streams per room (409 on
-    the next), which is also the participant ceiling.
+  - At most MAX_STREAMS_PER_ROOM concurrent EDITOR streams per room
+    (409 on the next), which is also the participant ceiling. Spectators
+    (view passes) count against MAX_VIEWERS_PER_ROOM instead, and a
+    refused editor's 409 carries a view pass ("watch instead").
+  - Room passes: `guestPass` (edit) and `viewPass` (read-only) are
+    bearer credentials for ONE room, accepted on that room's routes in
+    place of RELAY_TOKEN (see "Room passes" below). They let someone
+    without the relay token join from a link, and make spectating
+    relay-enforced: a view pass can read and stream, never write.
 
 PRIVACY: the card payload is end-to-end encrypted by the CardMirror
 client. This server stores the bundle OPAQUELY (the `body` column) and
@@ -93,6 +102,12 @@ Env:
   RELAY_CORS_ORIGINS  optional (default "*") — comma-separated allowed
                  origins for browser/PWA collab clients. "*" is safe
                  here (the auth is a bearer header, not a cookie).
+  RELAY_GUEST_PASS optional (default on) — "0" / "off" turns room passes
+                 off: no guest or view passes are minted or accepted,
+                 so join links and spectating don't work.
+  RELAY_PASS_SECRET optional — signing key for room passes. Defaults to
+                 one derived from RELAY_TOKEN, so changing the token
+                 also invalidates every outstanding pass.
 
 Federation env (all optional; federation is OFF unless RELAY_FEDERATION
 is on, and then nothing below changes behavior for non-federating apps):
@@ -382,7 +397,9 @@ class Limits:
     room_cap_bytes: int = field(default=200 * 1024 * 1024, metadata=_public("roomCapBytes"))  # updates + snapshot, raw
     max_updates_per_page: int = field(default=200, metadata=_public("maxUpdatesPerPage"))
     max_page_bytes: int = field(default=32 * 1024 * 1024, metadata=_public("maxPageBytes"))  # base64 incl. snapshot; ≥ 1 update
-    max_streams_per_room: int = field(default=10, metadata=_public("maxStreamsPerRoom"))  # participant ceiling
+    max_streams_per_room: int = field(default=30, metadata=_public("maxStreamsPerRoom"))  # editor ceiling
+    max_viewers_per_room: int = field(default=100, metadata=_public("maxViewersPerRoom"))  # spectator ceiling
+    room_pass_ttl_seconds: int = 7 * 86400              # guest / view pass lifetime
     # Must exceed travel day + tournament weekend.
     room_idle_gc_seconds: int = field(default=7 * 86400, metadata=_public("roomIdleGcSeconds"))
 
@@ -619,9 +636,9 @@ class _Outbox:
     missed. Droppable frames (presence) are shed instead, since there is
     nothing to recover. Loop-owned, like the registries below."""
 
-    __slots__ = ("_frames", "_bytes", "_wake", "overflowed", "fed_request")
+    __slots__ = ("_frames", "_bytes", "_wake", "overflowed", "fed_request", "viewer", "gone")
 
-    def __init__(self, fed_request: Optional[str] = None) -> None:
+    def __init__(self, fed_request: Optional[str] = None, viewer: bool = False) -> None:
         self._frames: deque[str] = deque()
         self._bytes = 0
         self._wake = asyncio.Event()
@@ -629,6 +646,15 @@ class _Outbox:
         # Room streams only: the join-request id when this stream is a
         # remote participant's (proxied by their relay); None = local.
         self.fed_request = fed_request
+        # Room streams only: a spectator's (view pass). Counts against the
+        # viewer cap, not the editor cap, and toward the watcher count.
+        self.viewer = viewer
+        # The client went away (see _close_on_disconnect); get() returns.
+        self.gone = False
+
+    def close(self) -> None:
+        self.gone = True
+        self._wake.set()
 
     def put(self, frame: str, droppable: bool = False) -> None:
         if self.overflowed:
@@ -645,7 +671,10 @@ class _Outbox:
         self._wake.set()
 
     async def get(self, timeout: float) -> Optional[str]:
-        """Next frame, or None on timeout / overflow (check `overflowed`)."""
+        """Next frame, or None on timeout / overflow / close (check
+        `overflowed` and `gone`)."""
+        if self.gone:
+            return None
         if not self._frames:
             self._wake.clear()
             try:
@@ -711,6 +740,30 @@ def _drop_room_stream(room_id: str, box: _Outbox) -> None:
         peers.pop(box, None)
         if not peers:
             _room_streams.pop(room_id, None)
+
+
+async def _close_on_disconnect(request: Request, box: _Outbox) -> None:
+    """Close `box` the moment its client disconnects. Starlette's
+    StreamingResponse only notices a dropped client on its next write —
+    up to a heartbeat later — which kept a departed spectator in the
+    watcher count, and a departed editor in its seat, for ~25 s."""
+    try:
+        while (await request.receive())["type"] != "http.disconnect":
+            pass
+    except Exception:
+        pass
+    box.close()
+
+
+def _watcher_count(room_id: str) -> int:
+    """Spectator streams open in a room. Runs ON the loop."""
+    return sum(1 for box in _room_streams.get(room_id, {}) if box.viewer)
+
+
+def _announce_watchers(room_id: str) -> None:
+    """Runs ON the loop: tell every stream in the room how many are
+    watching (`w` frame), after a spectator connects or leaves."""
+    _push_to_room(room_id, _sse({"t": "w", "n": _watcher_count(room_id)}))
 
 
 # Per-room write serialization. Room writes (append / snapshot / delete)
@@ -975,6 +1028,107 @@ def require_relay_token(authorization: Optional[str] = Header(None)) -> None:
         raise HTTPException(401, "Missing bearer token")
     if not hmac.compare_digest(authorization[len("Bearer "):], expected): #hmac.compare_digest used to defend against timing-based attacks
         raise HTTPException(401, "Invalid relay token")
+
+
+# ── Room passes (guest + view) ──
+#
+# A room pass is a bearer credential for ONE room, accepted on that
+# room's routes in place of RELAY_TOKEN:
+#   guest (`g`) — edits: everything an app with the relay token may do in
+#                 the room except deciding cross-server join requests;
+#   view  (`v`) — spectates: reads and streams; every write is 403. Its
+#                 stream counts against the viewer cap and the watcher
+#                 count, and its presence frames reach others stamped
+#                 `"v":1` so they can tell a spectator from an editor.
+# Stateless: `cmrp1.<roomId>.<g|v>.<expiry epoch s>.<hmac>`, signed with
+# RELAY_PASS_SECRET or a key derived from RELAY_TOKEN, so nothing is
+# stored and a token change revokes every pass. Expiry is fixed at mint
+# (room_pass_ttl_seconds); a tombstoned or deleted room refuses passes
+# the same way it refuses the relay token (410 / 404).
+
+ROOM_PASSES = os.getenv("RELAY_GUEST_PASS", "").strip().lower() not in ("0", "false", "off", "no")
+_PASS_PREFIX = "cmrp1"
+_PASS_ROLES = {"g": "guest", "v": "view"}
+
+
+def _pass_key() -> bytes:
+    secret = os.getenv("RELAY_PASS_SECRET", "") or os.getenv("RELAY_TOKEN", "")
+    return hmac.new(secret.encode(), b"cardmirror room pass v1", hashlib.sha256).digest()
+
+
+def _pass_sig(body: str) -> str:
+    mac = hmac.new(_pass_key(), body.encode(), hashlib.sha256).digest()[:24]
+    return base64.urlsafe_b64encode(mac).decode("ascii").rstrip("=")
+
+
+def mint_room_pass(room_id: str, role: str, now: Optional[float] = None) -> str:
+    """`role`: "g" (guest / edit) or "v" (view)."""
+    exp = int((time.time() if now is None else now) + LIMITS.room_pass_ttl_seconds)
+    body = f"{_PASS_PREFIX}.{room_id}.{role}.{exp}"
+    return f"{body}.{_pass_sig(body)}"
+
+
+def parse_room_pass(token: str, now: Optional[float] = None) -> Optional[tuple[str, str]]:
+    """(room_id, "guest" | "view") for a valid, unexpired pass, else None."""
+    parts = token.split(".")
+    if len(parts) != 5 or parts[0] != _PASS_PREFIX or parts[2] not in _PASS_ROLES:
+        return None
+    body = ".".join(parts[:4])
+    if not hmac.compare_digest(parts[4], _pass_sig(body)):
+        return None
+    try:
+        exp = int(parts[3])
+    except ValueError:
+        return None
+    if exp < (time.time() if now is None else now):
+        return None
+    return parts[1], _PASS_ROLES[parts[2]]
+
+
+@dataclass(frozen=True)
+class RoomCred:
+    """Who is calling a room route: the relay token, or a pass for it."""
+
+    kind: str  # "relay" | "guest" | "view"
+
+    @property
+    def viewer(self) -> bool:
+        return self.kind == "view"
+
+
+def room_auth(room_id: str, authorization: Optional[str] = Header(None)) -> RoomCred:
+    """Room routes: the relay token, or a pass for THIS room (a pass for
+    any other room is 401, exactly like a wrong token)."""
+    expected = os.getenv("RELAY_TOKEN", "")
+    if not expected:
+        raise HTTPException(500, "RELAY_TOKEN not configured on server")
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Missing bearer token")
+    token = authorization[len("Bearer "):]
+    if hmac.compare_digest(token, expected):
+        return RoomCred("relay")
+    if ROOM_PASSES:
+        parsed = parse_room_pass(token)
+        if parsed is not None and parsed[0] == room_id:
+            return RoomCred(parsed[1])
+    raise HTTPException(401, "Invalid relay token")
+
+
+def room_write_auth(cred: RoomCred = Depends(room_auth)) -> RoomCred:
+    """Room writes: a view pass is refused (403), every edit credential
+    passes."""
+    if cred.viewer:
+        raise HTTPException(403, "view-only")
+    return cred
+
+
+if ROOM_PASSES:
+    feature("rooms.guestPasses")
+    feature("rooms.viewPasses")
+    # Spectators may post presence (that they're here — the app sends no
+    # cursor for them); upstream's relay refuses it (403). Additive: an
+    # app only posts it where this is listed.
+    feature("rooms.spectatorPresence")
 
 
 def _epoch_ms(dt: datetime) -> int:
@@ -1328,13 +1482,37 @@ def create_room(db: Session = Depends(get_db)) -> JSONResponse:
     # `home` (federation only, additive): the room's home relay — what a
     # cross-server share code names (FEDERATION.md §2.1).
     body = {"roomId": room_id, **({"home": FEDERATION.url} if FEDERATION.enabled else {})}
+    if ROOM_PASSES:
+        body["guestPass"] = mint_room_pass(room_id, "g")
+        body["viewPass"] = mint_room_pass(room_id, "v")
     return JSONResponse(body, status_code=201)
+
+
+@app.get("/relay/rooms/{room_id}/guest-pass", dependencies=[Depends(room_write_auth)])
+def get_guest_pass(room_id: str, db: Session = Depends(get_db)) -> JSONResponse:
+    """A fresh edit pass (the host's resume path re-mints its join link).
+    Edit credentials only — a view pass must never buy an edit seat."""
+    if not ROOM_PASSES:
+        raise HTTPException(404, "Not Found")
+    _room_or_error(db, room_id)
+    return JSONResponse({"guestPass": mint_room_pass(room_id, "g")})
+
+
+@app.get("/relay/rooms/{room_id}/view-pass", dependencies=[Depends(room_auth)])
+def get_view_pass(room_id: str, db: Session = Depends(get_db)) -> JSONResponse:
+    """A fresh view pass. Any room credential may mint one, so every
+    participant — spectators included — can hand out view links, and a
+    desktop app can swap its own token for a pass when it spectates."""
+    if not ROOM_PASSES:
+        raise HTTPException(404, "Not Found")
+    _room_or_error(db, room_id)
+    return JSONResponse({"viewPass": mint_room_pass(room_id, "v")})
 
 
 @app.post(
     "/relay/rooms/{room_id}/updates",
     status_code=202,
-    dependencies=[Depends(require_relay_token)],
+    dependencies=[Depends(room_write_auth)],
 )
 def post_room_update(
     room_id: str,
@@ -1369,7 +1547,7 @@ feature("rooms.byteBudgetPages")
 feature("rooms.conditionalSnapshot")
 
 
-@app.get("/relay/rooms/{room_id}/updates", dependencies=[Depends(require_relay_token)])
+@app.get("/relay/rooms/{room_id}/updates", dependencies=[Depends(room_auth)])
 def get_room_updates(
     request: Request,
     room_id: str,
@@ -1436,7 +1614,7 @@ def get_room_updates(
 @app.post(
     "/relay/rooms/{room_id}/snapshot",
     status_code=204,
-    dependencies=[Depends(require_relay_token)],
+    dependencies=[Depends(room_write_auth)],
 )
 def post_room_snapshot(
     room_id: str,
@@ -1485,16 +1663,29 @@ def post_room_snapshot(
 feature("rooms.presenceSid")
 
 
-@app.post(
-    "/relay/rooms/{room_id}/presence",
-    status_code=202,
-    dependencies=[Depends(require_relay_token)],
-)
+@app.post("/relay/rooms/{room_id}/presence", status_code=202)
+async def post_local_room_presence(
+    room_id: str,
+    request: Request,
+    sender: Optional[str] = Query(None, alias="from", max_length=64),
+    cred: RoomCred = Depends(room_auth),
+) -> JSONResponse:
+    """Local participants and spectators. A spectator's frames go out
+    stamped `"v":1` — the relay's word, which a client can't forge."""
+    return await _fan_out_presence(room_id, request, sender, viewer=cred.viewer)
+
+
 async def post_room_presence(
     room_id: str,
     request: Request,
     sender: Optional[str] = Query(None, alias="from", max_length=64),
 ) -> JSONResponse:
+    """Remote (federated) participants' presence — registered with peer
+    auth in _register_federation. Never a spectator."""
+    return await _fan_out_presence(room_id, request, sender, viewer=False)
+
+
+async def _fan_out_presence(room_id: str, request: Request, sender: Optional[str], viewer: bool) -> JSONResponse:
     """Ephemeral fan-out only — never stored, never touches the DB (this
     is the hot path at cursor-move rates). An unknown room simply has no
     open streams, so the frame goes nowhere. Shed (not overflowed) at a
@@ -1505,7 +1696,8 @@ async def post_room_presence(
     if len(raw) > LIMITS.max_presence_bytes:
         raise HTTPException(413, "presence too large")
     b64 = base64.b64encode(raw).decode("ascii")
-    _push_to_room(room_id, _sse({"t": "p", "blob": b64}), skip_sid=sender, droppable=True)
+    frame = {"t": "p", "blob": b64, **({"v": 1} if viewer else {})}
+    _push_to_room(room_id, _sse(frame), skip_sid=sender, droppable=True)
     return JSONResponse({}, status_code=202)
 
 
@@ -1523,46 +1715,65 @@ def _open_room_stream(room_id: str) -> int:
         db.close()
 
 
-@app.get("/relay/rooms/{room_id}/stream", dependencies=[Depends(require_relay_token)])
+@app.get("/relay/rooms/{room_id}/stream")
 async def stream_room(
     request: Request,
     room_id: str,
     sid: Optional[str] = Query(None, max_length=64),
-) -> StreamingResponse:
-    """SSE: `event: hello` with the current cursor, then update/presence
-    frames. The participant cap is enforced here — holding a stream IS
-    being in the room."""
-    return await _room_stream_response(request, room_id, sid)
+    cred: RoomCred = Depends(room_auth),
+) -> Response:
+    """SSE: `event: hello` with the current cursor and watcher count, then
+    update/presence/`w` frames. The caps are enforced here — holding a
+    stream IS being in the room (a view pass: watching it)."""
+    return await _room_stream_response(request, room_id, sid, viewer=cred.viewer)
 
 
 async def _room_stream_response(
-    request: Request, room_id: str, sid: Optional[str], fed_request: Optional[str] = None
-) -> StreamingResponse:
-    """The room stream, for a local participant (fed_request None) or a
-    remote one whose relay proxies it (fed_request = their join-request
-    id: their stream also receives access changes, and closes on a
-    revocation)."""
+    request: Request,
+    room_id: str,
+    sid: Optional[str],
+    fed_request: Optional[str] = None,
+    viewer: bool = False,
+) -> Response:
+    """The room stream, for a local participant (fed_request None), a
+    local spectator (viewer), or a remote participant whose relay proxies
+    it (fed_request = their join-request id: their stream also receives
+    access changes, and closes on a revocation)."""
     # Check-and-register with no await in between, so concurrent connects
     # cannot both take the last slot. Registering BEFORE reading lastSeq
     # also means an update committed during connect is either covered by
     # hello.lastSeq or buffered in the outbox — never neither.
-    if len(_room_streams.get(room_id, {})) >= LIMITS.max_streams_per_room:
-        raise HTTPException(409, "room is full")
-    box = _Outbox(fed_request)
+    open_now = _room_streams.get(room_id, {})
+    if viewer:
+        if sum(1 for b in open_now if b.viewer) >= LIMITS.max_viewers_per_room:
+            raise HTTPException(409, "room is full")
+    elif sum(1 for b in open_now if not b.viewer) >= LIMITS.max_streams_per_room:
+        # "Watch instead": a refused LOCAL editor gets a view pass. A remote
+        # one doesn't — its app talks to this room through its own relay,
+        # where a pass for this one means nothing.
+        body: dict = {"detail": "room is full"}
+        if ROOM_PASSES and fed_request is None:
+            body["viewPass"] = mint_room_pass(room_id, "v")
+        return JSONResponse(body, status_code=409)
+    box = _Outbox(fed_request, viewer=viewer)
     _room_streams.setdefault(room_id, {})[box] = sid
     try:
         last_seq = await run_in_threadpool(_open_room_stream, room_id)
     except BaseException:
         _drop_room_stream(room_id, box)
         raise
+    if viewer:
+        _announce_watchers(room_id)
 
     async def gen() -> AsyncIterator[str]:
+        departed = asyncio.create_task(_close_on_disconnect(request, box))
         try:
-            yield f'event: hello\ndata: {{"lastSeq":{last_seq}}}\n\n'
+            hello = json.dumps({"lastSeq": last_seq, "watchers": _watcher_count(room_id)}, separators=(",", ":"))
+            yield f"event: hello\ndata: {hello}\n\n"
             while True:
-                if await request.is_disconnected():
-                    return
                 frame = await box.get(LIMITS.heartbeat_seconds)
+                if box.gone:
+                    return
                 if box.overflowed:
                     # Plain close, NOT an end frame: the client reconnects
                     # and catches up via GET ?after=.
@@ -1575,7 +1786,10 @@ async def _room_stream_response(
                 if frame == _END_FRAME or frame == _REVOKED_FRAME:
                     return
         finally:
+            departed.cancel()
             _drop_room_stream(room_id, box)
+            if viewer:
+                _announce_watchers(room_id)
 
     return StreamingResponse(
         gen(),
@@ -1587,7 +1801,7 @@ async def _room_stream_response(
 @app.delete(
     "/relay/rooms/{room_id}",
     status_code=204,
-    dependencies=[Depends(require_relay_token)],
+    dependencies=[Depends(room_write_auth)],
 )
 def delete_room(room_id: str, db: Session = Depends(get_db)) -> Response:
     with _room_lock(room_id):

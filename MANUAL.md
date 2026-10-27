@@ -1729,6 +1729,29 @@ view invite can never turn into an editing seat by accident. View-only
 is a courtesy gate for trusted viewers, not a secrecy boundary — a
 spectator holds the same document key as everyone in the room.
 
+**Who's watching.** Where the session's server allows it (the
+self-hosted relay in federation builds does; CardMirror's official relay
+doesn't), spectators announce that they're there — never their cursor.
+The session panel then lists them among the people, each dot with a
+small purple diamond pip and a *spectating* tag, and the header reads
+*In this session · 3 · 2 spectating*. The spectating count is the
+server's, so spectators who can't announce themselves (older builds,
+or a server that doesn't pass it along) still count, and show as an
+italic line under the list: *1 more person is spectating without being
+listed*. A spectator who is listed sees the same chip and panel as
+everyone else, except that it can never **End for everyone**. A
+spectator whose server won't pass its presence along gets a pared-down
+chip instead: a thin light-gray line broken by the basics (people,
+spectators, online or not), and a panel with just those and **Stop
+watching**.
+
+**Leaving a session you started.** In the session panel, the host's
+**End session** ends it for everyone. Its **▾** holds **Leave session**,
+which leaves without ending: the session keeps going for everyone else,
+and you can rejoin it from the Sessions list on the Home screen — still
+as the host, so you can end it later. (Closing the document does the
+same.)
+
 **Interruptions:** joiners past the 30-seat cap get a "session is full"
 message and an offer to **watch instead** (join as a spectator); a seat
 opens when someone leaves. Offline edits queue and sync on reconnect

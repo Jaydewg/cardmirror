@@ -22,8 +22,15 @@
  *         cursors. `relay` = the relay the sender joined through (for
  *         the other-server marker — the sender's own claim), `ro` = it
  *         was admitted read-only (it can't run repairs, so the repair
- *         leader election skips it). Older builds ignore the type; they
- *         still appear through their cursors.
+ *         leader election skips it), `sp` = it's a spectator (also
+ *         skipped). Older builds ignore the type; they still appear
+ *         through their cursors.
+ *
+ * Spectators send the roster only — never a cursor or a lease ad: they
+ * are listed as here, not shown as a caret. They still SEE everyone
+ * else's cursors. A frame the relay stamps as a spectator's (`viewer`)
+ * marks its sender a spectator whatever the frame claims, and a
+ * spectator's cursor or lease frame is dropped.
  *
  * Throttling: local cursor updates coalesce to ≤1 frame per
  * CURSOR_THROTTLE_MS (trailing edge, so the final resting position
@@ -194,6 +201,8 @@ interface RosterAd {
   relay?: string;
   /** Admitted read-only. */
   ro?: boolean;
+  /** Spectator (joined with a view code). */
+  sp?: boolean;
   /** Departure. */
   leave?: boolean;
 }
@@ -208,6 +217,8 @@ export interface PresencePeer {
    *  an older build, or not announced yet). */
   relay: string | null;
   readOnly: boolean;
+  /** Joined with a view code: watching, not editing. */
+  spectator: boolean;
 }
 
 interface LeaseAd {
@@ -229,10 +240,12 @@ export interface CursorsHandle {
   rebroadcast(): void;
   /** Session plugins: the stock cursor plugin + the lease-ad renderer. */
   plugins(): Plugin[];
-  /** Feed an incoming (decrypted) presence frame. */
-  applyRemote(bytes: Uint8Array): void;
+  /** Feed an incoming (decrypted) presence frame. `viewer`: the relay
+   *  stamped it as a spectator's. */
+  applyRemote(bytes: Uint8Array, viewer?: boolean): void;
   /** Peer ids of partners who can run repairs (self excluded): everyone
-   *  on the roster or in the cursor store, minus read-only admissions.
+   *  on the roster or in the cursor store, minus read-only admissions
+   *  and spectators.
    *  Best-effort — callers must degrade safely (the repair leader gate
    *  falls back to everyone-repairs, which idempotence makes safe). */
   visiblePeers(): string[];
@@ -250,14 +263,20 @@ export function installCursorPresence(
   session: CollabSession,
   getView: () => EditorView | null,
   /** What this peer announces on the roster beyond its name: the relay
-   *  it joined through, and whether it's read-only. Read per announce. */
-  identity: () => { relay: string | null; readOnly: boolean } = () => ({ relay: null, readOnly: false }),
+   *  it joined through, whether it's read-only, and whether it's a
+   *  spectator (then it sends no cursor). Read per announce. */
+  identity: () => { relay: string | null; readOnly: boolean; spectator?: boolean } = () => ({
+    relay: null,
+    readOnly: false,
+  }),
 ): CursorsHandle {
   const peerId = session.loroDoc.peerIdStr as PeerID;
   const store = new CoalescingCursorStore(peerId, STORE_TIMEOUT_MS);
   let disposed = false;
   /** Partners who announced themselves (see FRAME_ROSTER). */
-  const roster = new Map<string, { name: string; relay: string | null; ro: boolean; at: number }>();
+  const roster = new Map<string, { name: string; relay: string | null; ro: boolean; sp: boolean; at: number }>();
+  /** A spectator sends the roster and nothing else. */
+  const watching = (): boolean => identity().spectator === true;
   const liveRoster = (): typeof roster => {
     const cutoff = Date.now() - STORE_TIMEOUT_MS;
     for (const [p, e] of roster) if (e.at < cutoff) roster.delete(p);
@@ -284,7 +303,7 @@ export function installCursorPresence(
     return true;
   };
   const unsubLocal = store.subscribeLocalUpdates((bytes: Uint8Array) => {
-    if (disposed || !cursorsEnabled()) return;
+    if (disposed || !cursorsEnabled() || watching()) return;
     pendingBytes = bytes;
     sendTimer ??= setTimeout(() => {
       sendTimer = null;
@@ -301,7 +320,7 @@ export function installCursorPresence(
   // and clears the dedupe baseline so the (byte-identical) refresh
   // frame actually reaches peers before their expiry timer fires.
   const keepalive = setInterval(() => {
-    if (disposed || !cursorsEnabled()) return;
+    if (disposed || !cursorsEnabled() || watching()) return;
     const local = store.getLocal();
     if (local) {
       lastSentBytes = null;
@@ -322,7 +341,14 @@ export function installCursorPresence(
     const id = identity();
     const ad: RosterAd = leave
       ? { v: 1, peer: peerId, leave: true }
-      : { v: 1, peer: peerId, name: user.name, ...(id.relay ? { relay: id.relay } : {}), ...(id.readOnly ? { ro: true } : {}) };
+      : {
+          v: 1,
+          peer: peerId,
+          name: user.name,
+          ...(id.relay ? { relay: id.relay } : {}),
+          ...(id.readOnly ? { ro: true } : {}),
+          ...(id.spectator ? { sp: true } : {}),
+        };
     void session.sendPresence(frame(FRAME_ROSTER, new TextEncoder().encode(JSON.stringify(ad))), opts);
   };
   const rosterTimer = setInterval(() => sendRoster(), KEEPALIVE_MS);
@@ -336,7 +362,7 @@ export function installCursorPresence(
   // --- outbound: lease ads on a slow heartbeat ---
   let lastLeaseCount = 0;
   const leaseTimer = setInterval(() => {
-    if (disposed) return;
+    if (disposed || watching()) return;
     const view = getView();
     if (!view) return;
     const ranges = leasedRanges(view.state).map((r) => ({ ...r, label: 'AI' }));
@@ -445,7 +471,7 @@ export function installCursorPresence(
         /* store timing — roster alone */
       }
       for (const [p, e] of liveRoster()) {
-        if (e.ro) ids.delete(p); // read-only admissions can't run repairs
+        if (e.ro || e.sp) ids.delete(p); // read-only admissions and spectators can't run repairs
         else ids.add(p);
       }
       ids.delete(peerId);
@@ -454,13 +480,29 @@ export function installCursorPresence(
     presence(): PresencePeer[] {
       const id = identity();
       const out: PresencePeer[] = [
-        { peer: String(peerId), name: user.name, color: user.color, self: true, relay: id.relay, readOnly: id.readOnly },
+        {
+          peer: String(peerId),
+          name: user.name,
+          color: user.color,
+          self: true,
+          relay: id.relay,
+          readOnly: id.readOnly,
+          spectator: id.spectator === true,
+        },
       ];
       const seen = new Set<string>([String(peerId)]);
       for (const [p, e] of liveRoster()) {
         if (seen.has(p)) continue;
         seen.add(p);
-        out.push({ peer: p, name: e.name || 'Partner', color: peerColor(p), self: false, relay: e.relay, readOnly: e.ro });
+        out.push({
+          peer: p,
+          name: e.name || 'Partner',
+          color: peerColor(p),
+          self: false,
+          relay: e.relay,
+          readOnly: e.ro,
+          spectator: e.sp,
+        });
       }
       try {
         // Older builds announce no roster — they show while their cursor does.
@@ -473,7 +515,7 @@ export function installCursorPresence(
           seen.add(p);
           const nm = states[p]?.user?.name;
           const name = (typeof nm === 'string' && nm.trim()) || 'Partner';
-          out.push({ peer: p, name, color: peerColor(p), self: false, relay: null, readOnly: false });
+          out.push({ peer: p, name, color: peerColor(p), self: false, relay: null, readOnly: false, spectator: false });
         }
       } catch {
         /* store shape / timing — roster + self is safe */
@@ -483,10 +525,13 @@ export function installCursorPresence(
     announce(): void {
       sendRoster();
     },
-    applyRemote(bytes: Uint8Array): void {
+    applyRemote(bytes: Uint8Array, viewer = false): void {
       if (disposed || bytes.length < 2) return;
       const type = bytes[0];
       const payload = bytes.subarray(1);
+      // Spectators are listed, never drawn: drop any caret or lease ad a
+      // relay-stamped spectator frame carries.
+      if (viewer && type !== FRAME_ROSTER) return;
       if (type === FRAME_CURSOR) {
         // Buffer + trailing drain: one store batch (→ one dispatch,
         // one decoration rebuild) per window, however many frames or
@@ -517,6 +562,8 @@ export function installCursorPresence(
             name: typeof ad.name === 'string' ? ad.name.trim().slice(0, 80) : '',
             relay: typeof ad.relay === 'string' && ad.relay ? ad.relay : null,
             ro: ad.ro === true,
+            // The relay's stamp outranks the frame's own claim.
+            sp: viewer || ad.sp === true,
             at: Date.now(),
           });
         } catch {
@@ -532,7 +579,7 @@ export function installCursorPresence(
       // presence dot lingered on every partner for up to 45s — during
       // exactly the "did they leave?" moment (2026-09-01 review, PH-A10).
       // An ephemeral delete is a payload shape old clients already apply.
-      if (disposed || !cursorsEnabled()) return;
+      if (disposed || !cursorsEnabled() || watching()) return;
       try {
         partingLocal = store.getLocal() ?? partingLocal;
         let bytes: Uint8Array | null = null;
@@ -553,7 +600,7 @@ export function installCursorPresence(
       // After a stream reconnect nothing re-announced presence until the
       // 15s keepalive; partners saw us absent for up to that long.
       sendRoster();
-      if (disposed || !cursorsEnabled()) return;
+      if (disposed || !cursorsEnabled() || watching()) return;
       const local = store.getLocal() ?? partingLocal;
       partingLocal = undefined;
       if (local) {

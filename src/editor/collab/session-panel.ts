@@ -10,7 +10,14 @@
  * live while open; closes on Escape, outside click, or an action.
  */
 
-import { chipStateDetail, chipStateText, renderPresenceInto, type ChipSessionModel } from './session-chip.js';
+import {
+  chipStateDetail,
+  chipStateText,
+  minimalChipParts,
+  renderPresenceInto,
+  type ChipPeer,
+  type ChipSessionModel,
+} from './session-chip.js';
 import type { JoinRequestWatcher, JoinRow } from '../federation/collab-federation.js';
 import type { SessionRole } from './session-role.js';
 
@@ -32,6 +39,10 @@ export interface SessionPanelCtx {
    *  anyway (confirmed by the caller) — the way out when whoever started
    *  it is gone, or you lost the host role. Absent = not offered. */
   endForEveryone?: () => void;
+  /** The host only: leave WITHOUT ending — the session keeps going for
+   *  everyone else, and stays resumable (as host) from the Sessions list.
+   *  Absent = not offered. */
+  leaveKeepRunning?: () => void;
 }
 
 let current: { el: HTMLElement; anchor: HTMLElement; ctx: SessionPanelCtx; cleanup: () => void } | null = null;
@@ -150,7 +161,52 @@ function section(title: string): HTMLElement {
   return h('div', 'pmd-collab-panel-section', title);
 }
 
+/** A spectator without presence: what it can know, and the way out. */
+function buildMinimal(m: ChipSessionModel, ctx: SessionPanelCtx): HTMLElement[] {
+  const head = h('div', 'pmd-collab-panel-head');
+  head.append(
+    h('div', 'pmd-collab-panel-status', minimalChipParts(m).join(' · ')),
+    h('div', 'pmd-collab-panel-detail', chipStateDetail(m.link)),
+    h(
+      'div',
+      'pmd-collab-panel-detail',
+      'You’re watching. This session’s server doesn’t pass spectators’ presence along, so nobody is listed here.',
+    ),
+  );
+  const foot = h('div', 'pmd-collab-panel-foot');
+  const row = h('div', 'pmd-collab-panel-foot-row');
+  const leave = button('Stop watching', () => {
+    closeSessionPanel();
+    ctx.leave();
+  }, { kind: 'danger', title: 'Stop watching (the copy becomes yours to edit) and go to the Home screen' });
+  leave.classList.add('pmd-collab-panel-leave');
+  row.appendChild(leave);
+  foot.appendChild(row);
+  return [head, foot];
+}
+
+function personRow(p: ChipPeer, m: ChipSessionModel): HTMLElement {
+  const row = h('div', 'pmd-collab-panel-row');
+  const dot = h('span', 'pmd-collab-chip-dots');
+  renderPresenceInto(dot, [p], p.self ? m : null);
+  const name = h('span', 'pmd-collab-panel-name', p.self ? `${p.name || 'You'} (you)` : p.name || 'Someone');
+  row.append(dot, name);
+  if (p.spectator) {
+    row.appendChild(h('span', 'pmd-collab-panel-tag pmd-collab-panel-tag-spectator', 'spectating'));
+  } else if ((p.self && m.readOnly) || (!p.self && p.readOnly)) {
+    row.appendChild(h('span', 'pmd-collab-panel-tag pmd-collab-panel-tag-ro', 'read-only'));
+  }
+  if (p.self && m.remote) row.appendChild(h('span', 'pmd-collab-panel-tag', 'other server'));
+  if (!p.self && p.remote) {
+    const tag = h('span', 'pmd-collab-panel-tag', 'other server');
+    if (p.server) tag.title = `Joined from ${p.server}`;
+    row.appendChild(tag);
+  }
+  return row;
+}
+
 function build(m: ChipSessionModel, rows: JoinRow[], ctx: SessionPanelCtx): HTMLElement[] {
+  if (m.minimal) return buildMinimal(m, ctx);
   const out: HTMLElement[] = [];
 
   // Status
@@ -168,25 +224,28 @@ function build(m: ChipSessionModel, rows: JoinRow[], ctx: SessionPanelCtx): HTML
   }
   out.push(head);
 
-  // People
-  out.push(section(`In this session · ${m.peers.length}`));
+  // People: participants, then spectators who announced themselves, then
+  // a line for spectators the relay counts but who aren't listed (older
+  // builds, or a relay that doesn't carry their presence).
+  const participants = m.peers.filter((p) => !p.spectator);
+  const spectators = m.peers.filter((p) => p.spectator);
+  const watchers = m.watchers ?? 0;
+  const peopleHead = section(`In this session · ${participants.length}`);
+  if (watchers > 0) {
+    peopleHead.appendChild(h('span', 'pmd-collab-panel-section-extra', ` · ${watchers} spectating`));
+  }
+  out.push(peopleHead);
   const people = h('div', 'pmd-collab-panel-list');
-  for (const p of m.peers) {
-    const row = h('div', 'pmd-collab-panel-row');
-    const dot = h('span', 'pmd-collab-chip-dots');
-    renderPresenceInto(dot, [p], p.self ? m : null);
-    const name = h('span', 'pmd-collab-panel-name', p.self ? `${p.name || 'You'} (you)` : p.name || 'Someone');
-    row.append(dot, name);
-    if ((p.self && m.readOnly) || (!p.self && p.readOnly)) {
-      row.appendChild(h('span', 'pmd-collab-panel-tag pmd-collab-panel-tag-ro', 'read-only'));
-    }
-    if (p.self && m.remote) row.appendChild(h('span', 'pmd-collab-panel-tag', 'other server'));
-    if (!p.self && p.remote) {
-      const tag = h('span', 'pmd-collab-panel-tag', 'other server');
-      if (p.server) tag.title = `Joined from ${p.server}`;
-      row.appendChild(tag);
-    }
-    people.appendChild(row);
+  for (const p of [...participants, ...spectators]) people.appendChild(personRow(p, m));
+  const unlisted = Math.max(0, watchers - spectators.length);
+  if (unlisted > 0) {
+    people.appendChild(
+      h(
+        'div',
+        'pmd-collab-panel-unlisted',
+        `${unlisted} more ${unlisted === 1 ? 'person is' : 'people are'} spectating without being listed`,
+      ),
+    );
   }
   out.push(people);
 
@@ -245,14 +304,21 @@ function build(m: ChipSessionModel, rows: JoinRow[], ctx: SessionPanelCtx): HTML
   // Copy code — a split button: the main part copies the default form;
   // the caret opens a dropdown of every form (shown inline, beneath it).
   const codes = ctx.codes();
+  const viewing = codes.classic.startsWith('cmview');
   const forms: { kind: 'classic' | 'cross'; title: string; code: string; hint: string }[] = [
     {
       kind: 'classic',
-      title: codes.classic.startsWith('cmshare2') ? 'Classic code (cmshare2)' : 'Classic code (cmshare1)',
+      title: viewing
+        ? 'View code (cmview1)'
+        : codes.classic.startsWith('cmshare2')
+          ? 'Classic code (cmshare2)'
+          : 'Classic code (cmshare1)',
       code: codes.classic,
-      hint: m.remote
-        ? `Only for people on ${ctx.homeLabel ?? 'the session’s server'} — any CardMirror version`
-        : 'For people on your server — works with every CardMirror version',
+      hint: viewing
+        ? 'Whoever joins with it watches too — they can’t edit'
+        : m.remote
+          ? `Only for people on ${ctx.homeLabel ?? 'the session’s server'} — any CardMirror version`
+          : 'For people on your server — works with every CardMirror version',
     },
   ];
   if (codes.cross !== null) {
@@ -265,7 +331,7 @@ function build(m: ChipSessionModel, rows: JoinRow[], ctx: SessionPanelCtx): HTML
   }
   const copy = h('div', 'pmd-collab-panel-copy');
   const split = h('div', 'pmd-collab-panel-split');
-  split.appendChild(button('Copy code', () => {
+  split.appendChild(button(viewing ? 'Copy view code' : 'Copy code', () => {
     closeSessionPanel();
     ctx.copy('current');
   }, { title: forms.find((f) => f.code === codes.current)?.title ?? 'Copy the session code' }));
@@ -298,37 +364,54 @@ function build(m: ChipSessionModel, rows: JoinRow[], ctx: SessionPanelCtx): HTML
         ? 'Stop watching (the copy becomes yours to edit) and go to the Home screen'
         : 'Leave (you keep your copy) and go to the Home screen',
   }));
-  if (ctx.role !== 'host' && ctx.endForEveryone) {
+  // The ▾ holds the OTHER way out: for a participant, End for everyone;
+  // for the host, Leave (keep it running). A spectator gets neither — it
+  // can never end a session for everyone.
+  const alt: { title: string; hint: string; danger: boolean; run: () => void } | null =
+    ctx.role === 'participant' && ctx.endForEveryone
+      ? {
+          title: 'End for everyone…',
+          hint: 'Ends the session for everyone, not just you — for when whoever started it is gone. Everyone keeps their copy.',
+          danger: true,
+          run: ctx.endForEveryone,
+        }
+      : ctx.role === 'host' && ctx.leaveKeepRunning
+        ? {
+            title: 'Leave session',
+            hint: 'The session keeps going for everyone else. Rejoin from the Sessions list on the Home screen — you stay the host and can end it later.',
+            danger: false,
+            run: ctx.leaveKeepRunning,
+          }
+        : null;
+  if (alt) {
     const lt = button('▾', () => {
       leaveMenuOpen = !leaveMenuOpen;
       copyMenuOpen = false;
       refreshSessionPanel();
-    }, { kind: 'danger', title: 'More ways to leave' });
+    }, { kind: 'danger', title: ctx.role === 'host' ? 'Leave without ending' : 'More ways to leave' });
     lt.classList.add('pmd-collab-panel-split-toggle');
     lt.setAttribute('aria-haspopup', 'menu');
     lt.setAttribute('aria-expanded', String(leaveMenuOpen));
-    lt.setAttribute('aria-label', 'More ways to leave');
+    lt.setAttribute('aria-label', ctx.role === 'host' ? 'Leave without ending' : 'More ways to leave');
     leaveSplit.appendChild(lt);
   }
   actionsRow.append(split, leaveSplit);
   copy.appendChild(actionsRow);
-  if (leaveMenuOpen && ctx.endForEveryone) {
+  if (leaveMenuOpen && alt) {
     const menu = h('div', 'pmd-collab-panel-menu');
     menu.setAttribute('role', 'menu');
     const item = h('button', 'pmd-collab-panel-menu-item');
     item.type = 'button';
     item.setAttribute('role', 'menuitem');
     item.append(
-      h('span', 'pmd-collab-panel-menu-title pmd-collab-panel-menu-danger', 'End for everyone…'),
-      h('span', 'pmd-collab-panel-menu-hint',
-        'Ends the session for everyone, not just you — for when whoever started it is gone. Everyone keeps their copy.'),
+      h('span', `pmd-collab-panel-menu-title${alt.danger ? ' pmd-collab-panel-menu-danger' : ''}`, alt.title),
+      h('span', 'pmd-collab-panel-menu-hint', alt.hint),
     );
-    const end = ctx.endForEveryone;
     item.addEventListener('click', (e) => {
       e.stopPropagation();
       leaveMenuOpen = false;
       closeSessionPanel();
-      end();
+      alt.run();
     });
     menu.appendChild(item);
     copy.appendChild(menu);
