@@ -39,7 +39,7 @@ import { bundlePathFromExe, launchSwapHelper, macBundleSelfUpdatable } from './m
 import { registerVoiceIpc } from './voice/ipc';
 import { registerFlowIpc } from './flow-bridge.js';
 import { registerPairingIpc, relayUrl } from './pairing-ipc.js';
-import { IN_APP_UPDATES, flaggedVersion } from './federation-main.js';
+import { UPDATE_CHANNEL, flaggedVersion } from './federation-main.js';
 import { LITE_BUILD } from './lite-build.js';
 import {
   readAccessibilityTreeEnabled,
@@ -695,9 +695,6 @@ ipcMain.handle('host:toggle-devtools', (event) => {
  *  do the same. */
 ipcMain.handle('host:check-for-updates', async () => {
   if (!app.isPackaged) return { status: 'dev' };
-  if (!IN_APP_UPDATES) {
-    return { status: 'error', message: 'This build doesn’t update itself — install new versions from the releases page.' };
-  }
   return new Promise<{ status: 'latest' | 'updating' | 'error'; message?: string }>((resolve) => {
     const offNotAvailable = (): void => {
       autoUpdater.removeListener('update-not-available', notAvailable);
@@ -3089,10 +3086,9 @@ function buildMenu(): Menu {
         },
       },
       { type: 'separator' },
-      // Lite never contacts an update server, and a federation build
-      // never updates itself (IN_APP_UPDATES) — the menu item goes
+      // Lite never contacts an update server — the menu item goes
       // rather than clicking into silence.
-      ...(LITE_BUILD || !IN_APP_UPDATES
+      ...(LITE_BUILD
         ? []
         : [
             {
@@ -3324,7 +3320,6 @@ interface UpdateCheckOpts {
  *  auto-launch path is a complete no-op in dev. */
 function runUpdateCheck(opts: UpdateCheckOpts): void {
   if (LITE_BUILD) return; // Lite never contacts the update host
-  if (!IN_APP_UPDATES) return; // federation builds never update themselves
   if (!app.isPackaged) {
     if (opts.alertOnLatest) {
       const win = dialogParentWindow();
@@ -3699,7 +3694,16 @@ ipcMain.handle('host:update-chip-action', () => {
 });
 
 function startAutoUpdate(): void {
-  if (!app.isPackaged || !IN_APP_UPDATES) return;
+  if (!app.isPackaged) return;
+  if (UPDATE_CHANNEL) {
+    // Federation: GitHubProvider then takes only the newest feed tag
+    // whose prerelease id is this channel (`v1.16.40-f`), never a
+    // stable tag. Setting `channel` also turns allowDowngrade on, so
+    // turn it back off: a newer `-f` only.
+    autoUpdater.channel = UPDATE_CHANNEL;
+    autoUpdater.allowPrerelease = true;
+    autoUpdater.allowDowngrade = false;
+  }
   // macOS: Squirrel.Mac can't INSTALL into unsigned/self-signed builds,
   // but electron-updater's download path (zip + sha512 verification
   // against the release metadata) works fine — so we stage manually via

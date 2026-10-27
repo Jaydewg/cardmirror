@@ -5,6 +5,38 @@ behavior, rationale, and (where useful) the implementation context
 behind a change. For a shorter, jargon-free summary of what's new
 in each release, see `CHANGELOG.md`.
 
+## Unreleased — federation
+
+### Changed: federation builds update in-app on the `f` channel
+
+Replaces 1.16.26-f's lockout (`IN_APP_UPDATES`, removed). Main process:
+`UPDATE_CHANNEL` (`federation-main.ts`) is `'f'` when the build carries
+the federation flag; `startAutoUpdate` then sets `autoUpdater.channel =
+'f'`, `allowPrerelease = true`, and `allowDowngrade = false` (the channel
+setter turns downgrades on). The renderer's launch and daily checks, the
+Help menu item, `host:check-for-updates` and the Settings controls are
+back, plus a Settings note on federation builds.
+
+How electron-updater 6.8.3's `GitHubProvider` picks the release: with a
+channel that isn't alpha or beta, it walks the releases feed and takes
+the first tag whose prerelease id is `f`, skipping stable tags (null).
+It reads `f.yml` / `f-<os>.yml`, which `release.yml` doesn't produce,
+and falls back to the release's `latest*.yml`. `isUpdateAvailable`
+then requires a strictly newer semver. Setting the channel explicitly
+instead of relying on the version's prerelease id also covers a numeric
+manifest (the 1.15.0-f case) and a version like `1.17.0-beta.1-f`, whose
+semver prerelease id is `beta`.
+
+The other direction relies on `release.yml` marking every `-` tag a
+pre-release: stable installs (default channel, `allowPrerelease` false)
+read `/releases/latest`, which skips pre-releases. An `-f` release
+published as a full release would be offered to stable installs.
+Limit: the feed lists only the most recent releases, so a long run of
+stable releases with no `-f` release in between could push every `-f`
+tag out of it. The check then fails quietly until the next `-f`
+release. 1.16.26-f installs have the lockout and need one manual
+install.
+
 ## 1.16.26-f — 2026-10-26
 
 ### Added: spectators on the federation relay (contract §16 parity)

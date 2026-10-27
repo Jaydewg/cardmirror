@@ -5,6 +5,16 @@ changes in each release, written for users of the editor. For
 in-depth rationale and implementation context behind each entry,
 see `DETAILED_CHANGELOG.md`.
 
+## Unreleased — federation
+
+### Changed
+
+- **Federation builds update themselves again**, but only to newer
+  federation builds (versions ending in `-f`), never to a release
+  without federation. The update toggle and **Help → Check for
+  Updates…** are back. 1.16.26-f can't update itself, so install this
+  build by hand once.
+
 ## 1.16.26-f — 2026-10-26
 
 A **pre-release** with server federation, following 1.16.1-f. The last

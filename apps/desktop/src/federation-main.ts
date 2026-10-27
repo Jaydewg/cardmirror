@@ -14,12 +14,14 @@
 
 const FEDERATION_FLAG = 'f';
 const BUILD_VERSION_FLAGS = 'f';
-/** Whether this build may update itself in-app. Never with federation
- *  (`f`): the release feed it would check also carries builds without
- *  federation, and a 1.15.0-f install was silently replaced by a stable
- *  release (field find, 2026-10-26). New federation builds are installed
- *  by hand from the releases page. */
-export const IN_APP_UPDATES = !BUILD_VERSION_FLAGS.includes(FEDERATION_FLAG);
+/** The update channel this build follows, or null for electron-updater's
+ *  default. Federation builds (`f`) take only later `-f` releases: the
+ *  release feed also carries stable builds without federation, and a
+ *  1.15.0-f install (numeric manifest, default channel) was silently
+ *  replaced by stable 1.16.1 (field find, 2026-10-26). */
+export const UPDATE_CHANNEL: string | null = BUILD_VERSION_FLAGS.includes(FEDERATION_FLAG)
+  ? FEDERATION_FLAG
+  : null;
 const PRERELEASE_LABELS = new Set(['alpha', 'beta', 'rc']);
 
 export function canonRelayUrl(raw: unknown): string | null {

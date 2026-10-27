@@ -79,7 +79,7 @@ import {
   promptForText,
 } from './text-prompt.js';
 import { getInstallInfo } from './install-info.js';
-import { IN_APP_UPDATES } from './relay-protocol.js';
+import { BUILD_VERSION_FLAGS } from './relay-protocol.js';
 import { launchBenchmarkOverlay } from './benchmark-ui.js';
 import { resetTimer } from './timer-state.js';
 import { applyTimerProfile } from './timer-profile.js';
@@ -2005,7 +2005,7 @@ function buildInstallInfoSection(): HTMLElement {
   // OS (update check via electron-updater, crash-dumps folder via
   // shell.openPath). The web edition has neither capability.
   const electronHost = getElectronHost();
-  if (electronHost && !isLiteBuild() && IN_APP_UPDATES) {
+  if (electronHost && !isLiteBuild()) {
     // "Check for updates automatically" toggle — kept next to the
     // manual Check-for-updates button since both govern updates.
     // When enabled, the app checks at launch AND once a day, staying
@@ -2131,14 +2131,13 @@ function buildInstallInfoSection(): HTMLElement {
     wrap.appendChild(liteNote);
   }
 
-  if (electronHost && !isLiteBuild() && !IN_APP_UPDATES) {
-    // Federation builds: no update controls, and why.
+  if (electronHost && !isLiteBuild() && BUILD_VERSION_FLAGS.includes('f')) {
+    // Federation builds follow the `f` update channel (federation-main.ts).
     const fedNote = document.createElement('div');
     fedNote.className = 'pmd-update-pause-desc';
     fedNote.textContent =
-      'This federation build never updates itself, so it can’t be ' +
-      'replaced by a release without federation. To upgrade, install a ' +
-      'newer federation build (a version ending in -f) from the releases page.';
+      'This federation build updates only to newer federation builds ' +
+      '(versions ending in -f), never to a release without federation.';
     wrap.appendChild(fedNote);
   }
 
