@@ -225,7 +225,9 @@ const peerPlugins = () => [
 ];
 
 describe('transclusion × co-editing convergence study (offline partitions)', () => {
-  it('converges valid across 24 seeds', { timeout: 120_000 }, async () => {
+  // ~3.5s a seed alone; the full suite's parallel load more than doubles
+  // it, which overran a flat 120s.
+  it('converges valid across 24 seeds', { timeout: 15_000 * 24 }, async () => {
     for (let seed = 1; seed <= 24; seed++) {
       const rnd = mulberry32(seed);
       const N = 3;
