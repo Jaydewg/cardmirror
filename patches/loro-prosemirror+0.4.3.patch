@@ -1,24 +1,108 @@
 diff --git a/node_modules/loro-prosemirror/dist/index.cjs b/node_modules/loro-prosemirror/dist/index.cjs
-index 74c4b30..5c15300 100644
+index 74c4b30..934a0da 100644
 --- a/node_modules/loro-prosemirror/dist/index.cjs
 +++ b/node_modules/loro-prosemirror/dist/index.cjs
-@@ -15,6 +15,7 @@ const NODE_NAME_KEY = "nodeName";
+@@ -15,6 +15,75 @@ const NODE_NAME_KEY = "nodeName";
  * Maps PM non-text nodes to their corresponding Loro Container IDs.
  */
  const WEAK_NODE_TO_LORO_CONTAINER_MAPPING = /* @__PURE__ */ new WeakMap();
 +let cardmirrorCommitOrigin = null;
++/**
++ * CardMirror patch: ONE MOVE PER UNDO STEP.
++ *
++ * Loro's UndoManager cannot undo a step that holds two or more moves on
++ * a MovableList (loro-crdt 1.13.6, reproduced with the bare library:
++ * three items, moves 2->0 then 2->1, undo leaves two items; other shapes
++ * panic in movable_list_apply_delta.rs, which poisons the doc for every
++ * later call). A step with one move undoes exactly. Every multi-move
++ * edit hit it: a section drag, Alphabetize, any reorder the diffs below
++ * settle with several moves.
++ *
++ * So a sync that emits a second move commits before it, and every
++ * commit holds at most one move. The sync's commits share an undo GROUP
++ * (the UndoManager's onPush value) that `undo` / `redo` pop in one
++ * keypress. The doc's registered hooks (the session undo guard) keep
++ * the commits from merging back into one step: `begin` before the
++ * first split commit, `end` after the sync's last.
++ */
++let cardmirrorSyncDoc = null;
++let cardmirrorSyncMoves = 0;
++let cardmirrorUndoGroup = null;
++let cardmirrorUndoGroupSeq = 0;
++let cardmirrorMoveBatch = null;
++const cardmirrorMoveBatchHooks = /* @__PURE__ */ new WeakMap();
++function cardmirrorRegisterMoveBatchHooks(doc, hooks) {
++	cardmirrorMoveBatchHooks.set(doc, hooks);
++	return () => {
++		if (cardmirrorMoveBatchHooks.get(doc) === hooks) cardmirrorMoveBatchHooks.delete(doc);
++	};
++}
++/** move() that never shares a commit with an earlier move of this sync. */
++function cardmirrorMove(list, from, to) {
++	const doc = cardmirrorSyncDoc;
++	if (doc && cardmirrorSyncMoves > 0) {
++		if (!cardmirrorMoveBatch) {
++			cardmirrorMoveBatch = { hooks: cardmirrorMoveBatchHooks.get(doc) || null };
++			cardmirrorMoveBatch.hooks?.begin();
++			cardmirrorUndoGroup = ++cardmirrorUndoGroupSeq;
++		}
++		doc.commit({ origin: cardmirrorCommitOrigin || "loroSyncPlugin" });
++	}
++	cardmirrorSyncMoves++;
++	list.move(from, to);
++}
++/** Undo / redo one step, or the whole group it belongs to (see
++ *  cardmirrorMove). Popping under the group's token carries it onto the
++ *  other stack, so the redo is one keypress too. */
++function cardmirrorPopGroup(undoManager, isUndo) {
++	const top = () => isUndo ? undoManager.topUndoValue() : undoManager.topRedoValue();
++	const can = () => isUndo ? undoManager.canUndo() : undoManager.canRedo();
++	const pop = () => isUndo ? undoManager.undo() : undoManager.redo();
++	const t = top();
++	const group = typeof t === "number" ? t : null;
++	cardmirrorUndoGroup = group;
++	try {
++		const ran = pop();
++		if (ran && group !== null) while (can() && top() === group && pop());
++		return ran;
++	} finally {
++		cardmirrorUndoGroup = null;
++	}
++}
++function cardmirrorUndoStep(undoManager) {
++	return cardmirrorPopGroup(undoManager, true);
++}
++function cardmirrorRedoStep(undoManager) {
++	return cardmirrorPopGroup(undoManager, false);
++}
  function updateLoroToPmState(doc, mapping, editorState, containerId) {
  	const node = editorState.doc;
  	const map = containerId ? doc.getContainerById(containerId) : doc.getMap(ROOT_DOC_KEY);
-@@ -26,7 +27,86 @@ function updateLoroToPmState(doc, mapping, editorState, containerId) {
+@@ -24,9 +93,100 @@ function updateLoroToPmState(doc, mapping, editorState, containerId) {
+ 		isInit = true;
+ 		map.set("nodeName", node.type.name);
  	}
- 	updateLoroMap(map, node, mapping);
- 	if (isInit) doc.commit({ origin: "sys:init" });
+-	updateLoroMap(map, node, mapping);
+-	if (isInit) doc.commit({ origin: "sys:init" });
 -	else doc.commit({ origin: "loroSyncPlugin" });
-+	// CardMirror patch: a transaction may name its commit origin
-+	// (meta 'cmCommitOrigin') so the undo manager can exclude it — the
-+	// undo guard's compensation write must not become an undo step.
-+	else doc.commit({ origin: cardmirrorCommitOrigin || "loroSyncPlugin" });
++	cardmirrorSyncDoc = doc;
++	cardmirrorSyncMoves = 0;
++	try {
++		updateLoroMap(map, node, mapping);
++		if (isInit) doc.commit({ origin: "sys:init" });
++		// CardMirror patch: a transaction may name its commit origin
++		// (meta 'cmCommitOrigin') so the undo manager can exclude it — the
++		// undo guard's compensation write must not become an undo step.
++		else doc.commit({ origin: cardmirrorCommitOrigin || "loroSyncPlugin" });
++	} finally {
++		// The last commit above is still in the move group (see cardmirrorMove).
++		const batch = cardmirrorMoveBatch;
++		cardmirrorSyncDoc = null;
++		cardmirrorSyncMoves = 0;
++		cardmirrorMoveBatch = null;
++		cardmirrorUndoGroup = null;
++		batch?.hooks?.end();
++	}
 +}
 +/**
 + * CardMirror patch: heal schema-invalid containers at materialization
@@ -98,7 +182,7 @@ index 74c4b30..5c15300 100644
  }
  function createNodeFromLoroObj(schema, obj, mapping) {
  	let retval = mapping.get(obj.id) ?? null;
-@@ -41,7 +121,9 @@ function createNodeFromLoroObj(schema, obj, mapping) {
+@@ -41,7 +201,9 @@ function createNodeFromLoroObj(schema, obj, mapping) {
  			retval = schema.node(nodeName, attributes.toJSON(), mappedChildren);
  			WEAK_NODE_TO_LORO_CONTAINER_MAPPING.set(retval, obj.id);
  		} catch (e) {
@@ -109,7 +193,7 @@ index 74c4b30..5c15300 100644
  		}
  	} else if (obj instanceof loro_crdt.LoroText) {
  		retval = [];
-@@ -83,23 +165,87 @@ function createLoroText(parentList, pos, nodes, mapping) {
+@@ -83,23 +245,87 @@ function createLoroText(parentList, pos, nodes, mapping) {
  function updateLoroText(obj, nodes, mapping) {
  	mapping.set(obj.id, nodes);
  	let str = obj.toString();
@@ -206,7 +290,7 @@ index 74c4b30..5c15300 100644
  	return pattrs;
  }
  function valueToAttrs(value) {
-@@ -107,11 +253,52 @@ function valueToAttrs(value) {
+@@ -107,11 +333,52 @@ function valueToAttrs(value) {
  	return null;
  }
  function eqLoroTextNodes(obj, nodes) {
@@ -263,7 +347,7 @@ index 74c4b30..5c15300 100644
  }
  /**
  * Whether the loro object is equal to the node.
-@@ -125,16 +312,57 @@ function eqLoroObjNode(obj, node) {
+@@ -125,16 +392,57 @@ function eqLoroObjNode(obj, node) {
  	}
  	return obj instanceof loro_crdt.LoroText && Array.isArray(node) && eqLoroTextNodes(obj, node);
  }
@@ -307,8 +391,7 @@ index 74c4b30..5c15300 100644
 +		if (av.length !== bv.length) return false;
 +		for (let i = 0; i < av.length; i++) if (!cardmirrorCanonicalAttrsEqual(av[i], bv[i])) return false;
 +		return true;
- 	}
--	return eq;
++	}
 +	const keys = new Set([...Object.keys(av), ...Object.keys(bv)]);
 +	for (const key of keys) {
 +		if (!cardmirrorCanonicalAttrsEqual(av[key] ?? null, bv[key] ?? null)) return false;
@@ -320,7 +403,8 @@ index 74c4b30..5c15300 100644
 +	for (const key of Object.keys(attrs ?? {})) {
 +		const v = attrs[key];
 +		if (v !== null && v !== undefined) out[key] = v;
-+	}
+ 	}
+-	return eq;
 +	return out;
 +}
 +// PATCHED (cardmirror): canonical equality — the old form counted
@@ -330,7 +414,7 @@ index 74c4b30..5c15300 100644
  }
  function eqNodeName(obj, node) {
  	return !Array.isArray(node) && obj.get("nodeName") === node.type.name;
-@@ -156,6 +384,11 @@ function eqMappedNode(mapped, node) {
+@@ -156,6 +464,11 @@ function eqMappedNode(mapped, node) {
  	return false;
  }
  function normalizeNodeContent(node) {
@@ -342,7 +426,7 @@ index 74c4b30..5c15300 100644
  	const res = [];
  	let textNodes = null;
  	node.content.forEach((node, _offset, _i) => {
-@@ -226,13 +459,560 @@ function updateLoroMapAttributes(obj, node, _mapping) {
+@@ -226,13 +539,560 @@ function updateLoroMapAttributes(obj, node, _mapping) {
  	for (const [key, value] of Object.entries(pAttrs)) {
  		if (value !== null) {
  			if (!(0, lib0_function.equalityDeep)(attrs.get(key), value)) attrs.set(key, value);
@@ -727,7 +811,7 @@ index 74c4b30..5c15300 100644
 +		if (cur[t] === target[t]) continue;
 +		const k = cur.indexOf(target[t], t + 1);
 +		if (k < 0) continue; // impossible (target is a permutation of cur); never corrupt
-+		loroChildren.move(left + k, left + t);
++		cardmirrorMove(loroChildren, left + k, left + t);
 +		cur.splice(k, 1);
 +		cur.splice(t, 0, target[t]);
 +	}
@@ -906,7 +990,7 @@ index 74c4b30..5c15300 100644
  }
  function updateLoroMapChildren(obj, node, mapping) {
  	const loroChildren = getLoroMapChildren(obj);
-@@ -258,13 +1038,35 @@ function updateLoroMapChildren(obj, node, mapping) {
+@@ -258,13 +1118,35 @@ function updateLoroMapChildren(obj, node, mapping) {
  			if (!Array.isArray(rightNode)) updateLoroMap(rightLoro, rightNode, mapping);
  		} else break;
  	}
@@ -916,7 +1000,7 @@ index 74c4b30..5c15300 100644
 +		const moves = cardmirrorDetectReorder(loroChildren, nodeChildren, left, right, loroChildLength, nodeChildLength, mapping);
 +		if (moves != null) {
 +			const movable = typeof loroChildren.move === "function";
-+			for (const m of moves) if (movable) loroChildren.move(m.from, m.to);
++			for (const m of moves) if (movable) cardmirrorMove(loroChildren, m.from, m.to);
 +			else {
 +				// Plain list: rebuild ONLY the moved child (new identity);
 +				// passed-over children keep theirs, which is the loss fix.
@@ -943,7 +1027,7 @@ index 74c4b30..5c15300 100644
  			left += 1;
  		} else {
  			let updateLeft = leftLoro instanceof loro_crdt.LoroMap && eqNodeName(leftLoro, leftNode);
-@@ -422,27 +1224,29 @@ function createDecorations(state, store, _plugin, createSelection, createCursor)
+@@ -422,27 +1304,29 @@ function createDecorations(state, store, _plugin, createSelection, createCursor)
  	for (const [peer, cursor] of Object.entries(all)) {
  		if (peer === thisPeer) continue;
  		if (!cursor.anchor || !cursor.focus) continue;
@@ -992,7 +1076,7 @@ index 74c4b30..5c15300 100644
  	}
  	return prosemirror_view.DecorationSet.create(state.doc, d);
  }
-@@ -506,7 +1310,7 @@ function cursorToAbsolutePosition(cursor, doc, mapping) {
+@@ -506,7 +1390,7 @@ function cursorToAbsolutePosition(cursor, doc, mapping) {
  	}
  	while (loroNode != null) {
  		const children = loroNode.get(CHILDREN_KEY);
@@ -1001,7 +1085,7 @@ index 74c4b30..5c15300 100644
  			const childIds = children.toArray();
  			for (const iter of childIds) {
  				if (iter.id === targetChildId) break;
-@@ -573,7 +1377,17 @@ const LoroSyncPlugin = (props) => {
+@@ -573,7 +1457,17 @@ const LoroSyncPlugin = (props) => {
  				else state.changedBy = "local";
  				switch (meta?.type) {
  					case "doc-changed":
@@ -1020,7 +1104,7 @@ index 74c4b30..5c15300 100644
  						break;
  					case "update-state":
  						state = {
-@@ -587,11 +1401,37 @@ const LoroSyncPlugin = (props) => {
+@@ -587,11 +1481,37 @@ const LoroSyncPlugin = (props) => {
  						break;
  					default: break;
  				}
@@ -1059,7 +1143,7 @@ index 74c4b30..5c15300 100644
  			return null;
  		},
  		view: (view) => {
-@@ -642,22 +1482,167 @@ function init(view) {
+@@ -642,22 +1562,167 @@ function init(view) {
  		view.dispatch(tr);
  	}
  }
@@ -1233,7 +1317,7 @@ index 74c4b30..5c15300 100644
  }
  /**
  * Update ProseMirror selection based on the given Loro cursors.
-@@ -848,7 +1833,14 @@ const LoroUndoPlugin = (props) => {
+@@ -848,7 +1913,14 @@ const LoroUndoPlugin = (props) => {
  				if (!undoState || !loroState) return state;
  				const canUndo = undoState.undoManager.canUndo();
  				const canRedo = undoState.undoManager.canRedo();
@@ -1249,8 +1333,91 @@ index 74c4b30..5c15300 100644
  					const { anchor, focus } = convertPmSelectionToCursors(oldEditorState.doc, oldEditorState.selection, loroState);
  					lastSelection = {
  						anchor: anchor ?? null,
+@@ -881,7 +1953,7 @@ const LoroUndoPlugin = (props) => {
+ 				if (selection.anchor) cursors.push(selection.anchor);
+ 				if (selection.focus) cursors.push(selection.focus);
+ 				return {
+-					value: null,
++					value: cardmirrorUndoGroup,
+ 					cursors
+ 				};
+ 			});
+@@ -915,7 +1987,7 @@ const undo = (state, dispatch) => {
+ 	setTimeout(() => {
+ 		undoState.isUndoing.current = false;
+ 	}, 0);
+-	return undoState.undoManager.undo();
++	return cardmirrorUndoStep(undoState.undoManager);
+ };
+ const redo = (state, dispatch) => {
+ 	const undoState = loroUndoPluginKey.getState(state);
+@@ -925,7 +1997,7 @@ const redo = (state, dispatch) => {
+ 	setTimeout(() => {
+ 		undoState.isUndoing.current = false;
+ 	}, 0);
+-	return undoState.undoManager.redo();
++	return cardmirrorRedoStep(undoState.undoManager);
+ };
+ 
+ //#endregion
+@@ -941,6 +2013,9 @@ exports.NODE_NAME_KEY = NODE_NAME_KEY;
+ exports.ROOT_DOC_KEY = ROOT_DOC_KEY;
+ exports.canRedo = canRedo;
+ exports.canUndo = canUndo;
++exports.cardmirrorRedoStep = cardmirrorRedoStep;
++exports.cardmirrorRegisterMoveBatchHooks = cardmirrorRegisterMoveBatchHooks;
++exports.cardmirrorUndoStep = cardmirrorUndoStep;
+ exports.createNodeFromLoroObj = createNodeFromLoroObj;
+ exports.loroSyncPluginKey = loroSyncPluginKey;
+ exports.loroUndoPluginKey = loroUndoPluginKey;
+diff --git a/node_modules/loro-prosemirror/dist/index.d.cts b/node_modules/loro-prosemirror/dist/index.d.cts
+index fd378f1..ad813d2 100644
+--- a/node_modules/loro-prosemirror/dist/index.d.cts
++++ b/node_modules/loro-prosemirror/dist/index.d.cts
+@@ -138,6 +138,16 @@ declare function canUndo(state: EditorState): boolean;
+ declare function canRedo(state: EditorState): boolean;
+ declare const undo: Command;
+ declare const redo: Command;
++/** CardMirror patch: the move-batch hooks a session registers on its doc
++ *  (see cardmirrorMove in the binding). `begin` runs before the first of a
++ *  sync's split commits, `end` after its last. Returns the unregister. */
++declare function cardmirrorRegisterMoveBatchHooks(doc: LoroDoc, hooks: {
++  begin(): void;
++  end(): void;
++}): () => void;
++/** CardMirror patch: undo / redo one step or the move group it belongs to. */
++declare function cardmirrorUndoStep(undoManager: UndoManager): boolean;
++declare function cardmirrorRedoStep(undoManager: UndoManager): boolean;
+ //#endregion
+-export { ATTRIBUTES_KEY, CHILDREN_KEY, CursorAwareness, CursorEphemeralStore, type CursorPluginOptions, type CursorPresenceState, type CursorUser, type LoroChildrenListType, type LoroContainer, LoroCursorPlugin, type LoroDocType, LoroEphemeralCursorPlugin, type LoroNode, type LoroNodeContainerType, type LoroNodeMapping, LoroSyncPlugin, type LoroSyncPluginProps, type LoroSyncPluginState, type LoroType, LoroUndoPlugin, type LoroUndoPluginProps, NODE_NAME_KEY, ROOT_DOC_KEY, canRedo, canUndo, createNodeFromLoroObj, loroSyncPluginKey, loroUndoPluginKey, redo, undo, updateLoroToPmState };
++export { ATTRIBUTES_KEY, CHILDREN_KEY, CursorAwareness, CursorEphemeralStore, type CursorPluginOptions, type CursorPresenceState, type CursorUser, type LoroChildrenListType, type LoroContainer, LoroCursorPlugin, type LoroDocType, LoroEphemeralCursorPlugin, type LoroNode, type LoroNodeContainerType, type LoroNodeMapping, LoroSyncPlugin, type LoroSyncPluginProps, type LoroSyncPluginState, type LoroType, LoroUndoPlugin, type LoroUndoPluginProps, NODE_NAME_KEY, ROOT_DOC_KEY, canRedo, canUndo, cardmirrorRedoStep, cardmirrorRegisterMoveBatchHooks, cardmirrorUndoStep, createNodeFromLoroObj, loroSyncPluginKey, loroUndoPluginKey, redo, undo, updateLoroToPmState };
+ //# sourceMappingURL=index.d.cts.map
+\ No newline at end of file
+diff --git a/node_modules/loro-prosemirror/dist/index.d.ts b/node_modules/loro-prosemirror/dist/index.d.ts
+index 187d089..5f4001e 100644
+--- a/node_modules/loro-prosemirror/dist/index.d.ts
++++ b/node_modules/loro-prosemirror/dist/index.d.ts
+@@ -138,6 +138,16 @@ declare function canUndo(state: EditorState): boolean;
+ declare function canRedo(state: EditorState): boolean;
+ declare const undo: Command;
+ declare const redo: Command;
++/** CardMirror patch: the move-batch hooks a session registers on its doc
++ *  (see cardmirrorMove in the binding). `begin` runs before the first of a
++ *  sync's split commits, `end` after its last. Returns the unregister. */
++declare function cardmirrorRegisterMoveBatchHooks(doc: LoroDoc, hooks: {
++  begin(): void;
++  end(): void;
++}): () => void;
++/** CardMirror patch: undo / redo one step or the move group it belongs to. */
++declare function cardmirrorUndoStep(undoManager: UndoManager): boolean;
++declare function cardmirrorRedoStep(undoManager: UndoManager): boolean;
+ //#endregion
+-export { ATTRIBUTES_KEY, CHILDREN_KEY, CursorAwareness, CursorEphemeralStore, type CursorPluginOptions, type CursorPresenceState, type CursorUser, type LoroChildrenListType, type LoroContainer, LoroCursorPlugin, type LoroDocType, LoroEphemeralCursorPlugin, type LoroNode, type LoroNodeContainerType, type LoroNodeMapping, LoroSyncPlugin, type LoroSyncPluginProps, type LoroSyncPluginState, type LoroType, LoroUndoPlugin, type LoroUndoPluginProps, NODE_NAME_KEY, ROOT_DOC_KEY, canRedo, canUndo, createNodeFromLoroObj, loroSyncPluginKey, loroUndoPluginKey, redo, undo, updateLoroToPmState };
++export { ATTRIBUTES_KEY, CHILDREN_KEY, CursorAwareness, CursorEphemeralStore, type CursorPluginOptions, type CursorPresenceState, type CursorUser, type LoroChildrenListType, type LoroContainer, LoroCursorPlugin, type LoroDocType, LoroEphemeralCursorPlugin, type LoroNode, type LoroNodeContainerType, type LoroNodeMapping, LoroSyncPlugin, type LoroSyncPluginProps, type LoroSyncPluginState, type LoroType, LoroUndoPlugin, type LoroUndoPluginProps, NODE_NAME_KEY, ROOT_DOC_KEY, canRedo, canUndo, cardmirrorRedoStep, cardmirrorRegisterMoveBatchHooks, cardmirrorUndoStep, createNodeFromLoroObj, loroSyncPluginKey, loroUndoPluginKey, redo, undo, updateLoroToPmState };
+ //# sourceMappingURL=index.d.ts.map
+\ No newline at end of file
 diff --git a/node_modules/loro-prosemirror/dist/index.js b/node_modules/loro-prosemirror/dist/index.js
-index e41095d..1f2497b 100644
+index e41095d..948dbb6 100644
 --- a/node_modules/loro-prosemirror/dist/index.js
 +++ b/node_modules/loro-prosemirror/dist/index.js
 @@ -1,6 +1,185 @@
@@ -1440,23 +1607,107 @@ index e41095d..1f2497b 100644
  import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
  import { simpleDiff } from "lib0/diff";
  import { equalityDeep } from "lib0/function";
-@@ -14,6 +193,7 @@ const NODE_NAME_KEY = "nodeName";
+@@ -14,6 +193,75 @@ const NODE_NAME_KEY = "nodeName";
  * Maps PM non-text nodes to their corresponding Loro Container IDs.
  */
  const WEAK_NODE_TO_LORO_CONTAINER_MAPPING = /* @__PURE__ */ new WeakMap();
 +let cardmirrorCommitOrigin = null;
++/**
++ * CardMirror patch: ONE MOVE PER UNDO STEP.
++ *
++ * Loro's UndoManager cannot undo a step that holds two or more moves on
++ * a MovableList (loro-crdt 1.13.6, reproduced with the bare library:
++ * three items, moves 2->0 then 2->1, undo leaves two items; other shapes
++ * panic in movable_list_apply_delta.rs, which poisons the doc for every
++ * later call). A step with one move undoes exactly. Every multi-move
++ * edit hit it: a section drag, Alphabetize, any reorder the diffs below
++ * settle with several moves.
++ *
++ * So a sync that emits a second move commits before it, and every
++ * commit holds at most one move. The sync's commits share an undo GROUP
++ * (the UndoManager's onPush value) that `undo` / `redo` pop in one
++ * keypress. The doc's registered hooks (the session undo guard) keep
++ * the commits from merging back into one step: `begin` before the
++ * first split commit, `end` after the sync's last.
++ */
++let cardmirrorSyncDoc = null;
++let cardmirrorSyncMoves = 0;
++let cardmirrorUndoGroup = null;
++let cardmirrorUndoGroupSeq = 0;
++let cardmirrorMoveBatch = null;
++const cardmirrorMoveBatchHooks = /* @__PURE__ */ new WeakMap();
++function cardmirrorRegisterMoveBatchHooks(doc, hooks) {
++	cardmirrorMoveBatchHooks.set(doc, hooks);
++	return () => {
++		if (cardmirrorMoveBatchHooks.get(doc) === hooks) cardmirrorMoveBatchHooks.delete(doc);
++	};
++}
++/** move() that never shares a commit with an earlier move of this sync. */
++function cardmirrorMove(list, from, to) {
++	const doc = cardmirrorSyncDoc;
++	if (doc && cardmirrorSyncMoves > 0) {
++		if (!cardmirrorMoveBatch) {
++			cardmirrorMoveBatch = { hooks: cardmirrorMoveBatchHooks.get(doc) || null };
++			cardmirrorMoveBatch.hooks?.begin();
++			cardmirrorUndoGroup = ++cardmirrorUndoGroupSeq;
++		}
++		doc.commit({ origin: cardmirrorCommitOrigin || "loroSyncPlugin" });
++	}
++	cardmirrorSyncMoves++;
++	list.move(from, to);
++}
++/** Undo / redo one step, or the whole group it belongs to (see
++ *  cardmirrorMove). Popping under the group's token carries it onto the
++ *  other stack, so the redo is one keypress too. */
++function cardmirrorPopGroup(undoManager, isUndo) {
++	const top = () => isUndo ? undoManager.topUndoValue() : undoManager.topRedoValue();
++	const can = () => isUndo ? undoManager.canUndo() : undoManager.canRedo();
++	const pop = () => isUndo ? undoManager.undo() : undoManager.redo();
++	const t = top();
++	const group = typeof t === "number" ? t : null;
++	cardmirrorUndoGroup = group;
++	try {
++		const ran = pop();
++		if (ran && group !== null) while (can() && top() === group && pop());
++		return ran;
++	} finally {
++		cardmirrorUndoGroup = null;
++	}
++}
++function cardmirrorUndoStep(undoManager) {
++	return cardmirrorPopGroup(undoManager, true);
++}
++function cardmirrorRedoStep(undoManager) {
++	return cardmirrorPopGroup(undoManager, false);
++}
  function updateLoroToPmState(doc, mapping, editorState, containerId) {
  	const node = editorState.doc;
  	const map = containerId ? doc.getContainerById(containerId) : doc.getMap(ROOT_DOC_KEY);
-@@ -25,7 +205,86 @@ function updateLoroToPmState(doc, mapping, editorState, containerId) {
+@@ -23,9 +271,100 @@ function updateLoroToPmState(doc, mapping, editorState, containerId) {
+ 		isInit = true;
+ 		map.set("nodeName", node.type.name);
  	}
- 	updateLoroMap(map, node, mapping);
- 	if (isInit) doc.commit({ origin: "sys:init" });
+-	updateLoroMap(map, node, mapping);
+-	if (isInit) doc.commit({ origin: "sys:init" });
 -	else doc.commit({ origin: "loroSyncPlugin" });
-+	// CardMirror patch: a transaction may name its commit origin
-+	// (meta 'cmCommitOrigin') so the undo manager can exclude it — the
-+	// undo guard's compensation write must not become an undo step.
-+	else doc.commit({ origin: cardmirrorCommitOrigin || "loroSyncPlugin" });
++	cardmirrorSyncDoc = doc;
++	cardmirrorSyncMoves = 0;
++	try {
++		updateLoroMap(map, node, mapping);
++		if (isInit) doc.commit({ origin: "sys:init" });
++		// CardMirror patch: a transaction may name its commit origin
++		// (meta 'cmCommitOrigin') so the undo manager can exclude it — the
++		// undo guard's compensation write must not become an undo step.
++		else doc.commit({ origin: cardmirrorCommitOrigin || "loroSyncPlugin" });
++	} finally {
++		// The last commit above is still in the move group (see cardmirrorMove).
++		const batch = cardmirrorMoveBatch;
++		cardmirrorSyncDoc = null;
++		cardmirrorSyncMoves = 0;
++		cardmirrorMoveBatch = null;
++		cardmirrorUndoGroup = null;
++		batch?.hooks?.end();
++	}
 +}
 +/**
 + * CardMirror patch: heal schema-invalid containers at materialization
@@ -1536,7 +1787,7 @@ index e41095d..1f2497b 100644
  }
  function createNodeFromLoroObj(schema, obj, mapping) {
  	let retval = mapping.get(obj.id) ?? null;
-@@ -40,7 +299,9 @@ function createNodeFromLoroObj(schema, obj, mapping) {
+@@ -40,7 +379,9 @@ function createNodeFromLoroObj(schema, obj, mapping) {
  			retval = schema.node(nodeName, attributes.toJSON(), mappedChildren);
  			WEAK_NODE_TO_LORO_CONTAINER_MAPPING.set(retval, obj.id);
  		} catch (e) {
@@ -1547,7 +1798,7 @@ index e41095d..1f2497b 100644
  		}
  	} else if (obj instanceof LoroText) {
  		retval = [];
-@@ -82,23 +343,87 @@ function createLoroText(parentList, pos, nodes, mapping) {
+@@ -82,23 +423,87 @@ function createLoroText(parentList, pos, nodes, mapping) {
  function updateLoroText(obj, nodes, mapping) {
  	mapping.set(obj.id, nodes);
  	let str = obj.toString();
@@ -1643,7 +1894,7 @@ index e41095d..1f2497b 100644
  	return pattrs;
  }
  function valueToAttrs(value) {
-@@ -106,11 +431,52 @@ function valueToAttrs(value) {
+@@ -106,11 +511,52 @@ function valueToAttrs(value) {
  	return null;
  }
  function eqLoroTextNodes(obj, nodes) {
@@ -1700,7 +1951,7 @@ index e41095d..1f2497b 100644
  }
  /**
  * Whether the loro object is equal to the node.
-@@ -124,16 +490,57 @@ function eqLoroObjNode(obj, node) {
+@@ -124,16 +570,57 @@ function eqLoroObjNode(obj, node) {
  	}
  	return obj instanceof LoroText && Array.isArray(node) && eqLoroTextNodes(obj, node);
  }
@@ -1748,7 +1999,8 @@ index e41095d..1f2497b 100644
 +	const keys = new Set([...Object.keys(av), ...Object.keys(bv)]);
 +	for (const key of keys) {
 +		if (!cardmirrorCanonicalAttrsEqual(av[key] ?? null, bv[key] ?? null)) return false;
-+	}
+ 	}
+-	return eq;
 +	return true;
 +}
 +function cardmirrorCanonicalizeAttrs(attrs) {
@@ -1756,8 +2008,7 @@ index e41095d..1f2497b 100644
 +	for (const key of Object.keys(attrs ?? {})) {
 +		const v = attrs[key];
 +		if (v !== null && v !== undefined) out[key] = v;
- 	}
--	return eq;
++	}
 +	return out;
 +}
 +// PATCHED (cardmirror): canonical equality — the old form counted
@@ -1767,7 +2018,7 @@ index e41095d..1f2497b 100644
  }
  function eqNodeName(obj, node) {
  	return !Array.isArray(node) && obj.get("nodeName") === node.type.name;
-@@ -155,6 +562,11 @@ function eqMappedNode(mapped, node) {
+@@ -155,6 +642,11 @@ function eqMappedNode(mapped, node) {
  	return false;
  }
  function normalizeNodeContent(node) {
@@ -1779,7 +2030,7 @@ index e41095d..1f2497b 100644
  	const res = [];
  	let textNodes = null;
  	node.content.forEach((node, _offset, _i) => {
-@@ -225,13 +637,382 @@ function updateLoroMapAttributes(obj, node, _mapping) {
+@@ -225,13 +717,382 @@ function updateLoroMapAttributes(obj, node, _mapping) {
  	for (const [key, value] of Object.entries(pAttrs)) {
  		if (value !== null) {
  			if (!equalityDeep(attrs.get(key), value)) attrs.set(key, value);
@@ -1986,7 +2237,7 @@ index e41095d..1f2497b 100644
 +		if (cur[t] === target[t]) continue;
 +		const k = cur.indexOf(target[t], t + 1);
 +		if (k < 0) continue; // impossible (target is a permutation of cur); never corrupt
-+		loroChildren.move(left + k, left + t);
++		cardmirrorMove(loroChildren, left + k, left + t);
 +		cur.splice(k, 1);
 +		cur.splice(t, 0, target[t]);
 +	}
@@ -2165,7 +2416,7 @@ index e41095d..1f2497b 100644
  }
  function updateLoroMapChildren(obj, node, mapping) {
  	const loroChildren = getLoroMapChildren(obj);
-@@ -257,13 +1038,35 @@ function updateLoroMapChildren(obj, node, mapping) {
+@@ -257,13 +1118,35 @@ function updateLoroMapChildren(obj, node, mapping) {
  			if (!Array.isArray(rightNode)) updateLoroMap(rightLoro, rightNode, mapping);
  		} else break;
  	}
@@ -2175,7 +2426,7 @@ index e41095d..1f2497b 100644
 +		const moves = cardmirrorDetectReorder(loroChildren, nodeChildren, left, right, loroChildLength, nodeChildLength, mapping);
 +		if (moves != null) {
 +			const movable = typeof loroChildren.move === "function";
-+			for (const m of moves) if (movable) loroChildren.move(m.from, m.to);
++			for (const m of moves) if (movable) cardmirrorMove(loroChildren, m.from, m.to);
 +			else {
 +				// Plain list: rebuild ONLY the moved child (new identity);
 +				// passed-over children keep theirs, which is the loss fix.
@@ -2202,7 +2453,7 @@ index e41095d..1f2497b 100644
  			left += 1;
  		} else {
  			let updateLeft = leftLoro instanceof LoroMap && eqNodeName(leftLoro, leftNode);
-@@ -421,27 +1224,29 @@ function createDecorations(state, store, _plugin, createSelection, createCursor)
+@@ -421,27 +1304,29 @@ function createDecorations(state, store, _plugin, createSelection, createCursor)
  	for (const [peer, cursor] of Object.entries(all)) {
  		if (peer === thisPeer) continue;
  		if (!cursor.anchor || !cursor.focus) continue;
@@ -2251,7 +2502,7 @@ index e41095d..1f2497b 100644
  	}
  	return DecorationSet.create(state.doc, d);
  }
-@@ -505,7 +1310,7 @@ function cursorToAbsolutePosition(cursor, doc, mapping) {
+@@ -505,7 +1390,7 @@ function cursorToAbsolutePosition(cursor, doc, mapping) {
  	}
  	while (loroNode != null) {
  		const children = loroNode.get(CHILDREN_KEY);
@@ -2260,7 +2511,7 @@ index e41095d..1f2497b 100644
  			const childIds = children.toArray();
  			for (const iter of childIds) {
  				if (iter.id === targetChildId) break;
-@@ -572,7 +1377,17 @@ const LoroSyncPlugin = (props) => {
+@@ -572,7 +1457,17 @@ const LoroSyncPlugin = (props) => {
  				else state.changedBy = "local";
  				switch (meta?.type) {
  					case "doc-changed":
@@ -2279,7 +2530,7 @@ index e41095d..1f2497b 100644
  						break;
  					case "update-state":
  						state = {
-@@ -586,11 +1401,37 @@ const LoroSyncPlugin = (props) => {
+@@ -586,11 +1481,37 @@ const LoroSyncPlugin = (props) => {
  						break;
  					default: break;
  				}
@@ -2318,7 +2569,7 @@ index e41095d..1f2497b 100644
  			return null;
  		},
  		view: (view) => {
-@@ -641,22 +1482,176 @@ function init(view) {
+@@ -641,22 +1562,176 @@ function init(view) {
  		view.dispatch(tr);
  	}
  }
@@ -2501,7 +2752,7 @@ index e41095d..1f2497b 100644
  }
  /**
  * Update ProseMirror selection based on the given Loro cursors.
-@@ -847,7 +1842,14 @@ const LoroUndoPlugin = (props) => {
+@@ -847,7 +1922,14 @@ const LoroUndoPlugin = (props) => {
  				if (!undoState || !loroState) return state;
  				const canUndo = undoState.undoManager.canUndo();
  				const canRedo = undoState.undoManager.canRedo();
@@ -2517,3 +2768,34 @@ index e41095d..1f2497b 100644
  					const { anchor, focus } = convertPmSelectionToCursors(oldEditorState.doc, oldEditorState.selection, loroState);
  					lastSelection = {
  						anchor: anchor ?? null,
+@@ -880,7 +1962,7 @@ const LoroUndoPlugin = (props) => {
+ 				if (selection.anchor) cursors.push(selection.anchor);
+ 				if (selection.focus) cursors.push(selection.focus);
+ 				return {
+-					value: null,
++					value: cardmirrorUndoGroup,
+ 					cursors
+ 				};
+ 			});
+@@ -914,7 +1996,7 @@ const undo = (state, dispatch) => {
+ 	setTimeout(() => {
+ 		undoState.isUndoing.current = false;
+ 	}, 0);
+-	return undoState.undoManager.undo();
++	return cardmirrorUndoStep(undoState.undoManager);
+ };
+ const redo = (state, dispatch) => {
+ 	const undoState = loroUndoPluginKey.getState(state);
+@@ -924,9 +2006,9 @@ const redo = (state, dispatch) => {
+ 	setTimeout(() => {
+ 		undoState.isUndoing.current = false;
+ 	}, 0);
+-	return undoState.undoManager.redo();
++	return cardmirrorRedoStep(undoState.undoManager);
+ };
+ 
+ //#endregion
+-export { ATTRIBUTES_KEY, CHILDREN_KEY, CursorAwareness, CursorEphemeralStore, LoroCursorPlugin, LoroEphemeralCursorPlugin, LoroSyncPlugin, LoroUndoPlugin, NODE_NAME_KEY, ROOT_DOC_KEY, canRedo, canUndo, createNodeFromLoroObj, loroSyncPluginKey, loroUndoPluginKey, redo, undo, updateLoroToPmState };
++export { ATTRIBUTES_KEY, CHILDREN_KEY, CursorAwareness, CursorEphemeralStore, LoroCursorPlugin, LoroEphemeralCursorPlugin, LoroSyncPlugin, LoroUndoPlugin, NODE_NAME_KEY, ROOT_DOC_KEY, canRedo, canUndo, cardmirrorRedoStep, cardmirrorRegisterMoveBatchHooks, cardmirrorUndoStep, createNodeFromLoroObj, loroSyncPluginKey, loroUndoPluginKey, redo, undo, updateLoroToPmState };
+ //# sourceMappingURL=index.js.map
+\ No newline at end of file

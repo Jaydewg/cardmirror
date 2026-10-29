@@ -298,10 +298,12 @@ describe('undo chain in a co-editing session', () => {
     for (const p of r.peers) p.destroy();
   }, 20000);
 
-  it("undoing my move keeps a card the partner added beside it (Loro's undo deletes it)", async () => {
-    // Raw Loro: A drags a section (a block and its card) to the end, B adds
-    // a card right after it, A undoes the drag — B's card is deleted on
-    // every peer. The guard lets the undo stand and writes B's card back.
+  it('undoing my section drag keeps a card the partner added after it', async () => {
+    // A drags a section (a block and its card) to the end, B adds a card
+    // right after it, A undoes the drag. Before the binding split moves into
+    // one undo step each, the drag was two moves in ONE step, Loro's undo of
+    // it deleted B's card on every peer, and the guard wrote it back after
+    // Bravo. Now nothing is deleted: B's card stays where B put it, at the end.
     const block = (t: string): PMNode => schema.nodes['block']!.create({ id: newHeadingId() }, schema.text(t));
     const r = await rig(
       0,
@@ -326,19 +328,19 @@ describe('undo chain in a co-editing session', () => {
     expect(tags(A.doc())).toEqual(['One', 'Alpha', 'Three', 'Charlie', 'Two', 'Bravo', 'Partner']);
 
     await press(r, 0);
-    expect(tags(A.doc()), 'the drag is undone and the partner card is kept, after the card it followed').toEqual([
+    expect(tags(A.doc()), 'the drag is undone and the partner card is kept where it was put').toEqual([
       'One',
       'Alpha',
       'Two',
       'Bravo',
-      'Partner',
       'Three',
       'Charlie',
+      'Partner',
     ]);
     expect(text(A.doc())).toContain('partner body');
     expect(r.notices, 'nothing was lost, so nothing is announced').toEqual([]);
-    expect(r.guards[0]!.stats.rescued).toBe(1);
-    expect(r.ums[0]!.canRedo(), 'the redo would re-create the rescued card').toBe(false);
+    expect(r.guards[0]!.stats.rescued, 'the undo removed nothing to rescue').toBe(0);
+    expect(r.ums[0]!.canRedo(), 'the drag can be redone').toBe(true);
     expect(converged(r)).toBe(true);
 
     await press(r, 0); // the chain continues past it

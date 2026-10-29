@@ -49,6 +49,12 @@
  *     undo steps of their own. The manager merges edits that land within
  *     its merge interval, so without this a skipped step would drag along
  *     the unrelated typing that happened to share its second.
+ *   - A MULTI-MOVE edit (a section drag, Alphabetize) is several undo
+ *     steps, one move each, popped together as one group: Loro cannot undo
+ *     a step that holds two moves (it loses list items or panics — see
+ *     cardmirrorMove in the binding patch). The guard keeps merging off
+ *     for the batch's commits. The collateral rescue above predates this;
+ *     the loss it was found on was probably this Loro bug.
  *
  * Text-only undo/redo never removes a container and is never touched;
  * the user's OWN edits inside a container never block. Session-only —
@@ -62,7 +68,14 @@ import type { EditorView } from 'prosemirror-view';
 import { Fragment, Slice } from 'prosemirror-model';
 import type { Node as PMNode } from 'prosemirror-model';
 import type { LoroDoc, UndoManager } from 'loro-crdt';
-import { loroSyncPluginKey, undo as loroUndo, redo as loroRedo } from 'loro-prosemirror';
+import {
+  loroSyncPluginKey,
+  undo as loroUndo,
+  redo as loroRedo,
+  cardmirrorRegisterMoveBatchHooks,
+  cardmirrorUndoStep,
+  cardmirrorRedoStep,
+} from 'loro-prosemirror';
 import { HEADING_TYPE_NAMES } from '../../schema/ids.js';
 
 export interface UndoGuard {
@@ -172,8 +185,25 @@ export function createUndoGuard(opts: UndoGuardOptions): UndoGuard {
   // is registered before the view's, so it runs first, synchronously,
   // ahead of the binding's dispatch.
   let lastEventBy: string = 'local';
+  /** Inside a split move batch (the binding's cardmirrorMove): its commits
+   *  must stay steps of their own — Loro cannot undo a step holding two
+   *  moves — so merging is off throughout and none of them counts. */
+  let batching = false;
+  const unregisterMoveBatch = cardmirrorRegisterMoveBatchHooks(doc, {
+    begin: () => {
+      batching = true;
+      undoManager.setMergeInterval(0);
+    },
+    end: () => {
+      batching = false;
+      // Merging stays off until the next local commit has its own step,
+      // so it does not join the batch's last one (and undo with it).
+      isolating = 1;
+    },
+  });
   const unsubscribe = doc.subscribe((event) => {
     lastEventBy = event.by;
+    if (batching) return;
     if (isolating > 0 && event.by === 'local' && event.origin !== 'undo' && event.origin !== 'redo') {
       // Excluded origins (comments, meta, the guard's own restore) never
       // become steps, so they do not count against the isolation.
@@ -371,7 +401,7 @@ export function createUndoGuard(opts: UndoGuardOptions): UndoGuard {
     const docBefore = before.doc;
     stats.blocked++;
     if (!isUndo) {
-      const reverted = undoManager.undo();
+      const reverted = cardmirrorUndoStep(undoManager);
       if (!reverted) stats.unrecoverable++;
       opts.onBlocked(REDO_BLOCKED_MESSAGE);
       return;
@@ -383,7 +413,7 @@ export function createUndoGuard(opts: UndoGuardOptions): UndoGuard {
       if (!v) return;
       if (!restoreDoc(v, docBefore, before.selection)) {
         // Could not rebuild the document — fall back to the reversal.
-        if (!undoManager.redo()) stats.unrecoverable++;
+        if (!cardmirrorRedoStep(undoManager)) stats.unrecoverable++;
         opts.onBlocked(UNDO_BLOCKED_MESSAGE);
         return;
       }
@@ -420,6 +450,9 @@ export function createUndoGuard(opts: UndoGuardOptions): UndoGuard {
     redo: wrap(loroRedo, false),
     plugin,
     stats,
-    dispose: () => unsubscribe(),
+    dispose: () => {
+      unsubscribe();
+      unregisterMoveBatch();
+    },
   };
 }
