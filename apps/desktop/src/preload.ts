@@ -734,6 +734,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('host:pairing-inbox-remove', id),
   pairingInboxClear: () => ipcRenderer.invoke('host:pairing-inbox-clear'),
   pairingInboxMarkAllRead: () => ipcRenderer.invoke('host:pairing-inbox-mark-read'),
+  pairingInboxMarkRead: (id: string) => ipcRenderer.invoke('host:pairing-inbox-mark-read-one', id),
   collabRelayDefaults: () =>
     ipcRenderer.invoke('host:collab-relay-defaults') as Promise<{
       url: string;

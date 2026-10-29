@@ -1572,6 +1572,7 @@ function closeOpenStackDropdown(): void {
  *  shell only rebuilds pane decorations when it actually flips. */
 let shellLastMarkUnread = settings.get('markUnreadAfterMarker');
 let shellLastKeepEntireCite = settings.get('readModeKeepEntireCite');
+let shellLastBoldCites = settings.get('readModeBoldCites');
 let shellLastShowUndertags = settings.get('readModeShowUndertags');
 let shellLastShowBackground = settings.get('readModeShowBackground');
 let shellLastNumberingSig = numberingDisplaySig();
@@ -1743,10 +1744,12 @@ class MultiPaneShell {
       // like the mark-unread nudge: the rebuild is O(doc).
       if (
         s.readModeKeepEntireCite !== shellLastKeepEntireCite ||
+        s.readModeBoldCites !== shellLastBoldCites ||
         s.readModeShowUndertags !== shellLastShowUndertags ||
         s.readModeShowBackground !== shellLastShowBackground
       ) {
         shellLastKeepEntireCite = s.readModeKeepEntireCite;
+        shellLastBoldCites = s.readModeBoldCites;
         shellLastShowUndertags = s.readModeShowUndertags;
         shellLastShowBackground = s.readModeShowBackground;
         for (const id of SLOT_IDS) {

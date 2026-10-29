@@ -169,6 +169,26 @@ class InboxStore {
     this.fire();
   }
 
+  /** Mark ONE card seen — called when a card is inserted into a document
+   *  (keyboard insert commands, pill rows), since putting it in your doc
+   *  is at least as much "seeing it" as opening the pill. No-op for an
+   *  unknown id or an already-read card. Persists through the per-item
+   *  IPC when the host has it; on an older preload without it the
+   *  in-window state still updates (the badge and flashing settle) and
+   *  the next backend snapshot wins. */
+  async markRead(id: string): Promise<void> {
+    const item = this.items.find((it) => it.id === id);
+    if (!item || item.read) return;
+    this.items = this.items.map((it) => (it.id === id ? { ...it, read: true } : it));
+    const electron = getElectronHost();
+    if (electron) {
+      if (electron.pairingInboxMarkRead) await electron.pairingInboxMarkRead(id);
+    } else {
+      writeLocal(this.items);
+    }
+    this.fire();
+  }
+
   subscribe(fn: Listener): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);

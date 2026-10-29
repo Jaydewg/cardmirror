@@ -1053,4 +1053,15 @@ export function registerPairingIpc(): void {
     broadcastInbox();
     await persistInbox();
   });
+
+  // One card (inserted into a document). Same shape as mark-all: no
+  // change → no broadcast, no write.
+  ipcMain.handle('host:pairing-inbox-mark-read-one', async (_event, id: string) => {
+    if (typeof id !== 'string' || !id) return;
+    await ensureInboxLoaded();
+    if (!inbox.some((it) => it.id === id && !it.read)) return;
+    inbox = inbox.map((it) => (it.id === id ? { ...it, read: true } : it));
+    broadcastInbox();
+    await persistInbox();
+  });
 }

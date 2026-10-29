@@ -52,7 +52,7 @@ Design notes:
   - The in-process push registry requires a SINGLE worker process (run
     plain `uvicorn`, no --workers).
   - DB-touching handlers are sync `def` on purpose: Starlette runs them
-    in its threadpool, keeping the blocking psycopg2 driver off the
+    in its threadpool, keeping the blocking psycopg driver off the
     event loop (which must stay free to serve SSE streams and accept
     connections). The pool is sized to the threadpool; exhaustion sheds
     as 503. Run uvicorn with `--limit-concurrency` sized WELL ABOVE the
@@ -187,11 +187,15 @@ logger = logging.getLogger("relay")
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is required")
-# requirements.txt ships psycopg2, but SQLAlchemy 2.1 maps a bare
-# postgresql:// (and hosts' legacy postgres://) to psycopg 3 — a fresh
-# install would fail to import a driver at startup. Name the driver we
-# ship; an explicit +driver in the URL is left alone.
-DATABASE_URL = re.sub(r"^postgres(?:ql)?://", "postgresql+psycopg2://", DATABASE_URL)
+# SQLAlchemy 2.1 made psycopg (3) the default driver for plain
+# `postgresql://` URLs; 2.0 still reads them as psycopg2. Only psycopg
+# is installed (requirements.txt), so name the driver explicitly and the
+# same URL works under either SQLAlchemy. `postgres://` (the Heroku-era
+# spelling some hosts still hand out) is folded in too.
+for _scheme in ("postgresql://", "postgres://"):
+    if DATABASE_URL.startswith(_scheme):
+        DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL[len(_scheme):]
+        break
 
 # Pool sized to Starlette's sync-handler threadpool (AnyIO default: 40
 # tokens) so worker threads never convoy behind connection checkout. A
@@ -1221,7 +1225,7 @@ feature("mailbox.retryDedupe")
 
 
 # Deliberately a sync `def`: Starlette runs it in the threadpool, so the
-# blocking psycopg2 commit never executes on the event loop. Under
+# blocking psycopg commit never executes on the event loop. Under
 # sustained load the loop previously convoyed and stopped reading new
 # connections entirely (permanent accept-path stall at ~200 msg/s,
 # CPU idle); threadpool execution + the pool sizing above removes the
@@ -1703,7 +1707,7 @@ async def _fan_out_presence(room_id: str, request: Request, sender: Optional[str
 
 def _open_room_stream(room_id: str) -> int:
     """DB half of stream connect; runs in the threadpool (blocking
-    psycopg2 must stay off the event loop)."""
+    psycopg must stay off the event loop)."""
     db = SessionLocal()
     try:
         room = _room_or_error(db, room_id)

@@ -1022,6 +1022,13 @@ export interface Settings {
    *  Convert Cards to Read Mode follows it. Off by default: the marked
    *  runs are what most people read at the podium. */
   readModeKeepEntireCite: boolean;
+  /** When true (default), read mode treats hand-bolded text in the cite
+   *  slot as a cite: a cite paragraph or card body right after a tag /
+   *  undertag with no underline or emphasis anywhere, some bold, and (for a
+   *  body) a digit in the bold, shows its bold runs. Catches imports whose
+   *  cites are bold plain text instead of the Cite style. Display-only;
+   *  Convert Cards to Read Mode, read-mode copy and export follow it. */
+  readModeBoldCites: boolean;
   /** When true, read mode shows undertag paragraphs — every run of them,
    *  in cards, analytic units and at document level — instead of hiding
    *  them. Display-only, like keep-entire-cite; Convert Cards to Read
@@ -1984,6 +1991,7 @@ const DEFAULTS: Settings = {
   hideEmphasisBordersInReadMode: false,
   readModeParagraphIntegrity: false,
   readModeKeepEntireCite: false,
+  readModeBoldCites: true,
   readModeShowUndertags: false,
   readModeShowBackground: false,
   readModeCopyVisible: true,
@@ -2584,6 +2592,16 @@ export const SETTING_METADATA: SettingMeta[] = [
     category: 'general',
     section: 'Editor behavior',
     aliases: ['whole cite', 'full cite', 'entire cite', 'read mode cite', 'quals'],
+  },
+  {
+    key: 'readModeBoldCites',
+    label: 'Read mode: treat bold as a cite',
+    description:
+      'When on, read mode shows hand-bolded text in the cite slot as if it were cite-marked: in the paragraph right after a tag or undertag, if nothing is underlined or emphasized and some text is bold, the bold runs are read aloud (in a body paragraph the bold must include a number, like a date). Catches imported files whose cites are bold plain text instead of the Cite style, which read mode otherwise hides. On by default. Display-only, like the rest of read mode; Convert Cards to Read Mode, read-mode copy and read-mode export follow it.',
+    kind: 'toggle',
+    category: 'general',
+    section: 'Editor behavior',
+    aliases: ['bold cite', 'bolded cite', 'read mode bold', 'missing cite in read mode', 'cite not showing'],
   },
   {
     key: 'readModeShowUndertags',
@@ -4029,7 +4047,7 @@ export const SETTING_METADATA: SettingMeta[] = [
     key: 'highlightUnderlinedOnly',
     label: 'Highlight underlined text only',
     description:
-      'When on, Toggle Highlight and Toggle Background Color (F11 / Ctrl+F11, the paintbrush, and the color pickers) only paint body text that is underlined or emphasized, so painting over a mix of underlined and plain text highlights just the underlined parts. In a word that mixes emphasis and plain underline, only the emphasized part is painted. Tags, cites, analytics and the pocket / hat / block headings are always painted whole. Toggling off and "No highlight" still clear the whole selection. Composes with the automatic gap bridging above.',
+      'When on, Toggle Highlight and Toggle Background Color (F11 / Ctrl+F11, the paintbrush, and the color pickers) only paint body text that is underlined or emphasized, so painting over a mix of underlined and plain text highlights just the underlined parts. In a word that mixes emphasis and plain underline, only the emphasized part is painted; a word here is what a double-click selects (letters, digits, apostrophes), so a dash or comma splits words instead of joining them; a dash that joins two painted words with no space is painted with them, and punctuation beside a space is left to the gap bridging. Tags, cites, analytics and the pocket / hat / block headings are always painted whole. Toggling off and "No highlight" still clear the whole selection, and when nothing in the selection is underlined the key removes whatever highlight is there, so removal is never blocked by the filter. Composes with the automatic gap bridging above.',
     kind: 'toggle',
     category: 'editing',
     section: 'Highlighting',
@@ -5128,6 +5146,7 @@ function sanitize(s: Settings): Settings {
     hideEmphasisBordersInReadMode: !!s.hideEmphasisBordersInReadMode,
     readModeParagraphIntegrity: !!s.readModeParagraphIntegrity,
     readModeKeepEntireCite: !!s.readModeKeepEntireCite,
+    readModeBoldCites: s.readModeBoldCites !== false,
     readModeShowUndertags: !!s.readModeShowUndertags,
     readModeShowBackground: !!s.readModeShowBackground,
     readModeCopyVisible: s.readModeCopyVisible !== false,

@@ -11,7 +11,7 @@ Starts real relays (uvicorn subprocesses, one Postgres database each):
 Postgres: set RELAY_TEST_PG_URL (a superuser URL, e.g.
 postgresql://postgres@localhost/postgres) or `pip install pgserver` and
 one is started for the session. Needs: fastapi uvicorn sqlalchemy
-psycopg2-binary httpx pytest (relay/requirements.txt + pytest).
+'psycopg[binary]' httpx pytest (relay/requirements.txt + pytest).
 
     cd relay && python -m pytest tests -q
 """
@@ -53,13 +53,13 @@ def pg_url():
 
 def _fresh_db(admin_url: str, name: str) -> str:
     admin = sqlalchemy.create_engine(
-        admin_url.replace("postgresql://", "postgresql+psycopg2://", 1), isolation_level="AUTOCOMMIT"
+        admin_url.replace("postgresql://", "postgresql+psycopg://", 1), isolation_level="AUTOCOMMIT"
     )
     with admin.connect() as c:
         c.execute(sqlalchemy.text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
         c.execute(sqlalchemy.text(f'CREATE DATABASE "{name}"'))
     admin.dispose()
-    u = sqlalchemy.engine.make_url(admin_url.replace("postgresql://", "postgresql+psycopg2://", 1))
+    u = sqlalchemy.engine.make_url(admin_url.replace("postgresql://", "postgresql+psycopg://", 1))
     return u.set(database=name).render_as_string(hide_password=False)
 
 

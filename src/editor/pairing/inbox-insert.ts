@@ -26,8 +26,9 @@ export const RECEIVE_NEEDS_DOC_MESSAGE =
  *  of the document when `atEnd` (or whenever read mode is on — there's no
  *  editing caret to target then). Heading ids are rewritten so they can't
  *  collide with the doc's existing ids. The item is left in the inbox (insertion
- *  isn't consumption — matching the pill). Returns false if the slice can't be
- *  decoded. */
+ *  isn't consumption — matching the pill) but marked read: it is in your
+ *  document now, so the unread badge and the arrival flash stop counting it.
+ *  Returns false if the slice can't be decoded. */
 export function insertReceivedItem(view: EditorView, item: InboxItem, atEnd: boolean): boolean {
   let slice: Slice;
   try {
@@ -55,6 +56,7 @@ export function insertReceivedItem(view: EditorView, item: InboxItem, atEnd: boo
   // refreshes the panel's seen-ids baseline.
   onReceivedInsert?.();
   view.focus();
+  void inboxStore.markRead(item.id);
   return true;
 }
 

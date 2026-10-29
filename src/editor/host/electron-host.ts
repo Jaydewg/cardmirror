@@ -10,6 +10,7 @@
 
 import type { LearnOp } from '../learn-store.js';
 import type { MenuRecentsPayload } from '../menu-recents.js';
+import type { UpdateChipState } from '../update-chip.js';
 import type { DiskBase, CloudProvider } from './types.js';
 export type ClaimResult = 'fresh' | 'journaled' | 'changed' | 'unknown';
 import type {
@@ -387,6 +388,8 @@ interface ElectronAPI {
   pairingInboxRemove?(id: string): Promise<void>;
   pairingInboxClear?(): Promise<void>;
   pairingInboxMarkAllRead?(): Promise<void>;
+  /** Mark one inbox card read (absent on preloads older than this). */
+  pairingInboxMarkRead?(id: string): Promise<void>;
   /** Baked relay endpoint from the main process (same base + shared
    *  token card sharing uses) — the renderer-side rooms client falls
    *  back to this when no settings/dev override is present. Optional so
@@ -497,11 +500,9 @@ interface ElectronAPI {
    *  state (null = none), a subscription for changes, and the chip's
    *  click action (ready → restart-install; available → release page).
    *  See main.ts "Update chip" for the model. */
-  getUpdateChipState(): Promise<{ state: 'available' | 'ready'; version: string } | null>;
+  getUpdateChipState(): Promise<UpdateChipState | null>;
   updateChipAction(): Promise<void>;
-  onUpdateChip(
-    handler: (payload: { state: 'available' | 'ready'; version: string } | null) => void,
-  ): () => void;
+  onUpdateChip(handler: (payload: UpdateChipState | null) => void): () => void;
   /** Floating always-on-top timer pop-out window. Optional so a
    *  renderer against an older packaged shell (preload without the
    *  timer API) simply never offers the pop-out button. The opener
@@ -1226,6 +1227,10 @@ export class ElectronHost implements Host {
     await api().pairingInboxMarkAllRead?.();
   }
 
+  async pairingInboxMarkRead(id: string): Promise<void> {
+    await api().pairingInboxMarkRead?.(id);
+  }
+
   async collabRelayDefaults(): Promise<{ url: string; token: string; routingCode?: string }> {
     return (await api().collabRelayDefaults?.()) ?? { url: '', token: '', routingCode: '' };
   }
@@ -1434,7 +1439,7 @@ export class ElectronHost implements Host {
     await api().triggerAutoUpdateCheck();
   }
 
-  async getUpdateChipState(): Promise<{ state: 'available' | 'ready'; version: string } | null> {
+  async getUpdateChipState(): Promise<UpdateChipState | null> {
     return api().getUpdateChipState();
   }
 
@@ -1442,9 +1447,7 @@ export class ElectronHost implements Host {
     await api().updateChipAction();
   }
 
-  onUpdateChip(
-    handler: (payload: { state: 'available' | 'ready'; version: string } | null) => void,
-  ): () => void {
+  onUpdateChip(handler: (payload: UpdateChipState | null) => void): () => void {
     // Optional-chained: an older packaged shell (preload without the
     // chip API) just never shows the chip.
     const fn = api().onUpdateChip;

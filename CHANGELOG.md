@@ -5,7 +5,10 @@ changes in each release, written for users of the editor. For
 in-depth rationale and implementation context behind each entry,
 see `DETAILED_CHANGELOG.md`.
 
-## Unreleased — federation
+## 1.17.29-f — 2026-10-29
+
+Federation build of 1.17.29: everything in 1.17.29 (below), with
+federation, plus the changes listed here.
 
 ### Changed
 
@@ -14,6 +17,83 @@ see `DETAILED_CHANGELOG.md`.
   without federation. The update toggle and **Help → Check for
   Updates…** are back. 1.16.26-f can't update itself, so install this
   build by hand once.
+
+- **Self-hosted relays use psycopg 3.** The relay's database driver
+  follows upstream 1.17.0. If you run your own relay, reinstall
+  `relay/requirements.txt` after updating; the same `DATABASE_URL`
+  keeps working.
+
+## 1.17.29 — 2026-10-29
+
+Upstream CardMirror 1.17.0 (see its entry below), the fork's own
+changes from 1.16.1, and the fix listed here. Fork versions keep
+upstream's major.minor; the last number counts days from the start of
+the month the minor began (1.17 began in October, so October 29 is 29).
+
+### Fixed
+
+- **Undo after Alphabetize no longer breaks a co-editing session.**
+  Alphabetizing headings and then pressing Ctrl+Z could stop the
+  session dead: nothing else could be typed, undone or synced until
+  the document was reopened. Undoing a header drag (a header with the
+  cards under it) could also make cards vanish. Now one Ctrl+Z puts the
+  old order back exactly, and Ctrl+Y re-sorts.
+
+## 1.17.0 — 2026-10-29
+
+### Added
+
+- **Refresh File Search Index** *(desktop; a command, unbound by default)*
+  re-walks every file search folder immediately and reports what it found
+  (files indexed, files changed, folders missing on disk). Use it when a
+  document saved from Word or Finder is not showing up in the palette yet.
+  Changing the file search folders in Settings now re-scans right away too,
+  instead of waiting for the next palette open.
+
+- **Read mode shows hand-bolded cites.** A cite that was bolded instead
+  of styled as a cite used to vanish in read mode. Now, in the paragraph
+  right after a tag or undertag, if nothing is underlined or emphasized
+  and some text is bold, the bold reads as the cite (in a body paragraph
+  the bold has to include a number, like a date). Convert Cards to Read
+  Mode, read-mode copy and read-mode export follow the same rule. New
+  setting **Read mode: treat bold as a cite** (Settings → General, on by
+  default) turns it off.
+
+### Changed
+
+- **Highlight underlined text only:** removing a highlight is never blocked
+  by the filter. When nothing in the selection is underlined or emphasized,
+  F11 (and Mod-F11 for background color) now removes whatever highlight the
+  selection carries, in any color, instead of doing nothing — so a highlight
+  sitting on plain text, from an import or a paint made with the setting
+  off, comes off with the same key. Painting is unchanged.
+- **Highlight underlined text only:** a "word" is now the same unit a
+  double-click selects (letters, digits, apostrophes). Dashes, hyphens and
+  punctuation split words instead of joining them, so in `nuclear—armed`
+  with only `nuclear` emphasized, `armed` keeps its underline paint instead
+  of being dropped as part of one emphasized word. A dash that joins two
+  painted words is painted with them; punctuation beside a space is left to
+  the gap bridging.
+
+### Fixed
+
+- **The update chip shows the download in progress.** The home screen's
+  update button and the status-bar chip used to stay blank from the moment
+  an update was found until it had finished downloading, then jump straight
+  to "restart to install". They now read "Downloading update 1.17.0… 42%"
+  while it stages (closes #104).
+
+- **Insert Received Card (At Cursor / At End)** now mark the inserted card
+  as read. Inserting with Mod-P or Mod-Alt-P used to leave the card
+  counted as new, so the Receive badge kept showing it and the arrival
+  flash kept going until you opened the pill. The card stays in the list.
+
+- **Self-hosted relay:** the server starts again on a fresh install.
+  SQLAlchemy 2.1 switched its default Postgres driver to psycopg 3,
+  which the relay image did not install, so new builds crashed on
+  startup. The relay now installs psycopg 3 and names the driver in the
+  connection URL itself, so the same `DATABASE_URL` works under either
+  SQLAlchemy. Thanks to Cora (@coralynnkc)!
 
 ## 1.16.26-f — 2026-10-26
 

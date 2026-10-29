@@ -84,6 +84,19 @@ export interface FileBrowseResult {
   valid: boolean;
 }
 
+/** Outcome of a forced re-walk of every search root (the "Refresh File
+ *  Search Index" command). */
+export interface FileIndexRefreshResult {
+  /** Roots walked (the configured list, departed ones already pruned). */
+  roots: number;
+  /** Openable files now indexed across those roots. */
+  files: number;
+  /** Files added, removed, or re-saved since the previous listing. */
+  changedFiles: number;
+  /** Roots that do not exist (or cannot be read) on disk right now. */
+  missingRoots: string[];
+}
+
 export type LocateCurrentFileFailure = 'outside-roots' | 'excluded';
 
 export type LocateCurrentFileResult =

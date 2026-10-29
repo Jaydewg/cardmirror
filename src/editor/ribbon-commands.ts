@@ -45,6 +45,7 @@ import { moveToHeadingOfType } from './word-selection-keymap.js';
 import { convertCardsToReadMode } from './convert-cards-to-read-mode.js';
 import { openFootnoteEditor } from './footnote-popover.js';
 import { flipQuoteDirection } from './flip-quote-direction.js';
+import { refreshFileSearchIndex } from './file-index-refresh.js';
 import {
   isPluginCommandId,
   pluginCommandIds,
@@ -1824,8 +1825,10 @@ const UNDERLINED_MARKS = new Set(['underline_mark', 'underline_direct', 'emphasi
 /**
  * "Highlight underlined text only" (Settings → Editing): narrow the ranges a
  * highlight / shading paint touches to the text that is underlined or
- * emphasized. Two rules, per word (a maximal run of non-whitespace in one
- * textblock):
+ * emphasized. Two rules, per word — the SAME word a double-click selects
+ * (`word-break.ts`: a maximal run of letters, digits and apostrophes;
+ * punctuation, dashes, spaces and inline leaves all end a word, so
+ * "nuclear—armed" is two words and "weapons," is a word plus a comma):
  *
  *   1. A word with no emphasis keeps its underlined characters.
  *   2. A word with ANY emphasis keeps only its emphasized characters — so
@@ -1833,11 +1836,17 @@ const UNDERLINED_MARKS = new Set(['underline_mark', 'underline_direct', 'emphasi
  *      weapons", painting the words highlights just the emphasized part.
  *      The whole word decides, even the part outside the selection.
  *
- * Whitespace and other non-word gap characters are never kept: the gap
- * bridger (when on) fills the gaps between two painted neighbors, which is
- * how the setting composes with "Bridge formatting across gaps". Returns
- * the kept pieces clipped to the input ranges, merged where contiguous; an
- * empty list when nothing in the selection qualifies.
+ * Non-word characters — spaces, punctuation, dashes — are gap content and
+ * are not kept on their own: the gap bridger (when on) fills the gaps
+ * between two painted neighbors, which is how the setting composes with
+ * "Bridge formatting across gaps". One exception: an underlined
+ * punctuation run with no whitespace that JOINS two kept words
+ * ("nuclear—armed") is kept with them, because the bridger never bridges
+ * dashes and a hole there would be wrong. (Before 2026-10-29 a word was
+ * any run of non-whitespace, so an em-dash-joined pair counted as one
+ * word and emphasis in one half suppressed the plain underline in the
+ * other.) Returns the kept pieces clipped to the input ranges, merged
+ * where contiguous; an empty list when nothing in the selection qualifies.
  *
  * Only BODY text is filtered. Headings (pocket / hat / block / tag), cites
  * and analytics are painted whole — their text is read in full, so there's
@@ -1867,7 +1876,8 @@ export function restrictToUnderlinedText(
         return false;
       }
       // Per-position character and style maps for the textblock; inline
-      // leaves read as whitespace so they end a word.
+      // leaves read as whitespace so they end a word (non-word, like
+      // punctuation, under `isWordChar`).
       const ch = new Array<string>(size).fill(' ');
       const underlined = new Array<boolean>(size).fill(false);
       const emphasized = new Array<boolean>(size).fill(false);
@@ -1887,21 +1897,45 @@ export function restrictToUnderlinedText(
       });
       const lo = Math.max(0, from - base);
       const hi = Math.min(size, to - base);
+      // Pass 1 — words. `kept` is decided for the WHOLE textblock (the
+      // join rule below needs neighbors outside the range); the emit at
+      // the end clips to [lo, hi).
+      const kept = new Array<boolean>(size).fill(false);
       let i = 0;
       while (i < size) {
-        if (/\s/.test(ch[i]!)) { i++; continue; }
+        if (!isWordChar(ch[i]!)) { i++; continue; }
         let j = i;
-        while (j < size && !/\s/.test(ch[j]!)) j++;
-        // Word is [i, j). Only words touching the range matter.
-        if (j > lo && i < hi) {
-          const useEmphasis = emphasized.slice(i, j).some(Boolean);
-          const keep = useEmphasis ? emphasized : underlined;
-          for (let k = Math.max(i, lo); k < Math.min(j, hi); k++) {
-            if (keep[k]) push(base + k, base + k + 1);
-          }
+        while (j < size && isWordChar(ch[j]!)) j++;
+        // Word is [i, j).
+        const useEmphasis = emphasized.slice(i, j).some(Boolean);
+        const keep = useEmphasis ? emphasized : underlined;
+        for (let k = i; k < j; k++) if (keep[k]) kept[k] = true;
+        i = j;
+      }
+      // Pass 2 — joins. A run of punctuation with NO whitespace that sits
+      // between two kept characters ("nuclear—armed", "well-known",
+      // "x/y") is kept when it is underlined itself: the gap bridger
+      // deliberately never bridges dashes (a dash is a seam the user
+      // chose, see formatting-gaps.ts), so leaving it out would punch a
+      // hole in the paint that nothing fills. Any run touching whitespace
+      // is left to the bridger, like the space itself.
+      i = 0;
+      while (i < size) {
+        if (isWordChar(ch[i]!)) { i++; continue; }
+        let j = i;
+        let hasSpace = false;
+        let allUnderlined = true;
+        while (j < size && !isWordChar(ch[j]!)) {
+          if (/\s/.test(ch[j]!) || ch[j] === '\0') hasSpace = true;
+          if (!underlined[j]) allUnderlined = false;
+          j++;
+        }
+        if (!hasSpace && allUnderlined && i > 0 && j < size && kept[i - 1] && kept[j]) {
+          for (let k = i; k < j; k++) kept[k] = true;
         }
         i = j;
       }
+      for (let k = lo; k < hi; k++) if (kept[k]) push(base + k, base + k + 1);
       return false;
     });
   }
@@ -1922,6 +1956,25 @@ function paintRanges(
  *  `paintRanges`: tell `withGapFix` which pieces were painted. */
 function notePainted(tr: Transaction, paint: ReturnType<typeof paintRanges>): void {
   if (paint.narrowed) tr.setMeta(META_PAINTED_RANGES, paint.ranges);
+}
+
+/** Does any text in `ranges` carry `markName` (any attrs)? The
+ *  "remove-only" test for a paint whose filter left nothing to paint. */
+function anyMarkInRanges(
+  doc: PMNode,
+  ranges: { from: number; to: number }[],
+  markName: string,
+): boolean {
+  for (const { from, to } of ranges) {
+    let found = false;
+    doc.nodesBetween(from, to, (node) => {
+      if (found) return false;
+      if (node.isText && node.marks.some((m) => m.type.name === markName)) found = true;
+      return !found;
+    });
+    if (found) return true;
+  }
+  return false;
 }
 
 
@@ -2173,9 +2226,16 @@ export function applyHighlight(activeColor: () => string | null): Command {
     // pieces; a strip still clears the whole selection, so painting the
     // same swath twice leaves it clean.
     const paint = paintRanges(state.doc, op.ranges);
-    if (paint.ranges.length === 0) return false;
+    // The filter left nothing to paint (no underline / emphasis in the
+    // selection): the only thing F11 can mean here is "remove", so strip
+    // whatever highlight the selection carries — any color, filter
+    // ignored. Removal must never be stuck behind the filter: a highlight
+    // sitting on plain text (an import, a paint made with the setting
+    // off) has to come off with the same key. No highlight at all → no-op.
+    const removeOnly = paint.ranges.length === 0;
+    if (removeOnly && !anyMarkInRanges(state.doc, op.ranges, 'highlight')) return false;
     let allInActiveColor = true;
-    let anyText = false;
+    let anyText = removeOnly;
     for (const { from, to } of paint.ranges) {
       const scan = toggleScanRange(state.doc, from, to);
       const r = scanTextMarkPresence(
@@ -2195,8 +2255,9 @@ export function applyHighlight(activeColor: () => string | null): Command {
     // Toggle off only when the whole range already wears THIS color —
     // a different color repaints instead of erasing (field report
     // 2026-08-05: green over yellow used to strip everything). A null
-    // pen ("No highlight") always strips, no toggle branch.
-    if (allInActiveColor || color === null) {
+    // pen ("No highlight") always strips, no toggle branch. So does a
+    // remove-only press (above).
+    if (removeOnly || allInActiveColor || color === null) {
       for (const { from, to } of op.ranges) tr.removeMark(from, to, highlightType);
     } else {
       // Replace any existing highlight color with the active one
@@ -2232,11 +2293,13 @@ export function applyShading(activeColor: () => string | null): Command {
     if (op.ranges.length === 0) return false;
 
     const color = activeColor();
-    // Same underlined-only narrowing as highlight (see applyHighlight).
+    // Same underlined-only narrowing as highlight (see applyHighlight),
+    // including the remove-only fallback when the filter leaves nothing.
     const paint = paintRanges(state.doc, op.ranges);
-    if (paint.ranges.length === 0) return false;
+    const removeOnly = paint.ranges.length === 0;
+    if (removeOnly && !anyMarkInRanges(state.doc, op.ranges, 'shading')) return false;
     let allInActiveColor = true;
-    let anyText = false;
+    let anyText = removeOnly;
     for (const { from, to } of paint.ranges) {
       const scan = toggleScanRange(state.doc, from, to);
       const r = scanTextMarkPresence(
@@ -2255,8 +2318,8 @@ export function applyShading(activeColor: () => string | null): Command {
     const tr = state.tr;
     // Same-color-only toggle, mirroring highlight: a different active
     // color repaints; only repeating the exact color strips. Null pen
-    // ("No background color") — strip.
-    if (allInActiveColor || color === null) {
+    // ("No background color") — strip. So does a remove-only press.
+    if (removeOnly || allInActiveColor || color === null) {
       for (const { from, to } of op.ranges) tr.removeMark(from, to, shadingType);
     } else {
       for (const { from, to } of paint.ranges) {
@@ -4855,6 +4918,9 @@ export type RibbonCommandId =
   // Flip every curly quote in the selection to the opposite direction. No
   // default binding.
   | 'flipQuoteDirection'
+  // Force an immediate re-walk of every file search folder (desktop). No
+  // default binding.
+  | 'refreshFileSearchIndex'
   | 'toggleParagraphIntegrity'
   | 'selectSpeechDoc'
   | 'goHome'
@@ -5112,6 +5178,7 @@ export const RIBBON_COMMAND_IDS: RibbonCommandId[] = [
   'cycleTheme',
   'cycleTimerPreset',
   'flipQuoteDirection',
+  'refreshFileSearchIndex',
   'toggleParagraphIntegrity',
   'selectSpeechDoc',
   'goHome',
@@ -5343,6 +5410,7 @@ export const RIBBON_COMMAND_LABELS: Record<RibbonCommandId, string> = {
   cycleTheme: 'Cycle Theme (Light → Dark → System)',
   cycleTimerPreset: 'Cycle Timer Preset (College → High School → Pomodoro)',
   flipQuoteDirection: 'Flip Quote Direction',
+  refreshFileSearchIndex: 'Refresh File Search Index',
   toggleParagraphIntegrity: 'Toggle Paragraph Integrity',
   selectSpeechDoc: 'Select Speech Document',
   goHome: 'Go to Home Screen',
@@ -5536,6 +5604,7 @@ export const RIBBON_COMMAND_ALIASES: Partial<Record<RibbonCommandId, readonly st
   timerStartNegPrep: ['neg prep', 'negative prep', 'prep timer'],
   timerReset: ['reset timer', 'reset prep'],
   flipQuoteDirection: ['flip quotes', 'curly quotes', 'reverse quote direction', 'smart quote direction', 'fix apostrophe', 'quote direction'],
+  refreshFileSearchIndex: ['rescan files', 'reindex files', 'rebuild file index', 'file index', 'rescan file search folders', 'update file list', 'missing file in search'],
   deleteCurrentHeading: ['delete card', 'delete heading', 'delete current card'], // "remove …" via the delete/remove synonym group
   nextPocket: ['jump to next pocket', 'next heading', 'navigate'],
   prevPocket: ['jump to previous pocket', 'previous heading', 'navigate'],
@@ -5835,6 +5904,7 @@ export const DEFAULT_RIBBON_KEYS: Record<RibbonCommandId, string | string[]> = {
   cycleTheme: '',
   cycleTimerPreset: '',
   flipQuoteDirection: '',
+  refreshFileSearchIndex: '',
   toggleParagraphIntegrity: '',
   selectSpeechDoc: '',
   goHome: '',
@@ -7262,6 +7332,15 @@ function commandFor(id: RibbonCommandId, ctx: RibbonContext): Command {
       return timerCommand(() => resetTimer());
     case 'flipQuoteDirection':
       return flipQuoteDirection;
+    case 'refreshFileSearchIndex':
+      // Desktop only in effect: off Electron there is no index service and
+      // the helper says so in a toast. The walk runs out of process; the
+      // command returns at once and the result arrives as a toast.
+      return (_state, dispatch) => {
+        if (!dispatch) return true;
+        void refreshFileSearchIndex();
+        return true;
+      };
     case 'toggleParagraphIntegrity':
       return (_state, dispatch) => {
         if (!dispatch) return true;
