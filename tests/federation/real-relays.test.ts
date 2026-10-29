@@ -121,7 +121,7 @@ describe.skipIf(!CFG)('federated co-editing (real relays)', () => {
         onJoinRequests: () => joinNudges++,
       },
     });
-    const joinView = mkView([...joiner.plugins(), collabReadOnlyPlugin(() => joiner.readOnly)]);
+    const joinView = mkView([...joiner.plugins(), collabReadOnlyPlugin(() => joiner.viewOnly)]);
     await settle();
     joiner.start();
     cleanup.push(() => joiner.stop());
@@ -137,7 +137,7 @@ describe.skipIf(!CFG)('federated co-editing (real relays)', () => {
     // Downgrade to read-only, live: the access frame arrives through B.
     await hostClient.decideJoinRequest(roomId, req.requestId, 'read');
     await until(() => accessChanges.includes('read'));
-    expect(joiner.readOnly).toBe(true);
+    expect(joiner.accessReadOnly).toBe(true);
     const before = docText(joinView.state.doc);
     typeAfter(joinView, 'again', ' BLOCKED'); // the editor refuses it
     expect(docText(joinView.state.doc)).toBe(before);
