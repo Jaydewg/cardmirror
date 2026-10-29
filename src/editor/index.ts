@@ -110,6 +110,7 @@ import {
   openQuickCardTagPicker,
   prewarmQuickCardFiles,
 } from './quick-card-search-ui.js';
+import { getFileIndexClient } from './file-search-client.js';
 import {
   learnStore,
   loadLearnStore,
@@ -4066,6 +4067,7 @@ let lastReadMode = settings.get('readMode');
 let lastReadModeBorders = settings.get('hideEmphasisBordersInReadMode');
 let lastReadModeParaIntegrity = settings.get('readModeParagraphIntegrity');
 let lastReadModeKeepCite = settings.get('readModeKeepEntireCite');
+let lastReadModeBoldCites = settings.get('readModeBoldCites');
 let lastReadModeShowUndertags = settings.get('readModeShowUndertags');
 let lastReadModeShowBackground = settings.get('readModeShowBackground');
 let lastMarkUnread = settings.get('markUnreadAfterMarker');
@@ -4134,6 +4136,7 @@ settings.subscribe((s) => {
       s.hideEmphasisBordersInReadMode !== lastReadModeBorders ||
       s.readModeParagraphIntegrity !== lastReadModeParaIntegrity ||
       s.readModeKeepEntireCite !== lastReadModeKeepCite ||
+      s.readModeBoldCites !== lastReadModeBoldCites ||
       s.readModeShowUndertags !== lastReadModeShowUndertags ||
       s.readModeShowBackground !== lastReadModeShowBackground)
   ) {
@@ -4141,6 +4144,7 @@ settings.subscribe((s) => {
     lastReadModeBorders = s.hideEmphasisBordersInReadMode;
     lastReadModeParaIntegrity = s.readModeParagraphIntegrity;
     lastReadModeKeepCite = s.readModeKeepEntireCite;
+    lastReadModeBoldCites = s.readModeBoldCites;
     lastReadModeShowUndertags = s.readModeShowUndertags;
     lastReadModeShowBackground = s.readModeShowBackground;
     // (applyReadMode re-sends the toggle, which rebuilds the plugin's
@@ -10421,6 +10425,10 @@ installPluginCommunityGate();
       if (roots !== lastRoots) {
         lastRoots = roots;
         void eh.syncLibraryRoots(roots);
+        // Tell the index service too, so a folder added in Settings is
+        // scanned now (and a removed one pruned) instead of waiting for
+        // the next palette open.
+        void getFileIndexClient().then((client) => client?.configure(roots).catch(() => {}));
       }
       const wf = writeFolders();
       if (wf.join('\n') !== lastWriteFolders) {

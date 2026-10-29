@@ -190,6 +190,84 @@ describe('file-index core', () => {
     expect(res.total).toBe(3);
   });
 
+  it('refresh re-walks a cached root at once, counts the change, and notifies', async () => {
+    const core = makeCore();
+    await core.configure([rootA]);
+    await core.idle();
+    changed = [];
+
+    write(path.join(rootA, 'Fresh Add.cmir'));
+    fs.rmSync(path.join(rootA, 'Neg', 'Warming Neg.docx'));
+    const r = await core.refresh([rootA]);
+    expect(r).toEqual({ roots: 1, files: 2, changedFiles: 2, missingRoots: [] });
+    expect(changed).toEqual([rootA]);
+    const res = await core.query(q({ query: 'fresh' }));
+    expect(res.rows.map((x) => x.name)).toEqual(['Fresh Add']);
+    await core.idle();
+  });
+
+  it('refresh with nothing changed reports no changes and stays quiet', async () => {
+    const core = makeCore();
+    await core.configure([rootA]);
+    await core.idle();
+    changed = [];
+
+    const r = await core.refresh([rootA]);
+    expect(r.changedFiles).toBe(0);
+    expect(r.files).toBe(2);
+    expect(changed).toEqual([]);
+    await core.idle();
+  });
+
+  it('refresh scans a cold root (every file counts as new) and flags a missing one', async () => {
+    const core = makeCore();
+    const gone = path.join(tmp, 'moved-away');
+    const r = await core.refresh([rootA, gone]);
+    expect(r.roots).toBe(2);
+    expect(r.files).toBe(2);
+    expect(r.changedFiles).toBe(2);
+    expect(r.missingRoots).toEqual([gone]);
+    expect(changed).toEqual([rootA]); // the missing root is reported, not walked
+    // The listing is persisted: a fresh core answers without a rescan.
+    const again = makeCore();
+    const res = await again.query(q());
+    expect(res.total).toBe(2);
+    await core.idle();
+    await again.idle();
+  });
+
+  it('refresh prunes departed roots like configure does', async () => {
+    const rootB = path.join(tmp, 'rootB');
+    write(path.join(rootB, 'Other.cmir'));
+    const core = makeCore();
+    await core.configure([rootA, rootB]);
+    await core.idle();
+
+    const r = await core.refresh([rootA]);
+    expect(r.roots).toBe(1);
+    const res = await core.query(q({ roots: [rootA, rootB] }));
+    expect(res.rows.map((x) => x.name)).not.toContain('Other');
+    await core.idle();
+  });
+
+  it('refresh keeps the cached listing of a root that is missing on disk', async () => {
+    const rootB = path.join(tmp, 'rootB');
+    write(path.join(rootB, 'Other.cmir'));
+    const core = makeCore();
+    await core.configure([rootA, rootB]);
+    await core.idle();
+    changed = [];
+
+    fs.renameSync(rootB, path.join(tmp, 'rootB-unplugged'));
+    const r = await core.refresh([rootA, rootB]);
+    expect(r.missingRoots).toEqual([rootB]);
+    expect(r.files).toBe(3); // rootB's cached entry still counts
+    expect(changed).toEqual([]);
+    const res = await core.query(q({ roots: [rootA, rootB] }));
+    expect(res.rows.map((x) => x.name)).toContain('Other');
+    await core.idle();
+  });
+
   it('browses a root: subfolders then direct files, and steps into a folder', async () => {
     const core = makeCore();
     await core.configure([rootA]);

@@ -51,9 +51,9 @@ function headingWithoutImages(node: PMNode): PMNode {
 
 /** A textblock reduced to its audible runs (separator spaces included),
  *  or null when nothing in it is audible and it may go. */
-function audibleTextblock(node: PMNode, mustKeep: boolean): PMNode | null {
+function audibleTextblock(node: PMNode, mustKeep: boolean, prev: PMNode | null): PMNode | null {
   const builder = new AudibleInlineBuilder();
-  builder.addTextblock(node);
+  builder.addTextblock(node, prev);
   if (builder.nodes.length === 0 && !mustKeep) return null;
   return node.type.create(node.attrs, builder.nodes, node.marks);
 }
@@ -86,14 +86,14 @@ function convertContainerChildren(
     body = new AudibleInlineBuilder();
     bodyMustKeep = false;
   };
-  const addBodyParagraph = (para: PMNode, mustKeep: boolean): void => {
+  const addBodyParagraph = (para: PMNode, mustKeep: boolean, prev: PMNode | null): void => {
     if (!separate) {
-      body.addTextblock(para);
+      body.addTextblock(para, prev);
       bodyMustKeep = bodyMustKeep || mustKeep;
       return;
     }
     flushBody();
-    const kept = audibleTextblock(para, mustKeep);
+    const kept = audibleTextblock(para, mustKeep, prev);
     if (kept) out.push(kept.type.name === 'card_body' ? kept : schema.nodes['card_body']!.create(null, kept.content));
   };
 
@@ -103,20 +103,25 @@ function convertContainerChildren(
     const childOnEnd = onEnd && i === last && openEnd > depth;
     const mustKeep = childOnStart || childOnEnd;
     const name = child.type.name;
+    // The previous sibling WITHIN the slice: a cut copy only knows what
+    // it carries, so a cite whose tag was left out of the selection is
+    // judged without it (and so can't be a bold cite) — the same text
+    // the screen shows for that cut, since the tag isn't in the copy.
+    const prev = node.maybeChild(i - 1) ?? null;
     if (HEADINGS.has(name)) {
       flushBody();
       out.push(headingWithoutImages(child));
     } else if (name === 'cite_paragraph' || name === 'undertag') {
       flushBody();
-      const kept = audibleTextblock(child, mustKeep);
+      const kept = audibleTextblock(child, mustKeep, prev);
       if (kept) out.push(kept);
     } else if (name === 'card_body' || name === 'paragraph') {
-      addBodyParagraph(child, mustKeep);
+      addBodyParagraph(child, mustKeep, prev);
     } else if (name === 'table' && !mustKeep) {
       // Read mode shows a table's paragraphs as body text (convertCard too).
       child.descendants((d) => {
         if (d.type.name !== 'paragraph') return true;
-        addBodyParagraph(d, false);
+        addBodyParagraph(d, false, null);
         return false;
       });
     } else {
@@ -197,7 +202,7 @@ export function readModeVisibleSlice(slice: Slice, inlineParent?: PMNode | null)
   if (first.isInline) {
     if (!inlineParent) return slice;
     const shell = inlineParent.type.create(inlineParent.attrs, slice.content, inlineParent.marks);
-    const kept = HEADINGS.has(inlineParent.type.name) ? headingWithoutImages(shell) : audibleTextblock(shell, true)!;
+    const kept = HEADINGS.has(inlineParent.type.name) ? headingWithoutImages(shell) : audibleTextblock(shell, true, null)!;
     return new Slice(kept.content, 0, 0);
   }
   const content = convertChildren(slice.content, 0, true, true, slice.openStart, slice.openEnd);

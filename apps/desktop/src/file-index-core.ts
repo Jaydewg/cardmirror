@@ -45,6 +45,7 @@ import type {
   FileBrowseResult,
   FileIndexQueryParams,
   FileIndexQueryResult,
+  FileIndexRefreshResult,
   FileIndexRow,
   LocateCurrentFileResult,
 } from '../../../src/editor/file-index-protocol.js';
@@ -74,6 +75,12 @@ export interface FileIndexCore {
    *  scanned (cold roots scan in the background; `onChanged` fires when
    *  their listing lands), revalidate the already-cached ones. */
   configure(roots: string[]): Promise<void>;
+  /** Forced, immediate re-walk of every root — cached or not, no
+   *  revalidation delay — for the user-invoked refresh command. Prunes
+   *  departed roots like `configure`, waits out any walk already in
+   *  flight for a root rather than racing it, publishes + notifies per
+   *  root whose listing changed, and reports what it found. */
+  refresh(roots: string[]): Promise<FileIndexRefreshResult>;
   query(q: FileIndexQuery): Promise<FileIndexQueryResult>;
   browse(q: FileBrowseParams): Promise<FileBrowseResult>;
   locateCurrentFile(args: {
@@ -109,7 +116,9 @@ export function createFileIndexCore(opts: {
    *  precomputed once per listing, not per query). */
   const derived = new Map<string, FileEntry[]>();
   let loadPromise: Promise<void> | null = null;
-  const revalidating = new Set<string>();
+  // In-flight revalidation walks by root. A Map (not a Set) so `refresh`
+  // can await one instead of racing it.
+  const revalidating = new Map<string, Promise<void>>();
   const revalidateTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const scanning = new Map<string, Promise<void>>();
   let writeTail: Promise<void> = Promise.resolve();
@@ -199,6 +208,19 @@ export function createFileIndexCore(opts: {
     return b.some((e) => prev.get(e.path) !== e.mtimeMs);
   }
 
+  /** How many files were added, removed, or re-saved between two
+   *  listings (the refresh command's report). */
+  function countChanges(a: StoredEntry[], b: StoredEntry[]): number {
+    const prev = new Map(a.map((e) => [e.path, e.mtimeMs]));
+    let n = 0;
+    for (const e of b) {
+      const was = prev.get(e.path);
+      if (was === undefined || was !== e.mtimeMs) n++;
+      prev.delete(e.path);
+    }
+    return n + prev.size; // + removed
+  }
+
   /** Coalesced, delayed revalidation kick (see revalidateDelayMs). */
   function scheduleRevalidate(root: string): void {
     if (revalidateTimers.has(root) || revalidating.has(root)) return;
@@ -229,8 +251,7 @@ export function createFileIndexCore(opts: {
 
   function revalidate(root: string): void {
     if (revalidating.has(root)) return;
-    revalidating.add(root);
-    void scan(root)
+    const job = scan(root)
       .then(async (fresh) => {
         const prev = mem.get(root);
         if (!prev || listingsDiffer(prev, fresh)) {
@@ -241,6 +262,40 @@ export function createFileIndexCore(opts: {
       })
       .catch(() => {})
       .finally(() => revalidating.delete(root));
+    revalidating.set(root, job);
+  }
+
+  /** Forced re-walk of one root for `refresh`: cancels a pending delayed
+   *  revalidation, waits out a walk already running (its result would be
+   *  stale a moment later anyway), then walks and publishes. Registers
+   *  itself in `revalidating` so configure/revalidate skip the root
+   *  meanwhile. Returns the change count against the previous listing
+   *  (a cold root counts every file as new). */
+  async function forceRescan(root: string): Promise<number> {
+    const timer = revalidateTimers.get(root);
+    if (timer) {
+      clearTimeout(timer);
+      revalidateTimers.delete(root);
+    }
+    await scanning.get(root)?.catch(() => {});
+    await revalidating.get(root)?.catch(() => {});
+    let changed = 0;
+    const job = scan(root).then(async (fresh) => {
+      const prev = mem.get(root);
+      changed = prev ? countChanges(prev, fresh) : fresh.length;
+      if (!prev || changed > 0) {
+        setRoot(root, fresh);
+        await persist();
+        opts.onChanged(root);
+      }
+    });
+    revalidating.set(root, job.catch(() => {}));
+    try {
+      await job;
+    } finally {
+      revalidating.delete(root);
+    }
+    return changed;
   }
 
   /** Merged, de-duplicated (by path), exclusion- and format-filtered
@@ -280,6 +335,32 @@ export function createFileIndexCore(opts: {
       pruneIndexRoots(derived, roots);
       if (dropped) await persist();
       for (const root of roots) ensureScanned(root);
+    },
+
+    async refresh(roots: string[]): Promise<FileIndexRefreshResult> {
+      await ensureLoaded();
+      const dropped = pruneIndexRoots(mem, roots);
+      pruneIndexRoots(derived, roots);
+      if (dropped) await persist();
+      // A root that is not a directory right now (unmounted drive, cloud
+      // folder mid-sync, renamed on disk) is reported, not walked: walking
+      // it would replace a good cached listing with an empty one.
+      const present = new Set<string>();
+      await Promise.all(
+        roots.map(async (root) => {
+          const st = await fsp.stat(root).catch(() => null);
+          if (st?.isDirectory()) present.add(root);
+        }),
+      );
+      const counts = await Promise.all(
+        roots.map((root) => (present.has(root) ? forceRescan(root).catch(() => 0) : 0)),
+      );
+      return {
+        roots: roots.length,
+        files: roots.reduce((n, root) => n + (mem.get(root)?.length ?? 0), 0),
+        changedFiles: counts.reduce((a, b) => a + b, 0),
+        missingRoots: roots.filter((r) => !present.has(r)),
+      };
     },
 
     async query(q: FileIndexQuery): Promise<FileIndexQueryResult> {

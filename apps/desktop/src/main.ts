@@ -3624,28 +3624,53 @@ ipcMain.handle('host:timer-popout-exists', () =>
 // surface, and nothing installs until the user clicks it (install-on-quit
 // stays as the fallback for users who never do). macOS (until the swap
 // updater lands) shows an "available" chip that opens the release page.
-type UpdateChipState = { state: 'available' | 'ready'; version: string } | null;
+// While the download runs the chip says so with a percentage
+// (issue #104: the home screen used to show nothing until "ready").
+type UpdateChipState =
+  | { state: 'available' | 'ready'; version: string }
+  | { state: 'downloading'; version: string; percent: number }
+  | null;
 let updateChip: UpdateChipState = null;
 /** The verified update zip electron-updater staged (mac swap path). */
 let macStagedUpdateZip: string | null = null;
 
-function setUpdateChip(next: Exclude<UpdateChipState, null>): void {
+function setUpdateChip(next: UpdateChipState): void {
   updateChip = next;
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send('update:chip', updateChip);
   }
 }
 
-/** Dev aid: `CM_FAKE_UPDATE=ready` (or `available`, optionally with a
- *  version: `ready:9.9.9`) shows the update chip in an UNPACKAGED build so
- *  its surfaces (status bar, home screen) can be looked at without a real
- *  release. Clicking the fake chip does nothing. Ignored when packaged. */
+/** Dev aid: `CM_FAKE_UPDATE=ready` (or `available` / `downloading`,
+ *  optionally with a version: `ready:9.9.9`) shows the update chip in an
+ *  UNPACKAGED build so its surfaces (status bar, home screen) can be
+ *  looked at without a real release. `downloading` animates 0→100% over
+ *  ~30 s, shows `ready` for 10 s, and repeats, so both can be watched.
+ *  Clicking the fake chip does nothing. Ignored when packaged. */
 const fakeUpdateChip: UpdateChipState = (() => {
   if (app.isPackaged) return null;
-  const m = /^(ready|available)(?::(.+))?$/.exec(process.env['CM_FAKE_UPDATE'] ?? '');
-  return m ? { state: m[1] as 'ready' | 'available', version: m[2] ?? '9.9.9' } : null;
+  const m = /^(ready|available|downloading)(?::(.+))?$/.exec(process.env['CM_FAKE_UPDATE'] ?? '');
+  if (!m) return null;
+  const version = m[2] ?? '9.9.9';
+  return m[1] === 'downloading'
+    ? { state: 'downloading', version, percent: 0 }
+    : { state: m[1] as 'ready' | 'available', version };
 })();
-if (fakeUpdateChip) updateChip = fakeUpdateChip;
+if (fakeUpdateChip) {
+  updateChip = fakeUpdateChip;
+  if (fakeUpdateChip.state === 'downloading') {
+    // Loop forever: ~30 s of download, 10 s of "ready", repeat — so the
+    // chip can be looked at whenever, not only in the first seconds.
+    const { version } = fakeUpdateChip;
+    let percent = 0;
+    setInterval(() => {
+      percent += 1;
+      if (percent < 100) setUpdateChip({ state: 'downloading', version, percent });
+      else if (percent === 100) setUpdateChip({ state: 'ready', version });
+      else if (percent >= 133) percent = 0;
+    }, 300);
+  }
+}
 
 /** Late-opened windows pull the current chip state at boot. */
 ipcMain.handle('host:update-chip-state', () => updateChip);
@@ -3658,6 +3683,8 @@ ipcMain.handle('host:update-chip-action', () => {
     console.log('Update chip clicked (CM_FAKE_UPDATE): no action in a dev build.');
     return;
   }
+  // Mid-download there is nothing to do yet; the chip is information.
+  if (updateChip.state === 'downloading') return;
   if (updateChip.state === 'ready') {
     if (process.platform === 'darwin') {
       // Bundle swap (Squirrel can't install into unsigned builds): hand
@@ -3702,11 +3729,19 @@ function startAutoUpdate(): void {
   autoUpdater.autoInstallOnAppQuit = !isMac;
   autoUpdater.on('error', (err) => {
     console.warn('Auto-update error:', err);
+    // A download that dies mid-way must not leave a "downloading" chip
+    // up forever; the next check starts the sequence over.
+    if (updateChip?.state === 'downloading') setUpdateChip(null);
   });
   autoUpdater.on('update-available', (info) => {
     console.log(`Auto-update: ${info.version} available, downloading…`);
-    if (!isMac) return; // autoDownload handles Windows/Linux staging
+    if (!isMac) {
+      // autoDownload handles Windows/Linux staging; say so meanwhile.
+      setUpdateChip({ state: 'downloading', version: info.version, percent: 0 });
+      return;
+    }
     if (macBundleSelfUpdatable(app.getPath('exe'))) {
+      setUpdateChip({ state: 'downloading', version: info.version, percent: 0 });
       autoUpdater.downloadUpdate().catch((err: unknown) => {
         // Staging failed (offline blip, or a pre-universal release with
         // no zip artifact) — fall back to an 'available' chip that opens
@@ -3718,7 +3753,19 @@ function startAutoUpdate(): void {
       setUpdateChip({ state: 'available', version: info.version });
     }
   });
+  // Progress arrives many times a second; the chip only needs whole
+  // percents, so forward a change of at least one point (each push is an
+  // IPC to every window).
+  let lastPercent = -1;
+  autoUpdater.on('download-progress', (p: { percent: number }) => {
+    if (updateChip?.state !== 'downloading') return;
+    const percent = Math.max(0, Math.min(100, Math.floor(p.percent)));
+    if (percent === lastPercent) return;
+    lastPercent = percent;
+    setUpdateChip({ state: 'downloading', version: updateChip.version, percent });
+  });
   autoUpdater.on('update-downloaded', (info) => {
+    lastPercent = -1;
     if (isMac) {
       const file = (info as { downloadedFile?: string }).downloadedFile;
       if (file && file.endsWith('.zip')) {

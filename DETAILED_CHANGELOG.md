@@ -5,6 +5,169 @@ behavior, rationale, and (where useful) the implementation context
 behind a change. For a shorter, jargon-free summary of what's new
 in each release, see `CHANGELOG.md`.
 
+## 1.17.0 — 2026-10-29
+
+### Added: Refresh File Search Index (command) + re-scan on settings change
+
+The palette's file index (the out-of-process file-index service) only
+re-walked its roots on two triggers: app boot and every palette open, the
+latter after a 3-second delay so a typing burst finishes first. Nothing
+else — not saving a document, not editing the folder list, not external
+changes — touched it, so a file saved from Word or Finder could be missing
+from the palette for the first several seconds after opening it, with no
+way to force the issue short of a restart.
+
+Two additions. (1) `refreshFileSearchIndex`, a desktop command with no
+default binding (Search group), calls a new `refresh` op on the service:
+a forced, immediate walk of every configured root, cached or not, that
+cancels a pending delayed revalidation, waits out any walk already in
+flight for that root rather than racing it, publishes and notifies per
+root whose listing changed, and answers with `{roots, files, changedFiles,
+missingRoots}` once every walk is done. A root that is not a directory at
+that moment (unmounted drive, cloud folder mid-sync) is reported in
+`missingRoots` and NOT walked, so a good cached listing is never replaced
+by an empty one. The renderer helper (`file-index-refresh.ts`) toasts a
+start notice, the result summary, the no-folders and no-desktop early
+outs, and a failure notice; a second invocation during a walk joins it.
+The refresh request uses a 10-minute timeout instead of the ordinary
+30-second one, because that ordinary timeout doubles as the service's
+crash detector and tears down the port on expiry. (2) The settings
+subscriber that already mirrors `fileSearchRoots` to main for read-scope
+now also sends `configure` to the index service, so a folder added in
+Settings is scanned before the palette is next opened. Covered by new
+core tests (cached/cold/missing/pruned roots) and a flow test with an
+injected client.
+
+### Added: read mode treats hand-bolded cites as cites (`readModeBoldCites`)
+
+Read mode's keep rule was purely style-driven: a cite paragraph showed
+its `cite_mark` and `highlight` runs, a body showed its highlights. A
+cite typed as bold plain text (a common import shape when the Cite
+character style was never applied) therefore showed nothing, and people
+read it as a bug. New rule, in a new pure module
+`src/editor/read-mode-rules.ts` shared by every surface: a paragraph is
+a *bold cite* when it immediately follows a tag or undertag, is a
+`cite_paragraph` or `card_body`, carries no underline / underline_direct
+/ emphasis anywhere, has some `bold` text, and — for a `card_body` only —
+some bold text contains a digit (a cite paragraph already says "cite" by
+its style; the digit test keeps a bolded statistic in a body from
+masquerading). In such a paragraph `bold` joins the paragraph's kept
+marks, so bold runs are read aloud exactly like cite-marked ones; "keep
+entire cite" treats a bold run as the run that unlocks the whole cite.
+Gated by `readModeBoldCites` (General → Editor behavior, default on);
+both shells rebuild decorations on flip like the other read-mode
+toggles. Plumbing: the per-paragraph decision needs the paragraph's
+previous sibling, so `isReadModeKeptText` gained a `prev` parameter and
+the display plugin, `AudibleInlineBuilder` (Convert Cards to Read Mode),
+read-mode copy and the read-mode DOCX export all pass it; the export's
+own mark filter now takes its list from the shared `readKeptMarks`,
+which as a side effect aligns it with the plugin on highlights inside
+cites (the plugin has kept those since 1.0; export had not). A cut copy
+judges a paragraph by the previous sibling inside the slice, so a cite
+copied without its tag is not a bold cite — matching what that cut shows.
+
+### Changed: "Highlight underlined text only" words follow the double-click spec
+
+`restrictToUnderlinedText` segmented words as maximal runs of
+non-whitespace, independently of `word-break.ts`, the Word-compatible
+spec every selection gesture uses. The two disagreed on punctuation:
+`nuclear—armed`, `weapons,`, `U.S.` and `1,234` were one word to the
+filter and several units to a double-click. Because the emphasis rule
+is decided per whole word, an em-dash-joined pair with emphasis in one
+half dropped the plain underline in the other half, and an underlined
+comma attached to an emphasized word was dropped with it. The filter now
+uses `isWordChar` from the spec: a word is a maximal run of letters,
+digits and apostrophes; punctuation, dashes, spaces, tabs and inline
+leaves are non-word and are gap content. Gap content is not kept on its
+own — the gap bridger fills spaces and the punctuation beside them
+between two painted words — with one exception the bridger forces: it
+deliberately never bridges dashes (`formatting-gaps.ts` treats a dash as
+a seam the user chose), so an underlined punctuation run with no
+whitespace that joins two kept words (`nuclear—armed`, `well-known`) is
+kept with them, or the paint would have a hole nothing fills. The join
+rule looks at the whole textblock, so a neighbor outside the selection
+still counts. Tests cover the em dash under emphasis, the hyphen, the
+attached comma, apostrophes staying inside a word, an underlined spaced
+dash (left to the bridger), and the command level with bridging on and
+off.
+
+### Changed: "Highlight underlined text only" never blocks removal
+
+With the setting on, `applyHighlight` / `applyShading` narrowed the
+operating ranges through `restrictToUnderlinedText` and returned false
+when nothing survived, BEFORE reaching the toggle-off / null-pen branch.
+So a highlight on text with no underline or emphasis under it (imported
+documents, paints made before the setting was turned on) could not be
+removed with F11, Mod-F11 or even the "No highlight" pen while the setting
+was on; the user had to turn the setting off first. Now a press whose
+filter leaves nothing to paint is a remove-only press: if the selection
+carries the mark anywhere (any color), the whole selection is stripped,
+filter ignored; if it carries none, it stays a no-op. The paint path and
+the existing same-color toggle over the narrowed pieces are unchanged, so
+repainting a swath still toggles it off and a different pen still
+repaints only the underlined parts. When the selection mixes a highlighted
+plain word with an unhighlighted underlined word, paint still wins (there
+is something to paint); select just the highlighted text to remove it.
+Tests cover the plain-word strip, over-selection, a different pen color,
+the null pen, shading, and the paint-wins mix.
+
+### Fixed: update chip reports the download (issue #104)
+
+The main process's single chip state had two values, `available` and
+`ready`, and nothing was set between electron-updater's `update-available`
+(where Windows/Linux auto-download and the mac swap path call
+`downloadUpdate()`) and `update-downloaded`, so both chip surfaces
+(status bar and the home-screen button, one renderer module) were blank
+for the length of the download. A third state `downloading` with a
+`percent` is now set when the download starts, advanced from the
+updater's `download-progress` event (forwarded only on whole-percent
+changes, since each push is an IPC to every window), cleared on a
+download error so a dead download never leaves a stuck chip, and
+superseded by `ready` as before. Clicking a downloading chip does
+nothing. The host interface imports the chip state type from
+`update-chip.ts` instead of spelling it out inline in three places. Dev
+aid: `CM_FAKE_UPDATE=downloading[:version]` animates 0→100% over ~30 s, shows `ready` for 10 s,
+and repeats in an unpackaged build.
+
+### Fixed: inserting a received card marks it read
+
+`read` on an inbox item meant "the user has opened the Receive pill since
+this arrived" and was only ever set wholesale by `markAllRead` on pill
+open. The keyboard insert commands (`insertReceivedAtCursor` Mod-P,
+`insertReceivedAtEnd` Mod-Alt-P) bypass the pill, so a card inserted that
+way stayed unread: the badge kept saying "N new" and the keep-flashing
+reminder continued until the pill was opened. The shared insert path
+(`inbox-insert.ts` → `insertReceivedItem`) now calls a new
+`inboxStore.markRead(id)` after a successful dispatch, so every insert
+surface (keyboard commands, pill rows) marks the card read while leaving
+it in the inbox. Per-item persistence is a new IPC
+(`host:pairing-inbox-mark-read-one`, preload `pairingInboxMarkRead`,
+host `pairingInboxMarkRead`) mirroring the mark-all handler: no change →
+no broadcast, no write; on the web backend it writes localStorage. On an
+older preload without the IPC the in-window state still updates and the
+next backend snapshot wins. Covered by a jsdom test that inserts the
+newest of two unread items and checks the store, the unread count, the
+doc, the persisted state, and that an undecodable item is neither
+inserted nor marked read.
+
+### Fixed: Self-hosted relay starts under SQLAlchemy 2.1
+
+`relay/requirements.txt` pinned `sqlalchemy>=2.0` with no upper bound
+and installed only `psycopg2-binary`. SQLAlchemy 2.1 (released
+2026-09-25) changed the default DBAPI for plain `postgresql://` URLs
+from psycopg2 to psycopg 3, so every fresh image build since then
+failed at `create_engine` with `ModuleNotFoundError: No module named
+'psycopg'`. PR #114 (Cora) swaps the driver to `psycopg[binary]`. On
+top of that, `server.py` now rewrites `postgresql://` and `postgres://`
+URLs to `postgresql+psycopg://` before building the engine: with
+psycopg2 gone, a host that resolves SQLAlchemy 2.0 (Python 3.10 cannot
+install 2.1) would otherwise fail the opposite way, and the explicit
+scheme makes the pair consistent regardless of which SQLAlchemy pip
+picks. Verified locally against Postgres 16: the mailbox and room
+endpoints return byte-identical responses on psycopg 3 and on the old
+psycopg2 build. The hosted relay inside the scouting backend pins
+SQLAlchemy 2.0 and was never affected.
+
 ## 1.16.1 — 2026-10-26
 
 First release from the fork (`Jaydewg/cardmirror`): upstream 1.16.0

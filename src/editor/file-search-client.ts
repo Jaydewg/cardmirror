@@ -27,6 +27,7 @@ import type {
   FileBrowseResult,
   FileIndexQueryParams,
   FileIndexQueryResult,
+  FileIndexRefreshResult,
   LocateCurrentFileResult,
 } from './file-index-protocol.js';
 export type {
@@ -36,6 +37,7 @@ export type {
   FileBrowseRow,
   FileIndexQueryParams,
   FileIndexQueryResult,
+  FileIndexRefreshResult,
   FileIndexRow,
   LocateCurrentFileResult,
 } from './file-index-protocol.js';
@@ -44,6 +46,9 @@ export interface FileIndexClient {
   /** Report the current roots: prunes departed ones from the persisted
    *  index and kicks scans/revalidation for the rest. */
   configure(roots: string[]): Promise<void>;
+  /** Force an immediate re-walk of every root (the refresh command) and
+   *  report what it found. Resolves only when the walk is done. */
+  refresh(roots: string[]): Promise<FileIndexRefreshResult>;
   query(params: FileIndexQueryParams): Promise<FileIndexQueryResult>;
   /** Immediate indexed children of one configured-root directory. */
   browse(params: FileBrowseParams): Promise<FileBrowseResult>;
@@ -65,6 +70,12 @@ export interface FileIndexClient {
 
 const PORT_TIMEOUT_MS = 5000;
 const REQUEST_TIMEOUT_MS = 30_000;
+// A forced refresh walks every root to completion before answering, and
+// a large library on a slow (network, cloud-synced) disk can take well
+// over the ordinary request budget. The ordinary timeout doubles as the
+// crash detector and TEARS DOWN the port on expiry, so a slow refresh
+// must not borrow it.
+const REFRESH_TIMEOUT_MS = 10 * 60_000;
 
 let clientPromise: Promise<FileIndexClient | null> | null = null;
 
@@ -146,14 +157,14 @@ function wrapPort(port: MessagePort): FileIndexClient {
     else p.reject(new Error(msg.error ?? 'file-index error'));
   };
 
-  function request<T>(op: string, args: unknown): Promise<T> {
+  function request<T>(op: string, args: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const id = nextId++;
       const timer = setTimeout(() => {
         pending.delete(id);
         fail('file-index request timeout');
         reject(new Error('file-index request timeout'));
-      }, REQUEST_TIMEOUT_MS);
+      }, timeoutMs);
       pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
       try {
         port.postMessage({ id, op, args });
@@ -168,6 +179,7 @@ function wrapPort(port: MessagePort): FileIndexClient {
 
   return {
     configure: (roots) => request('configure', { roots }),
+    refresh: (roots) => request('refresh', { roots }, REFRESH_TIMEOUT_MS),
     query: (params) => request('query', params),
     browse: (params) => request('browse', params),
     locateCurrentFile: (args) => request('locateCurrentFile', args),

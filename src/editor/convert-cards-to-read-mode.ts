@@ -25,10 +25,12 @@ export class AudibleInlineBuilder {
   readonly nodes: PMNode[] = [];
   private pendingSpaceMarks: readonly Mark[] | null = null;
 
-  addTextblock(node: PMNode): void {
+  /** `prev` is the textblock's previous sibling in its card (null when
+   *  first or unknown) — the bold-cite rule reads it. */
+  addTextblock(node: PMNode, prev: PMNode | null = null): void {
     node.forEach((child) => {
       if (!child.isText || !child.text) return;
-      if (!isReadModeKeptText(child, node)) {
+      if (!isReadModeKeptText(child, node, prev)) {
         this.breakRun();
         return;
       }
@@ -94,13 +96,13 @@ export function convertCard(card: PMNode): PMNode {
   // A body-like source paragraph: joined into the running body (read
   // mode's default flow), or — with paragraph integrity on — its own
   // paragraph when it has audible text, nothing at all when it has none.
-  const addBodyParagraph = (node: PMNode): void => {
+  const addBodyParagraph = (node: PMNode, prev: PMNode | null): void => {
     if (!separateParagraphs) {
-      body.addTextblock(node);
+      body.addTextblock(node, prev);
       return;
     }
     const one = new AudibleInlineBuilder();
-    one.addTextblock(node);
+    one.addTextblock(node, prev);
     if (one.nodes.length === 0) return;
     flushBody();
     children.push(schema.nodes['card_body']!.create(null, one.nodes));
@@ -108,21 +110,22 @@ export function convertCard(card: PMNode): PMNode {
 
   card.forEach((child, _offset, index) => {
     if (index === 0) return;
+    const prev = card.maybeChild(index - 1) ?? null;
     if (child.type.name === 'cite_paragraph' || child.type.name === 'undertag') {
       // Their own node, audible text only — read mode shows an undertag's
       // highlighted words just as it shows a cite's.
       const kept = new AudibleInlineBuilder();
-      kept.addTextblock(child);
+      kept.addTextblock(child, prev);
       if (kept.nodes.length > 0) {
         flushBody();
         children.push(child.type.create(child.attrs, kept.nodes));
       }
     } else if (child.type.name === 'card_body') {
-      addBodyParagraph(child);
+      addBodyParagraph(child, prev);
     } else if (child.type.name === 'table') {
       child.descendants((descendant) => {
         if (descendant.type.name !== 'paragraph') return true;
-        addBodyParagraph(descendant);
+        addBodyParagraph(descendant, null);
         return false;
       });
     }

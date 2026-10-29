@@ -58,6 +58,29 @@ describe('update chip', () => {
     expect(el.hidden).toBe(true);
   });
 
+  it('renders the downloading state with its percent (issue #104)', () => {
+    const el = makeEl();
+    renderUpdateChip(el, { state: 'downloading', version: '1.17.0', percent: 0 });
+    expect(el.hidden).toBe(false);
+    expect(el.textContent).toBe('Downloading update 1.17.0… 0%');
+    renderUpdateChip(el, { state: 'downloading', version: '1.17.0', percent: 42 });
+    expect(el.textContent).toBe('Downloading update 1.17.0… 42%');
+  });
+
+  it('follows the pushed download → ready sequence', async () => {
+    const el = makeEl();
+    const host = makeHost(null);
+    initUpdateChip(el, host);
+    await tick();
+    expect(el.hidden).toBe(true);
+    host.push({ state: 'downloading', version: '1.17.0', percent: 7 });
+    expect(el.textContent).toBe('Downloading update 1.17.0… 7%');
+    host.push({ state: 'downloading', version: '1.17.0', percent: 99 });
+    expect(el.textContent).toBe('Downloading update 1.17.0… 99%');
+    host.push({ state: 'ready', version: '1.17.0' });
+    expect(el.textContent).toBe('Update 1.17.0 ready — restart to install');
+  });
+
   it('pulls the initial state at boot (late-opened window case)', async () => {
     const el = makeEl();
     initUpdateChip(el, makeHost({ state: 'ready', version: '1.2.3' }));

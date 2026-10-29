@@ -15,12 +15,14 @@
  *   - markedCardsOnly   (mutually exclusive — keep only the cards that
  *                        contain a reading marker, flat)
  *
- * Read-mode export mirrors the read-mode plugin's keep/hide rules:
+ * Read-mode export mirrors the read-mode plugin's keep/hide rules, taking
+ * each paragraph's read-aloud mark list from the shared
+ * `readKeptMarks` (editor/read-mode-rules.ts) so the two cannot drift:
  *   - Headings (pocket / hat / block / tag / analytic): kept whole.
  *   - cite_paragraph: kept, inlines filtered to those carrying
- *     cite_mark.
- *   - card_body / paragraph / undertag: kept, inlines filtered to
- *     those carrying the `highlight` mark.
+ *     cite_mark or highlight (plus bold under the bold-cite rule).
+ *   - card_body / paragraph: kept, inlines filtered to those carrying
+ *     the `highlight` mark (plus bold under the bold-cite rule).
  *   - Cards / analytic_units: recursed; container kept iff at least
  *     one survivor child exists.
  *   - Tables: dropped (read mode plugin doesn't model them).
@@ -35,6 +37,7 @@ import {
   isReadingMarker,
 } from '../schema/reading-marker.js';
 import { computeUnreadDecorations } from '../editor/mark-unread-plugin.js';
+import { readKeptMarks } from '../editor/read-mode-rules.js';
 
 export interface ExportTransformOptions {
   includeComments: boolean;
@@ -165,8 +168,9 @@ function transformContainerForReadMode(container: PMNode, schema: Schema): PMNod
     mergeBuffer = [];
   };
 
-  container.forEach((child) => {
+  container.forEach((child, _offset, index) => {
     const name = child.type.name;
+    const prev = container.maybeChild(index - 1) ?? null;
     // Block-level children: flush the merge buffer first so their
     // position relative to surrounding bodies is preserved.
     if (name === 'tag' || name === 'analytic') {
@@ -174,10 +178,12 @@ function transformContainerForReadMode(container: PMNode, schema: Schema): PMNod
       out.push(child); // structural headings keep all their content
     } else if (name === 'cite_paragraph') {
       flushMerge();
-      const kept = filterInlinesByMark(child, 'cite_mark', schema);
+      const marks = readKeptMarks(child, prev);
+      const kept = filterInlinesByMarks(child, Array.isArray(marks) ? marks : [], schema);
       if (kept.length > 0) out.push(child.type.create(child.attrs, kept));
     } else if (name === 'card_body' || name === 'paragraph') {
-      const kept = filterInlinesByMark(child, 'highlight', schema);
+      const marks = readKeptMarks(child, prev);
+      const kept = filterInlinesByMarks(child, Array.isArray(marks) ? marks : [], schema);
       for (const inline of kept) appendToMergeBuffer(mergeBuffer, inline, schema);
     }
     // Undertags + tables drop without flushing — bodies on either
@@ -189,16 +195,16 @@ function transformContainerForReadMode(container: PMNode, schema: Schema): PMNod
   return container.type.create(container.attrs, out);
 }
 
-/** Walk a paragraph's inline children, keep the ones carrying the
- *  given mark — and reading markers, which read mode keeps on screen
+/** Walk a paragraph's inline children, keep the ones carrying any of
+ *  the given marks — and reading markers, which read mode keeps on screen
  *  (text form via `isReadKept`; the atom form is never hidden) — and
  *  stitch them with separator spaces wherever the CSS
  *  `::after { content: ' ' }` rule would have inserted one. */
-function filterInlinesByMark(node: PMNode, markName: string, schema: Schema): PMNode[] {
+function filterInlinesByMarks(node: PMNode, markNames: readonly string[], schema: Schema): PMNode[] {
   const kept: PMNode[] = [];
   node.forEach((child) => {
     if (
-      (child.isText && child.marks.some((m) => m.type.name === markName)) ||
+      (child.isText && child.marks.some((m) => markNames.includes(m.type.name))) ||
       isReadingMarker(child)
     ) {
       appendToMergeBuffer(kept, child, schema);

@@ -45,6 +45,12 @@ export function makeFakeFileIndexClient(listing: { files: FakeFileListing[] }): 
 
   return {
     configure: async () => {},
+    refresh: async (roots: string[]) => ({
+      roots: roots.length,
+      files: listing.files.length,
+      changedFiles: 0,
+      missingRoots: [],
+    }),
     query: async (params: FileIndexQueryParams) => {
       let pool = entries(params);
       if (params.formats !== 'both') {
