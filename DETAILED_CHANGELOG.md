@@ -5,6 +5,44 @@ behavior, rationale, and (where useful) the implementation context
 behind a change. For a shorter, jargon-free summary of what's new
 in each release, see `CHANGELOG.md`.
 
+## 1.17.29 — 2026-10-29
+
+Upstream 1.17.0 (merged at `00abd1cb`) on top of 1.16.1, plus the fix
+below. Federation (`server-federation`) ships separately as
+`1.17.29-f`. Versioning: major.minor follow upstream; the patch is the
+day count from the 1st of the month the minor started (Oct 29 → 29),
+plus 100 per emergency release within the minor.
+
+### Fixed: session undo of a multi-move reorder (Alphabetize, section drags)
+
+Loro's `UndoManager` cannot undo a step that holds two or more `move()`s
+on one `MovableList` (loro-crdt 1.13.6, reproduced with the bare
+library: three items, moves 2→0 then 2→1, undo leaves two items). Other
+shapes panic in `movable_list_apply_delta.rs:190`, and a wasm panic
+poisons the doc: every later call throws "recursive use of an object
+detected", so the session is dead until reload. Single-move steps undo
+exactly. Merging separate commits into one step (merge interval,
+`groupStart`/`groupEnd`) fails the same way. Alphabetize Selected
+Headings is a permutation of top-level children, which the move-aware
+child diff emits as several moves in one commit, so its undo hit this
+bug. So did section drags that need 2+ moves: in a probe, 154 of 420
+lost cards on undo with a single peer.
+
+The binding patch (`cardmirrorMove`) commits before every move after a
+sync's first, so each commit holds one move. The sync's commits share an
+undo group (the `onPush` value), and `undo` / `redo` (via
+`cardmirrorUndoStep` / `cardmirrorRedoStep`) pop the whole group in one
+keypress; popping under the token carries it onto the other stack. The
+undo guard registers move-batch hooks (`cardmirrorRegisterMoveBatchHooks`)
+that turn merging off for the batch, ignore its commits in the isolation
+count, and isolate the next local commit so typing never joins the
+group. The guard's own reversals (`resolveBlocked`) use the grouped pops.
+The guard's "collateral rescue" (an undo of a drag deleting a partner's
+card) was probably this bug: the undo now deletes nothing, and the
+partner's card stays where it was put. Tests:
+`move-undo-group.test.ts` (with a canary that the Loro bug still
+exists), `undo-chain.test.ts`.
+
 ## 1.17.0 — 2026-10-29
 
 ### Added: Refresh File Search Index (command) + re-scan on settings change

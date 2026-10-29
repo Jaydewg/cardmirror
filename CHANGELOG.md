@@ -5,6 +5,22 @@ changes in each release, written for users of the editor. For
 in-depth rationale and implementation context behind each entry,
 see `DETAILED_CHANGELOG.md`.
 
+## 1.17.29 — 2026-10-29
+
+Upstream CardMirror 1.17.0 (see its entry below), the fork's own
+changes from 1.16.1, and the fix listed here. Fork versions keep
+upstream's major.minor; the last number counts days from the start of
+the month the minor began (1.17 began in October, so October 29 is 29).
+
+### Fixed
+
+- **Undo after Alphabetize no longer breaks a co-editing session.**
+  Alphabetizing headings and then pressing Ctrl+Z could stop the
+  session dead: nothing else could be typed, undone or synced until
+  the document was reopened. Undoing a header drag (a header with the
+  cards under it) could also make cards vanish. Now one Ctrl+Z puts the
+  old order back exactly, and Ctrl+Y re-sorts.
+
 ## 1.17.0 — 2026-10-29
 
 ### Added
