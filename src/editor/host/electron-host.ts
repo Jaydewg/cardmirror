@@ -381,7 +381,9 @@ interface ElectronAPI {
    *  an older preload (without the pairing build) degrades gracefully. */
   pairingConfigure?(cfg: PairingConfigIpc): Promise<{ ownCode: string }>;
   pairingRegenerateKey?(): Promise<{ ownCode: string }>;
-  pairingSend?(payload: PairingSendIpc): Promise<{ ok: number; fail: number; authFail?: number }>;
+  pairingSend?(
+    payload: PairingSendIpc,
+  ): Promise<{ ok: number; fail: number; authFail?: number; peerFail?: number; deferred?: number; peerReason?: string }>;
   pairingInboxList?(): Promise<PairingInboxItemIpc[]>;
   pairingInboxRemove?(id: string): Promise<void>;
   pairingInboxClear?(): Promise<void>;
@@ -1203,7 +1205,7 @@ export class ElectronHost implements Host {
 
   async pairingSend(
     payload: PairingSendIpc,
-  ): Promise<{ ok: number; fail: number; authFail?: number }> {
+  ): Promise<{ ok: number; fail: number; authFail?: number; peerFail?: number; deferred?: number; peerReason?: string }> {
     return (
       (await api().pairingSend?.(payload)) ?? { ok: 0, fail: payload.recipientCodes.length }
     );

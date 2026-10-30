@@ -4849,6 +4849,8 @@ export type RibbonCommandId =
   | 'collabJoinSession'
   | 'collabCopyShareCode'
   | 'collabCopyInviteLink'
+  | 'collabCopyCrossServerCode'
+  | 'collabReviewJoinRequests'
   | 'collabCopyViewCode'
   | 'collabCopyViewLink'
   | 'collabInviteStarred'
@@ -5127,6 +5129,8 @@ export const RIBBON_COMMAND_IDS: RibbonCommandId[] = [
   'collabJoinSession',
   'collabCopyShareCode',
   'collabCopyInviteLink',
+  'collabCopyCrossServerCode',
+  'collabReviewJoinRequests',
   'collabCopyViewCode',
   'collabCopyViewLink',
   'collabInviteStarred',
@@ -5358,6 +5362,8 @@ export const RIBBON_COMMAND_LABELS: Record<RibbonCommandId, string> = {
   collabJoinSession: 'Join or Rejoin Collaboration Session',
   collabCopyShareCode: 'Copy Session Share Code',
   collabCopyInviteLink: 'Copy Session Invite Link',
+  collabCopyCrossServerCode: 'Copy Cross-Server Session Code',
+  collabReviewJoinRequests: 'Review Session Join Requests',
   collabCopyViewCode: 'Copy Session View Code (Spectators)',
   collabCopyViewLink: 'Copy Session View Link (Spectators)',
   collabInviteStarred: 'Invite Starred Partner to Session',
@@ -5464,6 +5470,8 @@ export const RIBBON_COMMAND_ALIASES: Partial<Record<RibbonCommandId, readonly st
   collabJoinSession: ['join session', 'rejoin session', 'resume session', 'recent sessions', 'share code', 'coedit'],
   collabCopyShareCode: ['share code', 'invite code', 'session code'],
   collabCopyInviteLink: ['invite link', 'share link', 'join link', 'session link'],
+  collabCopyCrossServerCode: ['cross-server code', 'federated code', 'other server', 'share code', 'v2f'],
+  collabReviewJoinRequests: ['join requests', 'accept join', 'let in', 'other server', 'read-only', 'remove participant', 'revoke'],
   collabCopyViewCode: ['view code', 'spectator code', 'watch code', 'read-only code', 'spectate'],
   collabCopyViewLink: ['view link', 'spectator link', 'watch link', 'read-only link', 'spectate link'],
   collabInviteStarred: ['invite partner', 'session invite', 'invite to session'],
@@ -5813,6 +5821,8 @@ export const DEFAULT_RIBBON_KEYS: Record<RibbonCommandId, string | string[]> = {
   collabJoinSession: '',
   collabCopyShareCode: '',
   collabCopyInviteLink: '',
+  collabCopyCrossServerCode: '',
+  collabReviewJoinRequests: '',
   collabCopyViewCode: '',
   collabCopyViewLink: '',
   collabInviteStarred: '',
@@ -6111,6 +6121,8 @@ export interface RibbonContext {
   collabJoinSession: () => void;
   collabCopyShareCode: () => void;
   collabCopyInviteLink: () => void;
+  collabCopyCrossServerCode: () => void;
+  collabReviewJoinRequests: () => void;
   collabCopyViewCode: () => void;
   collabCopyViewLink: () => void;
   collabInviteStarred: () => void;
@@ -6292,6 +6304,8 @@ const DEFAULT_RIBBON_CONTEXT: RibbonContext = {
   collabJoinSession: () => {},
   collabCopyShareCode: () => {},
   collabCopyInviteLink: () => {},
+  collabCopyCrossServerCode: () => {},
+  collabReviewJoinRequests: () => {},
   collabCopyViewCode: () => {},
   collabCopyViewLink: () => {},
   collabInviteStarred: () => {},
@@ -7057,6 +7071,18 @@ function commandFor(id: RibbonCommandId, ctx: RibbonContext): Command {
       return (_state, dispatch) => {
         if (!dispatch) return true;
         ctx.collabCopyInviteLink();
+        return true;
+      };
+    case 'collabCopyCrossServerCode':
+      return (_state, dispatch) => {
+        if (!dispatch) return true;
+        ctx.collabCopyCrossServerCode();
+        return true;
+      };
+    case 'collabReviewJoinRequests':
+      return (_state, dispatch) => {
+        if (!dispatch) return true;
+        ctx.collabReviewJoinRequests();
         return true;
       };
     case 'collabInviteStarred':

@@ -129,11 +129,26 @@ export interface CollabSessionCallbacks {
    *  succeeds. Retrying continues either way — this is the signal that
    *  "edits aren't reaching the room" was previously silent. */
   onSendStuck?: (consecutive: number) => void;
-  /** Encrypted presence blob from a peer (cursor layer decodes). */
-  onPresence?: (blob: Uint8Array) => void;
+  /** Decrypted presence frame from a peer (cursor layer decodes).
+   *  `viewer`: the relay vouches it came from a spectator. */
+  onPresence?: (blob: Uint8Array, viewer: boolean) => void;
+  /** Spectator only: whether this relay takes our presence. `refused` =
+   *  it 403'd (upstream relays: spectators are a count, never listed) —
+   *  the UI falls back to its minimal form. */
+  onSpectatorPresence?: (state: 'ok' | 'refused') => void;
   /** A catch-up just imported a LARGE offline backlog (`count` update
    *  blobs) — the merge-visibility hook for "you were gone a while". */
   onBacklogMerged?: (count: number) => void;
+  /** Federation (remote participant): the host switched this peer
+   *  between read-only and editing, live. The session has already
+   *  applied it; the UI updates the editor. */
+  onAccessChanged?: (mode: 'write' | 'read') => void;
+  /** Federation (remote participant): access revoked by the host.
+   *  Terminal — onEnded follows immediately (this copy is yours alone). */
+  onRevoked?: () => void;
+  /** Federation (home-side participant): cross-server join requests
+   *  changed — re-list them (the stream's `j` nudge, and every hello). */
+  onJoinRequests?: () => void;
 }
 
 export interface CollabSessionOptions {
@@ -247,6 +262,11 @@ export class CollabSession {
   }
 
   private stream: RoomStream | null = null;
+  /** Federation: a remote participant admitted read-only. While set the
+   *  session never posts updates or snapshots (the home relay would
+   *  refuse them) and the UI keeps the editor read-only; presence still
+   *  flows. Flipped live by the host (`setAccess`). */
+  private readOnlyMode = false;
   /** Room guest pass (web-collab Phase 3): minted at host-create when
    *  the relay's flip is on, carried in invite links, persisted with
    *  the session record so resume keeps the credential. Null when the
@@ -482,8 +502,11 @@ export class CollabSession {
     roomId: string;
     keyBytes: Uint8Array;
     /** 'spectator' joins view-only (the client MUST authenticate with a
-     *  view pass for the relay side to hold). Default 'participant'. */
-    role?: 'participant' | 'spectator';
+     *  view pass for the relay side to hold). 'host': rejoining a session
+     *  THIS user started (the recent-rooms record says host) keeps the
+     *  host role — End for everyone, compaction — instead of coming back
+     *  as a participant who can only leave. Default 'participant'. */
+    role?: SessionRole;
     client: RoomsClient;
     callbacks?: CollabSessionCallbacks;
     flushMs?: number;
@@ -659,6 +682,10 @@ export class CollabSession {
     return [sync];
   }
 
+  /** Spectator only: whether the relay takes this peer's presence —
+   *  `unknown` until the first post lands or is refused. */
+  spectatorPresence: 'unknown' | 'ok' | 'refused' = 'unknown';
+
   /** True for a spectator: no local edits, no outbound writes. */
   get readOnly(): boolean {
     return !roleCanEdit(this.role);
@@ -693,6 +720,9 @@ export class CollabSession {
       routingCode: this.client.opts.routingCode,
       credentials: this.client.opts.credentials,
       fetchImpl: this.client.opts.fetchImpl,
+      extraHeaders: this.client.opts.extraHeaders,
+      versionHeader: this.client.opts.versionHeader,
+      federated: this.client.opts.federated,
       roomId: this.roomId,
       sid: this.streamSid,
       minBackoffMs: this.streamOpts.minBackoffMs,
@@ -711,16 +741,19 @@ export class CollabSession {
           this.emitStatus();
           void this.catchUp();
           void this.drainQueue();
+          // Requests that arrived while we were offline have no live
+          // nudge to replay — every connect re-lists.
+          this.callbacks.onJoinRequests?.();
         },
         onUpdate: (u) => {
           if (u.seq > this.maxStreamSeq) this.maxStreamSeq = u.seq;
           if (this.awaitingEcho && u.seq >= this.awaitingEcho.seq) this.awaitingEcho = null;
           void this.applyRemote(u);
         },
-        onPresence: (blob) => {
+        onPresence: (blob, viewer) => {
           void (async () => {
             try {
-              this.callbacks.onPresence?.(await decryptBlob(this.key, blob));
+              this.callbacks.onPresence?.(await decryptBlob(this.key, blob), viewer);
             } catch {
               /* wrong-key or corrupt presence frame — drop */
             }
@@ -728,6 +761,12 @@ export class CollabSession {
         },
         onEnded: () => this.handleEnded(),
         onAuthDead: () => this.handleAuthDead(),
+        onRevoked: () => this.handleRevoked(),
+        onAccessChanged: (mode) => {
+          this.setAccess(mode);
+          this.callbacks.onAccessChanged?.(mode);
+        },
+        onJoinRequests: () => this.callbacks.onJoinRequests?.(),
         onFull: (viewPass) => {
           this.callbacks.onFull?.(viewPass);
         },
@@ -760,6 +799,38 @@ export class CollabSession {
     const audit = (): void => void this.catchUp().then(() => this.auditRoomHistory());
     this.auditKickoff = setTimeout(audit, this.auditDelayMs);
     this.auditTimer = setInterval(audit, 30 * 60_000);
+  }
+
+  /** True while this (remote) participant is admitted read-only — a
+   *  federation admission the home side can flip live (`setAccess`).
+   *  Distinct from `readOnly` (a spectator, fixed for the session). */
+  get accessReadOnly(): boolean {
+    return this.readOnlyMode;
+  }
+
+  /** No local edits for either reason: a spectator, or a participant
+   *  admitted read-only. */
+  get viewOnly(): boolean {
+    return this.readOnly || this.readOnlyMode;
+  }
+
+  /** Apply a read-only / editing admission (initial join, or a live
+   *  change from the host). Upgrading flushes anything held back. */
+  setAccess(mode: 'write' | 'read'): void {
+    const ro = mode === 'read';
+    if (ro === this.readOnlyMode) return;
+    this.readOnlyMode = ro;
+    if (!ro && !this.ended) {
+      this.flush();
+      void this.drainQueue(); // a queue held back by a mid-send downgrade
+    }
+  }
+
+  /** Access revoked (federation): end this copy's link to the room. */
+  private handleRevoked(): void {
+    if (this.ended) return;
+    this.callbacks.onRevoked?.();
+    this.handleEnded();
   }
 
   /** Leave the session (participant) or just stop syncing: final flush
@@ -828,7 +899,7 @@ export class CollabSession {
    *  persist record to the next resume. Re-posting is idempotent for the
    *  CRDT, so a duplicate row costs nothing. */
   flushForUnload(): void {
-    if (this.ended || this.readOnly) return;
+    if (this.ended || this.viewOnly) return;
     this.flush();
     const head = this.outQueue[0];
     if (head?.encrypted && head.encrypted.length <= UNLOAD_KEEPALIVE_MAX_BYTES) {
@@ -961,7 +1032,10 @@ export class CollabSession {
   /** Export any local ops since the last flush into the send queue.
    *  Synchronous by design so `applyRemote` can call it pre-import. */
   flush(): void {
-    if (this.ended || this.readOnly) return;
+    // Spectators and read-only participants never send (their editor
+    // blocks local edits; anything else stays local until an upgrade —
+    // read-only participants only — flushes it).
+    if (this.ended || this.viewOnly) return;
     this.loroDoc.commit();
     const version = this.loroDoc.version();
     // An empty diff still exports a ~22-byte header blob, so gate on the
@@ -983,7 +1057,7 @@ export class CollabSession {
   private stopping = false;
 
   private drainQueue(): Promise<void> {
-    if (this.sending || this.ended) return this.drainPromise ?? Promise.resolve();
+    if (this.sending || this.ended || this.viewOnly) return this.drainPromise ?? Promise.resolve();
     const p = this.drainQueueInner().finally(() => {
       if (this.drainPromise === p) this.drainPromise = null;
     });
@@ -1069,6 +1143,18 @@ export class CollabSession {
             // (relay idle-GC). Both terminal — the stream already treats
             // them identically.
             this.handleEnded();
+            return;
+          }
+          // Federation: the home relay's decision about this participant.
+          if (err instanceof RoomsError && err.code === 'join-denied') {
+            this.handleRevoked();
+            return;
+          }
+          if (err instanceof RoomsError && err.code === 'read-only') {
+            // Downgraded before the live frame reached us: hold the queue
+            // (an upgrade sends it) and stop posting.
+            this.readOnlyMode = true;
+            this.callbacks.onAccessChanged?.('read');
             return;
           }
           if (err instanceof RoomsError && (err.status === 401 || err.status === 403)) {
@@ -1486,6 +1572,11 @@ export class CollabSession {
       this.connected = this.stream ? this.stream.connected : true;
       this.emitStatus();
     } catch (err) {
+      if (err instanceof RoomsError && err.code === 'join-denied') {
+        this.handleRevoked();
+        if (rethrow) throw err;
+        return;
+      }
       if (err instanceof RoomsError && (err.status === 410 || err.status === 404)) {
         this.handleEnded();
         // A STRICT initial sync (join/first resume tick) must NOT silently
@@ -1524,7 +1615,9 @@ export class CollabSession {
    *  The audit reads only blob METADATA (no full import) and reposting
    *  is idempotent, so a false positive costs one oversized update. */
   async auditRoomHistory(): Promise<void> {
-    if (this.ended || this.outQueue.length > 0) return;
+    // Spectators and read-only participants can't repost (and own no
+    // ops to protect).
+    if (this.ended || this.outQueue.length > 0 || this.viewOnly) return;
     try {
       // Cheap self-contained probe (~100B): the room's current compaction
       // epoch, plus any tail rows past our cursor (folded, not imported —
@@ -1591,7 +1684,7 @@ export class CollabSession {
       if (this.outQueue.length > 0) return;
       if (this.loroDoc.version().compare(this.lastSentVersion) !== 0) return;
       if (!this.versionMissingFrom(roomMax)) return;
-      if (this.readOnly) return; // nothing of ours can be missing; never write
+      if (this.viewOnly) return; // nothing of ours can be missing; never write
       console.warn(
         '[collab] the room lost ops this replica holds (compacted away?) — reposting full history',
       );
@@ -1656,8 +1749,12 @@ export class CollabSession {
   // --- presence ---
 
   async sendPresence(blob: Uint8Array, opts: { keepalive?: boolean } = {}): Promise<void> {
-    // Spectators are a count, not cursors (and the relay would 403).
-    if (this.ended || this.readOnly) return;
+    if (this.ended) return;
+    // Spectators announce THAT they're here (the cursor layer sends them
+    // nothing else) where the relay takes it. Upstream relays refuse a
+    // view pass's presence (403): there a spectator stays a count, and
+    // stops posting for good.
+    if (this.readOnly && this.spectatorPresence === 'refused') return;
     // Presence frames are DELIVERED over the stream, so while it isn't
     // connected nobody can see ours (and we can't see theirs) — posting
     // is pure waste, and on a dead credential it was the bulk of an
@@ -1666,8 +1763,16 @@ export class CollabSession {
     if (!this.stream?.connected) return;
     try {
       await this.client.postPresence(this.roomId, await encryptBlob(this.key, blob), this.streamSid, opts);
-    } catch {
-      /* presence is fire-and-forget */
+      if (this.readOnly && this.spectatorPresence !== 'ok') {
+        this.spectatorPresence = 'ok';
+        this.callbacks.onSpectatorPresence?.('ok');
+      }
+    } catch (err) {
+      // Otherwise fire-and-forget.
+      if (this.readOnly && err instanceof RoomsError && err.status === 403) {
+        this.spectatorPresence = 'refused';
+        this.callbacks.onSpectatorPresence?.('refused');
+      }
     }
   }
 

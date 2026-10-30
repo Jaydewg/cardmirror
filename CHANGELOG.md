@@ -5,6 +5,24 @@ changes in each release, written for users of the editor. For
 in-depth rationale and implementation context behind each entry,
 see `DETAILED_CHANGELOG.md`.
 
+## 1.17.29-f — 2026-10-29
+
+Federation build of 1.17.29: everything in 1.17.29 (below), with
+federation, plus the changes listed here.
+
+### Changed
+
+- **Federation builds update themselves again**, but only to newer
+  federation builds (versions ending in `-f`), never to a release
+  without federation. The update toggle and **Help → Check for
+  Updates…** are back. 1.16.26-f can't update itself, so install this
+  build by hand once.
+
+- **Self-hosted relays use psycopg 3.** The relay's database driver
+  follows upstream 1.17.0. If you run your own relay, reinstall
+  `relay/requirements.txt` after updating; the same `DATABASE_URL`
+  keeps working.
+
 ## 1.17.29 — 2026-10-29
 
 Upstream CardMirror 1.17.0 (see its entry below), the fork's own
@@ -76,6 +94,147 @@ the month the minor began (1.17 began in October, so October 29 is 29).
   startup. The relay now installs psycopg 3 and names the driver in the
   connection URL itself, so the same `DATABASE_URL` works under either
   SQLAlchemy. Thanks to Cora (@coralynnkc)!
+
+## 1.16.26-f — 2026-10-26
+
+A **pre-release** with server federation, following 1.16.1-f. The last
+number now counts days from the start of the month 1.16 came out in
+(October 26 → 26), not releases, so no releases were skipped.
+
+### Added
+
+- **Spectating on the self-hosted relay.** The relay that ships with
+  federation builds now supports view codes and view links, the
+  "· N watching" count, a separate spectator cap (100), and **watch
+  instead** when a session is full. Its editor cap goes from 10 to 30,
+  matching the official relay. The server has to run this release's
+  relay: one from 1.16.1-f still has no spectators. Watching works
+  for people on the session's own server only (see Known limits).
+
+- **See who's watching.** Spectators announce that they're in the
+  session (never their cursor). Their dots get a small purple diamond
+  pip, the session panel's header shows *In this session · 3 · 2
+  spectating*, and spectators who can't be listed appear as an italic
+  "N more spectating without being listed". Listed spectators get the
+  normal chip and panel, minus **End for everyone**. On a server that
+  doesn't pass their presence along (the official relay), a spectator
+  gets a pared-down light-gray chip and panel with just the basics.
+  Only spectators running this release are listed by name; spectators
+  on other builds are only counted. People in the session on other
+  builds see every spectator only in the count.
+
+- **The host can leave without ending.** In the session panel, **End
+  session ▾** now holds **Leave session**: the session keeps going for
+  everyone else, and you rejoin it as the host from the Sessions list.
+
+### Changed
+
+- **Federation builds no longer update themselves.** Starting with this
+  build, the update toggle and **Help → Check for Updates…** are gone;
+  install newer `-f` builds by hand from the releases page.
+  - **1.16.1-f** installs still check for updates, but only take later
+    `-f` pre-releases, never a stable release. They can move to this
+    build on their own and stop updating after that.
+  - **Earlier federation test builds** (shown as `1.15.0-f`, for
+    example) were on the stable update track and could be replaced by a
+    stable release, which removes federation. If that happened,
+    reinstall the `-f` build by hand.
+
+### Known limits
+
+- **No cross-server watching yet.** View codes, view links and view
+  invites work only for people on the session's own server. Someone on
+  another server joins with the cross-server code and can be accepted
+  read-only instead. A cross-server view code (`cmview1f`) is refused.
+- The session panel shows how many people are editing and watching,
+  but not the server's limits.
+
+## 1.16.1-f — 2026-10-26
+
+A **pre-release** with server federation: everything in 1.16.1 (see its
+entry in `CHANGELOG.md`), plus sharing and co-editing between people on
+different relay servers. Your app shows its version as `1.16.1-f`.
+Installs of the stable 1.16.1 release are not offered this build as an
+update, and this build only updates itself to later `-f` pre-releases,
+never to a stable release. (Earlier test builds shown as `1.15.0-f`
+could be updated to stable 1.16.1, which removes federation; reinstall
+this build by hand.)
+
+### Added
+
+- **Share cards with people on other servers.** A contact's pairing code
+  can now name their server (`cmk1f.…@https://their-relay`). Cards you
+  send them go through your own relay to theirs. If their server is
+  temporarily unreachable, the card waits and is delivered when it comes
+  back. Contacts on other servers show their server after their name,
+  and cards they send you are labelled with it. The same person on a
+  different server counts as a different contact.
+
+- **Co-edit with people on other servers.** A session's
+  **cross-server code** (`cmshare1f` / `cmshare2f`, ending in
+  `@<server>`) lets someone on another relay join. They don't get in
+  automatically: someone in the session on its own server sees their
+  name and server and chooses **Accept**, **Accept (read-only)**,
+  **Decline** or **Decide later**, while the joiner sees a cancellable
+  *Waiting to be let in* dialog. Once accepted, they rejoin later without
+  asking again. People in the session can later make a cross-server
+  participant read-only, allow them to edit again, or remove them (they
+  keep their copy). Invites you send pick the right code for each
+  recipient automatically.
+
+- **Read-only participants.** Someone accepted read-only sees every edit
+  live and appears in the session with their cursor, but can't change
+  the document. Unlike a spectator, they can be switched to editing
+  later.
+
+- **Copying a session's code.** The session panel's and the Send pill's
+  **▾** next to the copy button lists both forms: the **classic code**
+  (for people on the session's own server, readable by every CardMirror
+  version) and the **cross-server code**. The commands **Copy
+  Cross-Server Session Code** and **Review Session Join Requests** do the
+  same from the command bar, and Settings → Collaboration has an option
+  to make every copied code the cross-server form.
+
+- **A new session chip and panel.** Your own dot in the status bar sits
+  inside a ring that shows the connection: blue when live, yellow when
+  only polling, grey while reconnecting, red when the server rejected
+  your credentials, turning while edits are waiting to send. A yellow
+  pip means read-only, a rounded square means you joined from another
+  server, and a pulsing badge counts people waiting to be let in.
+  Clicking the chip opens a panel with the session's state, where it's
+  hosted, who's here, anyone waiting to join, cross-server participants
+  you can manage, and Copy code / Leave or End session. With no session,
+  the chip shows whether your server is reachable.
+
+### Changed
+
+- **Spectators and federation together.** On the official relay, 1.16's
+  spectators work as before alongside read-only participants (the
+  self-hosted federation relay has none yet). View codes and view invites
+  only work for people on the session's own server for now: inviting
+  someone on another server to watch is skipped with a message. The
+  Send pill keeps 1.16's two-by-two buttons, with the **▾** for code
+  forms beside **Copy edit code**.
+
+### Fixed
+
+- **People without a cursor stay in "who's here".** Partners used to
+  disappear from the session's list when their cursor wasn't showing
+  (editor unfocused, or cursors turned off). Everyone in the session now
+  stays listed.
+
+### Known limits
+
+- Federation only works between relays that run this release's
+  self-hosted relay with federation turned on (`RELAY_FEDERATION=on`).
+  With any other relay, every federation feature stays hidden.
+- That relay doesn't support spectators yet (the view-code and view-link
+  buttons stay hidden), and seats up to 10 editors per session. Both
+  change in 1.16.26-f.
+- Web join links don't cross servers.
+- There is no CardMirror Lite edition of this pre-release: Lite removes
+  the relay connection that everything here depends on. Lite installers
+  come with the stable 1.16.1 release.
 
 ## 1.16.1 — 2026-10-26
 

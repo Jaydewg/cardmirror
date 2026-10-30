@@ -10,8 +10,21 @@ import { settings } from '../settings.js';
 import { getElectronHost } from '../host/index.js';
 import { collabDevRelay } from './collab-gate.js';
 import { webEntitlementToken, webRoutingCodeSync } from './web-account.js';
-import { RoomsClient, RoomsError } from './room-client.js';
+import { ROOM_PASS_HEADER, RoomsClient, RoomsError } from './room-client.js';
 import { WEB_DEFAULT_RELAY_URL } from './relay-endpoint.js';
+import { wireVersion } from '../relay-protocol.js';
+import { appVersion } from '../install-info.js';
+import { relayHome64 } from '../federation/address.js';
+import { acceptsVersionFlags } from '../federation/relay-capabilities.js';
+
+/** The version-header supplier for a client built against `base`:
+ *  flags only when that relay reads them (relay/FEDERATION.md §2.2).
+ *  Keyed by the construction-time base — a per-request relayBaseUrl()
+ *  would add settings reads to every call (see relayClient's T13 note);
+ *  the lookup itself is a cache hit. */
+function relayVersionHeader(base: string): () => string {
+  return () => wireVersion(appVersion, acceptsVersionFlags(base));
+}
 
 /** Baked relay endpoint from the desktop main process — resolved once,
  *  used as the LAST fallback so packaged builds work with zero setup.
@@ -140,6 +153,31 @@ export function relayClient(): RoomsClient | null {
     // rates on the typing thread (2026-09-01 review, T13). Still
     // re-read per request: no memo, no staleness.
     credentials: () => resolveCredential(),
+    versionHeader: relayVersionHeader(url),
+  });
+}
+
+/** A rooms client for a room homed on ANOTHER relay (federation,
+ *  relay/FEDERATION.md §6): the same wire contract, addressed to this
+ *  app's own relay under `/federation/v1/via/<home>`, which proxies it.
+ *  `pass` supplies the room pass this participant was admitted with
+ *  ('' before admission — join-request calls only). Null when no relay
+ *  or credential resolves. */
+export function relayClientForHome(home: string, pass: () => string): RoomsClient | null {
+  const url = relayBaseUrl();
+  if (!url || !resolveCredential().token) return null;
+  const via = `/federation/v1/via/${relayHome64(home)}`;
+  return new RoomsClient({
+    baseUrl: () => `${relayBaseUrl() || url}${via}`,
+    token: () => resolveCredential().token,
+    routingCode: () => resolveCredential().routingCode,
+    credentials: () => resolveCredential(),
+    versionHeader: relayVersionHeader(url),
+    extraHeaders: (): Record<string, string> => {
+      const p = pass();
+      return p ? { [ROOM_PASS_HEADER]: p } : {};
+    },
+    federated: true,
   });
 }
 

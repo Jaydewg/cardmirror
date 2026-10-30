@@ -5,6 +5,52 @@ behavior, rationale, and (where useful) the implementation context
 behind a change. For a shorter, jargon-free summary of what's new
 in each release, see `CHANGELOG.md`.
 
+## 1.17.29-f — 2026-10-29
+
+1.17.29 (main at `71676d14`, which carries upstream 1.17.0) merged into
+`server-federation`.
+
+### Changed: the relay runs on psycopg 3
+
+Upstream 1.17.0 switched `relay/requirements.txt` from `psycopg2-binary`
+to `psycopg[binary]` and rewrites a bare `postgresql://` /
+`postgres://` URL to `postgresql+psycopg://`. The federation relay had
+its own rewrite to `postgresql+psycopg2://`, which ran first and would
+have pinned the driver that is no longer installed. That rewrite is
+gone, so upstream's applies. `httpx` (federation's outbound calls) stays
+in the requirements. `relay/tests/conftest.py` builds its admin URLs
+with `+psycopg` too.
+
+### Changed: federation builds update in-app on the `f` channel
+
+Replaces 1.16.26-f's lockout (`IN_APP_UPDATES`, removed). Main process:
+`UPDATE_CHANNEL` (`federation-main.ts`) is `'f'` when the build carries
+the federation flag; `startAutoUpdate` then sets `autoUpdater.channel =
+'f'`, `allowPrerelease = true`, and `allowDowngrade = false` (the channel
+setter turns downgrades on). The renderer's launch and daily checks, the
+Help menu item, `host:check-for-updates` and the Settings controls are
+back, plus a Settings note on federation builds.
+
+How electron-updater 6.8.3's `GitHubProvider` picks the release: with a
+channel that isn't alpha or beta, it walks the releases feed and takes
+the first tag whose prerelease id is `f`, skipping stable tags (null).
+It reads `f.yml` / `f-<os>.yml`, which `release.yml` doesn't produce,
+and falls back to the release's `latest*.yml`. `isUpdateAvailable`
+then requires a strictly newer semver. Setting the channel explicitly
+instead of relying on the version's prerelease id also covers a numeric
+manifest (the 1.15.0-f case) and a version like `1.17.0-beta.1-f`, whose
+semver prerelease id is `beta`.
+
+The other direction relies on `release.yml` marking every `-` tag a
+pre-release: stable installs (default channel, `allowPrerelease` false)
+read `/releases/latest`, which skips pre-releases. An `-f` release
+published as a full release would be offered to stable installs.
+Limit: the feed lists only the most recent releases, so a long run of
+stable releases with no `-f` release in between could push every `-f`
+tag out of it. The check then fails quietly until the next `-f`
+release. 1.16.26-f installs have the lockout and need one manual
+install.
+
 ## 1.17.29 — 2026-10-29
 
 Upstream 1.17.0 (merged at `00abd1cb`) on top of 1.16.1, plus the fix
@@ -205,6 +251,575 @@ picks. Verified locally against Postgres 16: the mailbox and room
 endpoints return byte-identical responses on psycopg 3 and on the old
 psycopg2 build. The hosted relay inside the scouting backend pins
 SQLAlchemy 2.0 and was never affected.
+
+## 1.16.26-f — 2026-10-26
+
+### Added: spectators on the federation relay (contract §16 parity)
+
+`relay/server.py`. **Room passes** (`cmrp1.<roomId>.<g|v>.<exp>.<hmac>`):
+stateless, HMAC-SHA256 under `RELAY_PASS_SECRET` or a key derived from
+`RELAY_TOKEN` (a token change revokes every pass), 7-day expiry
+(`room_pass_ttl_seconds`), `RELAY_GUEST_PASS=0` turns them off. Room
+routes take `room_auth` (relay token, or a pass for THIS room — another
+room's pass is 401) instead of `require_relay_token`; writes (updates,
+snapshot, DELETE) take `room_write_auth`, which 403s a view pass.
+`POST /rooms` returns `guestPass` + `viewPass`; `GET /rooms/{id}/guest-pass`
+(edit credentials only) and `GET /rooms/{id}/view-pass` (any credential)
+mint more. Streams: `_Outbox.viewer`; viewers count against
+`max_viewers_per_room` (100) and editors against `max_streams_per_room`
+(now 30); a refused LOCAL editor's 409 body carries a `viewPass` (not a
+proxied remote one — a pass for this relay means nothing to its app);
+`hello` carries `watchers`, and `_announce_watchers` pushes `{"t":"w","n"}`
+on every viewer connect / disconnect. Capabilities: `rooms.guestPasses`,
+`rooms.viewPasses`, `rooms.spectatorPresence`, `maxViewersPerRoom`.
+
+**Prompt disconnects.** Starlette's StreamingResponse only notices a
+dropped client on its next write (up to a heartbeat, 25 s), which kept a
+departed spectator in the count and a departed editor in its seat. Each
+room stream now runs `_close_on_disconnect` (waits on
+`http.disconnect`, then `_Outbox.close()` wakes the generator).
+
+**Deliberate difference from upstream:** a view pass MAY post presence
+(upstream: 403), fanned out stamped `"v":1` (`_fan_out_presence`). The
+federation peer route keeps `post_room_presence` (never a spectator).
+Tests: `relay/tests/test_spectators.py` (reads vs. writes, minting
+rules, room scoping, tampering, watcher frames incl. a bare-socket
+hang-up, stamped presence, separate caps, the 409 pass) and pass unit
+tests in `test_units.py`.
+
+### Added: spectator presence and UI (client)
+
+- `RoomStream` passes the relay's stamp: `onPresence(blob, viewer)`.
+- `CollabSession.sendPresence`: a spectator posts; a 403 sets
+  `spectatorPresence = 'refused'` (no further posts) and fires
+  `onSpectatorPresence('refused')`, the first success `'ok'`.
+- `collab-cursors.ts`: a spectator (`identity().spectator`) sends the
+  0x03 roster with `sp: true` and nothing else (no cursor, lease ad or
+  cursor farewell). Receivers mark a peer a spectator if the relay
+  stamped the frame OR the roster says `sp` (the stamp wins), drop any
+  stamped cursor/lease frame, and keep spectators out of
+  `visiblePeers()` (repair leadership). `PresencePeer.spectator`.
+- Chip (`session-chip.ts`): `.pmd-collab-presence-dot-spectator` (purple
+  diamond pip); `ChipSessionModel.minimal` renders the light-gray
+  `pmd-collab-chip-line` / `-seg` form from `minimalChipParts` (people =
+  listed editors + relay watchers; spectating; Online / Polling /
+  Offline). Pane footers mirror both.
+- Panel (`session-panel.ts`): header *In this session · N* plus
+  *· M spectating* (the relay's count); participants then spectators
+  (tagged *spectating*); an italic `pmd-collab-panel-unlisted` line for
+  `watchers − listed spectators`; *Copy view code* for a spectator; End
+  for everyone only for `role === 'participant'`; `buildMinimal` for
+  the minimal case (status + Stop watching).
+- `crossServerShareCode` refuses a view code (it would have re-encoded
+  a spectator's room + key as an editing `cmshare2f` code).
+- Tests: `collab-spectator` (refused vs. stamped paths, via
+  `_rooms-mock.setSpectatorPresence`), `collab-cursors` (roster-only
+  sending; stamp precedence), `session-chip` (pip, minimal chip, panel
+  counts, no End for everyone, minimal panel).
+
+### Spectating: what is and isn't done yet
+
+- **Same-server only.** `decodeShareCode` still refuses `cmview1f`, and
+  view invites still skip recipients on other servers. No cross-server
+  watch flow exists yet: the proxy has no view-pass route, and the join
+  request carries no `view` flag. Cross-server people are admitted
+  read-only (`accessReadOnly`) instead.
+- **Listing needs this build on both ends.** The 0x03 roster frame is
+  federation's; upstream's `applyRemote` handles only cursor and lease
+  frames and drops it. So upstream and 1.16.1-f editors show our
+  spectators only in `watchers`. Spectators on those builds never post
+  presence, so here they fall into the unlisted line.
+- **Relay version.** 1.16.1-f relays have no view passes (no
+  `rooms.viewPasses`), so the view actions stay hidden there. The client
+  doesn't gate its presence POST on `rooms.spectatorPresence`; it posts
+  and falls back to the minimal UI on the 403.
+- **Caps not shown.** `maxStreamsPerRoom` and `maxViewersPerRoom` are
+  published in `/relay/capabilities` but not yet read by the client;
+  the panel shows counts without maxima.
+- **Join-request UI unchanged.** **Accept (read-only)** is still its own
+  button; the planned Accept ▾ split isn't built.
+
+### Added: host End session ▾ → Leave session
+
+`SessionPanelCtx.leaveKeepRunning` (host only) puts **Leave session** in
+the End button's ▾ — the mirror of a participant's Leave ▾ → End for
+everyone; spectators get neither. `hostLeaveToHome` (`collab-ui.ts`)
+sends the roster farewell, then runs the close-but-keep path
+(`closeKeepResumableSession`: stop, verified persist flush, teardown with
+the record kept), so the room stays live for everyone else and the
+Sessions list resumes it as host (recent rooms records the host role and
+`leftAt`). A failed flush keeps the session live and says so. Test:
+`session-chip.test.ts` (host panel).
+
+### Changed: federation builds never update in-app
+
+`IN_APP_UPDATES = !BUILD_VERSION_FLAGS.includes('f')` in
+`relay-protocol.ts` and its main-process twin in `federation-main.ts`
+(parity pinned in `tests/federation/address.test.ts`). When false:
+`startAutoUpdate` and `runUpdateCheck` return early, the Help menu
+drops Check for Updates…, `host:check-for-updates` answers an error,
+the renderer skips the launch and daily checks, and Settings → About
+this install shows a note instead of the update controls. Field cause:
+a 1.15.0-f install (numeric manifest `1.15.0`, so on the `latest`
+channel) took stable 1.16.1 as an update and lost federation.
+
+Installed builds without the lockout behave as follows (electron-updater
+6.8.3, `GitHubProvider`):
+- **1.15.0-f and earlier** (numeric manifest): `allowPrerelease` is
+  false, so they take the newest stable release and lose federation.
+  They have to be reinstalled by hand.
+- **1.16.1-f**: `allowPrerelease` turns on by itself (the version has a
+  prerelease component). The current channel is `f`, which is neither
+  alpha nor beta, so `getLatestVersion` takes only the newest feed tag
+  whose prerelease id is `f`. Stable tags (channel `null`) are skipped.
+  It then reads `f.yml`, falling back to the release's `latest*.yml`
+  (which is what `v1.16.1-f` ships). So 1.16.1-f installs update only to
+  the next `-f` pre-release, never to stable, and stop once on a build
+  with the lockout.
+
+## 1.16.1-f — 2026-10-26
+
+Pre-release build of the `server-federation` branch: everything in 1.16.1
+(below) plus federation. Tagged `v1.16.1-f`, which `release.yml` drafts as
+a GitHub pre-release.
+
+### Release: the manifest carries the flag
+
+`package.json` / `apps/desktop/package.json` / `package-lock.json` are
+`1.16.1-f`, not the numeric `1.16.1`. The reason is the release plumbing:
+electron-builder publishes to the release tagged `v<version>`, so a
+numeric manifest would upload federation installers into main's `v1.16.1`
+release. As a semver pre-release of 1.16.1, electron-updater never offers
+it to stable 1.16.1 installs. Everything inside the app still reads it as
+1.16.1 plus flag `f`: `splitVersionFlags` takes the trailing `-f` as flags,
+`numericVersion` / `compareAppVersions` (version floors, the plugin API,
+relay headers to non-federating relays) see `1.16.1`, and `flaggedVersion`
+displays `1.16.1-f` (flags are de-duplicated, so not `-f-f`). Updates
+from a 1.16.1-f install: `allowPrerelease` turns on by itself and the
+channel is `f`, so `GitHubProvider` takes only later `-f` tags and never
+a stable release. (An earlier version of this entry wrongly said it
+could take a later stable release.) Builds before this one had a numeric
+manifest and sat on the `latest` channel, so they could be replaced by a
+stable release; see the in-app update lockout in the next federation
+entry.
+
+No Lite build: `release.yml` on this branch drops the "Build and upload
+CardMirror Lite installer" step. Lite (`src/editor/lite.ts`) removes
+collaboration, sharing and the relay, so a federation Lite would only be
+the plain Lite under a `-f` version. Lite installers come from main's
+stable releases. MANUAL's CardMirror Lite section says so.
+
+### Changed: upstream 1.16 spectators alongside federation
+
+Upstream's spectators (view codes, view passes) and federation's
+read-only admission coexist:
+- `CollabSession.readOnly` keeps upstream's meaning (a spectator, fixed
+  for the session). The federation admission is `accessReadOnly` (live,
+  `setAccess`). `viewOnly` (either) gates `flush`, `flushForUnload`,
+  `drainQueue`, the history audit and the repost. Presence and the
+  spectator lock plugin stay spectator-only, so read-only participants
+  keep their cursor and roster entry. The editor lock, undo clamps and
+  chip use `viewOnly`; the roster `ro` flag and the panel's access
+  controls use `accessReadOnly`.
+- `parseCodePrefix` accepts `cmview`. `decodeShareCode` returns
+  `{view, home?}` and refuses `cmview1f` (no cross-server watch flow yet,
+  and it must never fall through to an edit join). `roomIdFromShareCode`
+  goes through the prefix parser; `parseRoomInvite` accepts
+  `cmshare[12]f?` and `cmview1`.
+- View invites go only to recipients on the room's own server. Others are
+  skipped, with a toast. Edit invites keep the per-recipient plain vs.
+  cross-server code choice.
+- Send pill: upstream's 2×2 grid. The code-forms ▾ shares the "Copy edit
+  code" cell (`.pmd-send-action-split`).
+- Session chip: `chipStateText` adds the "Watching" head and
+  "· N watching"; spectators get the read-only ring pip. Session panel:
+  `role` is `SessionRole`, Stop watching wording, and End for everyone is
+  offered to participants only.
+- Session full: upstream's "watch instead" offer; the first-join toast
+  keeps "maximum number of coeditors reached".
+- Relay: upstream's `gunzip_bounded` (streaming inflate capped at
+  `LIMITS.max_message_bytes`) replaces the unbounded decompress. Room
+  reads keep REPEATABLE READ plus the per-room lock rather than
+  upstream's `FOR SHARE`, which would raise serialization errors under
+  REPEATABLE READ on Postgres.
+
+Federation lets users of DIFFERENT relays share cards and co-edit. The
+protocol is `relay/FEDERATION.md` (protocol v1); the self-hosted relay
+implements it, and both apps (desktop main + renderer, web) speak it.
+Everything is additive and capability-gated in both directions: a relay
+without `RELAY_FEDERATION=on` is byte-identical to before for every
+client, and an app whose relay doesn't advertise federation behaves
+exactly like a build without it.
+
+### Added: relay federation (server)
+
+`relay/server.py` is the 10-13 baseline (`prod/10-13/newserver.py`)
+plus a Federation section; nothing below is registered, listed or
+started unless `RELAY_FEDERATION=on`.
+
+**Identity and config.** `FederationConfig.from_env()`: `RELAY_PUBLIC_URL`
+(required with federation; startup refuses an invalid or plain-http URL
+unless `RELAY_FEDERATION_ALLOW_HTTP=1`), `RELAY_NICKNAME` (≤ 48 printable
+chars), `RELAY_FEDERATION_ALLOW` / `_DENY` (canonical URLs exact, or
+`fnmatch` host patterns; deny wins; empty allow = open federation),
+`RELAY_FEDERATION_ALLOW_PRIVATE=1`. A relay IS its canonical URL
+(`canon_url`: http(s) only, lowercased scheme/host, default port dropped,
+no userinfo/query/fragment/`@`, `//` collapsed, no trailing `/`, path case
+kept). The nickname is display data only. Outbound calls go only to
+publicly routable addresses (`_peer_address_ok`, `getaddrinfo` +
+`ip.is_global`, cached 5 min) unless the operator opts in, and no client
+follows redirects (a redirect would talk to a different identity).
+
+**Dialback peering.** No keys: A → B `POST /federation/v1/handshake
+{origin, nonce}`; B mints a token, stores its sha256, and delivers it TO
+A's URL (`/federation/v1/handshake/callback`); A accepts only a callback
+matching a handshake it started (nonce + peer), stores the token, and B
+then answers 200. Only whoever answers at A's URL receives the token.
+Peer calls carry `X-CardMirror-Peer` + `X-CardMirror-Peer-Token`;
+`require_peer` (async, cached, threadpool DB fallback) checks policy, the
+token and a per-peer token bucket (`fed_peer_requests_per_second`, burst
+2×). A stale token (`401 peer-token-invalid`) triggers one re-handshake
+and retry (`_peer_call` / `_apeer_send`). Handshakes are serialized per
+peer, rate-limited per claimed origin (`fed_handshakes_per_minute`), and
+tokens persist across restarts in `relay_fed_tokens` (inbound: the
+newest 4 per peer). Peer capabilities (limits, nickname, "does it
+federate") are cached 5 min (30 s when unreachable, ETag revalidated); a
+peer federates only if its published `federation.url` IS the URL we
+reached it at.
+
+**Capabilities.** Features `client.versionFlags`, `federation.mailbox`,
+`federation.rooms`, `federation.joinRequests {modes: [write, read]}`; a
+top-level `federation {protocol: 1, url, nickname?}` block;
+`limits.joinRequestTtlSeconds`. `create_room` adds `"home"`. CORS exposes
+`X-CardMirror-Federation` (only when enabled). `GET
+/relay/federation/v1/peer?url=` labels/probes another relay for apps from
+the cache, so apps never contact foreign relays themselves.
+
+**Card sharing (store-and-forward).** `POST /relay/federation/v1/outbox`
+(app token; the `/messages` body + `recipientRelay`) — a distinct route
+so an older relay 404s instead of filing remote mail in a local mailbox
+nobody reads. Known-now refusals are answered immediately:
+`403 peer-refused` (policy), `409 peer-not-federating`,
+`413 too-large-for-peer` (against the peer's published
+`maxMessageBytes`); an unreachable peer still queues (`202 {queued,
+peerState: "unreachable"}`). `recipientRelay` = self is an ordinary local
+send. Rows live in `relay_fed_outbox` with retry dedupe on (peer,
+recipient, body hash). A daemon delivery thread (`_delivery_loop`, woken
+by sends and every 5 s) claims ≤ 50 due rows with `FOR UPDATE SKIP
+LOCKED` and a 120 s lease, commits, and delivers with NO DB connection
+held; peers run in parallel (4 workers), each serially, and after a
+peer's first transient failure its remaining rows are rescheduled untried
+(a dead peer costs one timeout per round). Outcomes: 2xx delete; 400/404/
+413/422 drop; 401/403 retry in 1 h; 429 in 60 s; else backoff 5 s × 2ⁿ to
+1 h with 0.7–1.3 jitter. Rows past `message_ttl` drop (sweeper and
+delivery). Receiving side: `POST /relay/federation/v1/inbox` (peer auth)
+stores the body verbatim under the bare routing id and pushes it to live
+streams, deduping redeliveries on a new partial unique index
+`(origin_relay, origin_msg_id)`; recipients may not be qualified, so a
+relay never forwards again (no loops). Delivered bundles gain one field,
+`viaRelay` — the verified origin — via `_message_out`.
+
+**Rooms.** One home relay per room (seq authority, compaction and
+tombstones stay where they were). Remote participants reach it through
+their own relay at `/relay/federation/v1/via/{home64}/rooms/{id}/…`
+(`home64` = base64url of the canonical URL; non-canonical or self homes
+are refused): join-requests, join-requests/self, updates (GET/POST),
+snapshot, presence, stream. `_proxy_room_call` forwards the content and
+version headers and the room pass (never the app's own token), passes
+gzip through only when the app accepts it, maps a refusing/unreachable
+home to `403 home-refused` / `503 home-unreachable`, and marks every
+response `X-CardMirror-Federation: 1`. `via_stream` holds one upstream SSE
+per app stream and pipes bytes verbatim (read timeout 3 × the home's
+heartbeat + 10 s; the close is shielded from the disconnect cancellation
+so the home frees the seat promptly; ≤ `fed_max_upstreams_per_peer`).
+One-to-one, so the home's participant cap, sid echo suppression and
+backpressure carry over unchanged. On the home, the federated room-data
+routes re-register the EXISTING handlers (`get_room_updates`,
+`post_room_update`, `post_room_snapshot`, `post_room_presence`) behind
+`fed_room_access` / `fed_room_write` instead of the app token; streams go
+through the new `_room_stream_response(…, fed_request)` helper that both
+stream routes share.
+
+**Join requests (cross-server consent).** `relay_fed_join_requests`
+(room, verified origin, sha256 of a joiner-minted pass, room-key-sealed
+intro blob ≤ `fed_join_blob_bytes`, state, mode). Create is idempotent on
+the pass (`409 pass-conflict` if reused elsewhere); ≤
+`fed_join_requests_per_room` pending (429). Local participants list them
+(`GET /relay/rooms/{id}/join-requests`, with `originNickname` from the
+peer cache) and decide (`POST …/{requestId} {decision:
+write|read|deny|revoke}`; only app-token callers can). Room data answers
+`403 join-pending` / `join-denied` / `read-only` (writes) until and unless
+admitted; presence is allowed for any admitted participant; remote
+participants have no DELETE route. Passes are cached in memory with a
+generation counter so a slow DB read can't cache a superseded decision.
+New stream frames: `{"t":"j"}` to LOCAL streams only (re-list),
+`{"t":"a","mode"}` to that participant on a live mode change,
+`{"t":"x"}` + close on revocation or withdrawal (`_push_to_request`,
+`_Outbox.fed_request`). The sweeper expires pending requests after
+`fed_join_request_ttl_seconds` (24 h), drops a room's requests with the
+room (GC, tombstone, DELETE), and expires undelivered outbox rows.
+
+**Errors.** `FedError` renders `{"error": code, "detail": code, …}` —
+`error` is the contract, `detail` keeps the string shape shipped apps
+already fold into messages. Full table in FEDERATION.md §7.
+
+**Bounds.** Caches keyed by values strangers choose (resolved hosts,
+claimed handshake origins, probed peer URLs) are capped at 4096 entries,
+oldest dropped.
+
+### Added: version flags (`1.15.0-f`)
+
+`split_version_flags` (relay) / `splitVersionFlags` (relay-protocol.ts,
+mirrored in federation-main.ts): a final `-<letters>` segment that isn't
+`alpha`/`beta`/`rc` is a set of feature flags, never part of ordering;
+`_parse_version` and `compareAppVersions` strip them, and two-part cores
+read as `.0` (`1.15-f` == `1.15.0`). `BUILD_VERSION_FLAGS = 'f'`;
+`flaggedVersion` composes `1.15.0-f` from the manifest version (which can
+stay numeric — electron-updater would rank `1.15.0-f` below `1.15.0`).
+`wireVersion(v, acceptsFlags)` decides the `X-CardMirror-Version` value:
+flags only to relays listing `client.versionFlags`, the plain `X.Y.Z` to
+every other relay — older relays parse `-f` as a prerelease and their
+minimum-version gate would refuse it. Wired through `RoomsClient`
+(`versionHeader` option, default `numericVersion(appVersion)` — the
+previous value for every shipped manifest), `collab-relay.ts` (keyed by
+the construction-time base so it adds no per-request settings reads —
+`relay-token-liveness.test.ts`), the desktop main process
+(`clientVersionHeader()`, including `/connect` and `/disconnect`) and the
+web mailbox. The relay's version gate now also covers the federation
+routes an app drives (`/federation/v1/outbox`, `/via/…`, and the home's
+`/federation/v1/rooms/…`, which see the forwarded app version);
+relay-to-relay plumbing is never gated.
+
+### Added: feature-flagged codes; identity = key + relay
+
+`src/editor/federation/address.ts` (dependency-free; mirrored for the
+main process in `apps/desktop/src/federation-main.ts` because its rootDir
+excludes `src/`): `canonRelayUrl` (the relay's rules exactly — the same
+vectors are pinned in `relay/tests/test_units.py` and
+`tests/federation/address.test.ts`), `parseCodePrefix`
+(`^(cmk|cmshare)(\d+)([a-z]*)$` — generation and flags on separate axes,
+so an upstream `cmshare3` composes as `cmshare3f`), `splitRelaySuffix`
+(first `@`), and the pairing-code helpers.
+
+- Pairing: `cmk1f.<key>@<relay-url>`. `parsePairingCode` rejects unknown
+  flags and mismatched flag/suffix combinations; the key part is what
+  sealing and the routing id use. `pairingIdentity(code, self)` is the
+  comparison normal form: a code naming the reader's own relay collapses
+  to the plain key, one naming another relay keeps it — the same key on
+  another relay is a different contact (a user who moves servers is a new
+  contact). `normalizePairingCode` now returns this form, so every
+  existing partner / blocklist / nickname / dedupe comparison means "same
+  person" without touching the call sites; plain codes come back exactly
+  as before. `looksLikePairingCode` accepts well-formed `cmk1f` codes;
+  `pairingCodeRelay` gives a contact's relay for labels.
+- Share codes (`collab-crypto.ts`): `encodeShareCode(…, home)` mints
+  `cmshare1f` / `cmshare2f.…@<home>`; `decodeShareCode` returns `home`,
+  rejects unknown flags/generations; `stripShareCodeHome`. Every
+  pre-federation parser fails `f` codes at the prefix ("does not look like
+  a share code") — pinned against the 1.15.0 parser logic in
+  `tests/federation/share-codes.test.ts`. `parseRoomInvite` and
+  `roomIdFromShareCode` read `f` codes; invite prefetch skips them (a
+  remote room can't be read before admission).
+
+### Added: own-relay capability discovery (forward compatibility)
+
+`federation/relay-capabilities.ts` (renderer) and `ensureMainRelayCaps`
+(main): fetch `/relay/capabilities` per relay URL, cache 5 min (30 s after
+a miss), parse the federation block (URL canonicalized, nickname trimmed)
+and `client.versionFlags`. A 404, a document without a federation block,
+a malformed block, or an unreachable relay all read as "no federation";
+an outage keeps the last known answer. Fetches use `cache: 'no-cache'`
+(the relay's `max-age=300` otherwise answered from the HTTP cache), any
+field change — nickname included — notifies listeners, and opening
+Settings forces a re-read, so an operator's change shows without
+restarting the app. `federation/self.ts` exposes
+`ownRelayFederation()` / `selfRelayUrl()` / `ownCrossServerCode()` and
+`wireOwnRelayFederation()` (called from `initPairingWiring`; re-fetches
+when the relay URL or token setting changes). The main process refreshes
+on every delivery reconfiguration.
+
+### Added: cross-server card sharing (apps)
+
+Desktop main (`host:pairing-send` in pairing-ipc.ts) and web
+(`webPairingSend`) route per recipient: a code naming another relay is
+sealed to its key and posted to `/federation/v1/outbox` with
+`recipientRelay`; everything else is the unchanged `/messages` send. A
+cross-server recipient gets the sender's cross-server code as
+`senderCode` (so they can reply); same-server recipients keep the plain
+code every build reads. A cross-server recipient when the own relay
+doesn't federate fails locally without a request. Results gain
+`peerFail` (federation refusals — counted separately from `authFail`, so
+"relay declined your credentials" never fires for them) and `deferred`
+(queued for an unreachable server); `sendOutcomeToast` words both. On
+receipt, `senderCodeFor` attributes mail to `viaRelay` — the relay-verified
+origin outranks the unauthenticated sealed claim. The Send pill shows a
+remote contact's host after their name; the Receive pill labels remote
+senders with their server and matches partners by identity.
+
+### Added: cross-server co-editing (apps)
+
+- **Transport.** `relayClientForHome(home, pass)` (collab-relay.ts) is an
+  ordinary `RoomsClient` whose base URL is
+  `<own relay>/federation/v1/via/<home64>`, with the room pass as an
+  extra header and `federated: true`. New `RoomsClientOptions`
+  (`extraHeaders`, `versionHeader`, `federated`), mirrored on
+  `RoomStreamOptions`. `RoomsError` gains a machine-readable `code`. On a
+  federated base, a 404 WITHOUT the proxy marker becomes
+  `RoomsError(501, …, 'relay-not-federating')` (the stream keeps retrying)
+  — an older or federation-off relay must never read as "the session
+  ended". New calls: `requestJoin`, `joinStatus`, `withdrawJoin`,
+  `listJoinRequests`, `decideJoinRequest`. Stream: `x` → `onRevoked`
+  (terminal), `a` → `onAccessChanged`, `j` → `onJoinRequests`; a stream
+  `403 join-denied` is terminal revocation, not a credential failure.
+- **Session.** `CollabSession.readOnly` / `setAccess(mode)`: a read-only
+  participant never flushes, drains, or runs the history-audit repost
+  (presence still flows); upgrading flushes and drains anything held
+  back. A `403 read-only` mid-send holds the queue and switches to
+  read-only; `join-denied` anywhere runs `handleRevoked` (`onRevoked`,
+  then the normal `onEnded` teardown). New callbacks `onAccessChanged`,
+  `onRevoked`, `onJoinRequests` (fired by `j` frames AND every hello, so
+  changes made while offline are re-synced).
+- **Joiner** (`federation/collab-federation.ts requestRemoteAdmission`):
+  reuses a stored admission, else creates the request with a minted pass
+  (24 random bytes) and a room-key-sealed intro (`{v, name, app}` — the
+  relay can't read it), then shows a cancellable *Waiting to be let in*
+  dialog polling every 2.5 s (5 s after a minute). Outcomes: admitted
+  (mode), cancelled (request withdrawn), refused (worded by
+  `federationFailureMessage`), ended, or error (left to the existing
+  `relayFailureMessage`). Passes persist per room in localStorage
+  (`cm-fed-room-passes`, with the last known mode), so rejoin and resume
+  need no new approval; they're forgotten when the room is over, the
+  request is declined, or access is revoked.
+- **Home side** (`createJoinRequestWatcher`, local rooms only): on each
+  nudge it lists pending requests and prompts one at a time — *Accept*,
+  *Accept (read-only)*, *Decline*, or *Decide later* — showing the joiner's
+  self-declared name and the relay-verified server (nickname always with
+  its host). Listing is decoupled from prompting so a decision made by
+  another participant closes the open prompt (`promptForChoice` gains an
+  optional `signal`). Any participant on the home relay may decide.
+- **Read-only editor.** `collabReadOnlyPlugin`: blocks local doc-changing
+  transactions and sets `editable: false` while read-only; admits
+  sync-origin and the Loro binding's own transactions; collab undo/redo
+  are clamped too. `refreshEditable` re-evaluates after a live change.
+- **collab-ui.ts.** Join and resume run admission for a remote home
+  (resume uses the stored pass offline-first, re-checking mode on
+  reconnect via `syncRemoteAccess`); `ActiveSession` gains `home` and
+  `joinWatcher`. `relayFailureMessage` words federation codes first.
+  Invites pick a code per recipient (plain for the room's own server,
+  `f` otherwise). *Copy Session Share Code* copies the plain code for a
+  local room (even one joined via a self-naming `f` code) and keeps the
+  `f` code for a remote room.
+- **Send pill:** on a doc already in a session, a *Cross-server code*
+  action sits beside *Copy code* (click-open only; shown when the relay
+  federates and that code differs from the default), so an existing
+  session's `f` code is one click away while *Copy code* keeps the plain
+  code. Both go through one rule (`defaultCopyCode`) shared with the
+  command; the code getter now applies it (it used to return the stored
+  code verbatim). New hook `collabActiveCrossServerCode`.
+- **New commands:** *Copy Cross-Server Session Code*
+  (`collabCopyCrossServerCode`) and *Review Session Join Requests*
+  (`collabReviewJoinRequests` — re-prompts deferred requests, then offers
+  each admitted remote participant *Make read-only* / *Allow editing* /
+  *Remove from session*).
+- **New setting:** `collabCrossServerCodes` (Settings → Collaboration,
+  off): copied session codes, including the one copied when a session
+  starts, are the cross-server form. Settings → Collaboration also shows
+  *Your server: Nickname (host)* and a *Copy cross-server code* button
+  when the relay federates.
+
+### Added: session chip, status ring, and session panel
+
+`collab/session-chip.ts` (always loaded) owns `#collab-chip` in every
+state; `collab/session-panel.ts` (collab chunk) is the expanded view.
+Your dot keeps its presence color and shrinks inside a status ring:
+streaming = blue with an outward ripple; polling (stream down, relay
+answered a request within 45 s) = yellow; reconnecting = pulsing grey;
+credentials rejected = red dotted; queued edits = the ring turns
+(dashed); read-only = a yellow pip; joined from another server = rounded
+square. A pulsing badge counts cross-server joiners waiting. "Session
+ended" replaces the label as a red bar until clicked or the next session;
+with no session the chip reads "Connected to <server>" / "Server
+unreachable" (relay-capabilities now records `reachable`). Animations use
+transform/opacity only and stop under prefers-reduced-motion. Clicking
+the chip opens the panel: state + where the session is hosted, who's
+here, waiting joiners (Accept / Read-only / Decline / Later — deferring
+keeps them listed), admitted remote participants (Allow editing / Make
+read-only / Remove), and Copy code / Cross-server code / Leave or End
+session → Home (new `CollabUiDeps.goHome`). The join watcher exposes
+`rows()` / `onChange` / `decide` / `defer` for it. The three-pane footers
+draw the same ring (`CollabCopresence.ring`). No server changes.
+
+### Fixed: partners vanished from "who's here" without a cursor
+
+The roster came from the cursor ephemeral store, so anyone without a
+selection (editor unfocused, cursor removed, or cursors turned off)
+disappeared — and a remote participant, who has no relay-side list to
+fall back on, saw the home side's people only while their cursors
+showed. New presence frame `0x03` (roster JSON `{peer, name, relay?,
+ro?}` / `{peer, leave}`), sent every 15 s, on reconnect and on access
+changes, independent of the cursor and of the cursors setting; entries
+expire after 45 s like cursors. `presence()` merges roster + cursor store
+(older builds still appear through their cursors; they ignore 0x03).
+`relay` (the sender's own claim) drives the other-server marker: a
+partner whose relay isn't the session's home is a rounded square, with
+the server in the tooltip. `ro` also fixes a read-only bug: a read-only
+participant could win the repair-leader election and then be unable to
+repair; `visiblePeers()` now excludes read-only peers.
+
+### Fixed: relay failed to start on SQLAlchemy 2.1
+
+SQLAlchemy 2.1 maps a bare `postgresql://` (and hosts' legacy
+`postgres://`) to psycopg 3, but `requirements.txt` ships psycopg2, so a
+fresh install of the baseline couldn't import a driver. `DATABASE_URL`
+now names `postgresql+psycopg2://` unless the URL already names a driver.
+
+### Changed: relay internals (no behavior change)
+
+`post_message` split into `_decode_message_body` / `_store_local_message`
+/ `_message_out`, shared with the outbox (self-delivery) and the inbox;
+`stream_room` into `_room_stream_response`; `_push_to_room` gains
+`local_only`. `httpx` (and `anyio`, already a FastAPI dependency) added;
+`requirements.txt` lists `httpx>=0.27`. docker-compose passes the
+federation variables through (empty = off).
+
+### Compatibility and tests
+
+- **Old client ↔ new relay:** `dev/relay-contract.mjs` gives identical
+  results on the 10-13 baseline, the new relay with federation off, and
+  with it on (54 ok; the same 4 official-relay-only checks fail on all
+  three — `readyz`, the oversized Content-Length probe, two page-budget
+  splits).
+- **New client ↔ old relay:** no capabilities/federation block → every
+  federation surface dormant, numeric version header
+  (`tests/federation/relay-capabilities.test.ts`).
+- **Relay suite** (`relay/tests`, pytest; real uvicorn relays + Postgres
+  via `RELAY_TEST_PG_URL` or `pgserver`): capabilities, the version gate
+  with flags, dialback refusals, cross-relay delivery (poll + push),
+  store-and-forward across a peer restart, redelivery dedupe, refusals,
+  the full join-request lifecycle (read-only, live upgrade, revoke, `j`
+  only to local streams, no remote echo), room end reaching remote
+  streams, the participant cap counting remote streams, proxy errors,
+  pass binding, request limits; plus unit tests for `canon_url`, flags
+  and policy.
+- **App against real relays** (`relay/tests/run_client_federation.py`
+  runs `tests/federation/real-relays*.test.ts` and
+  `tests/desktop/pairing-federation.test.ts`): two-way live co-editing
+  through the proxy, live read-only ↔ editing, revocation, the waiting
+  dialog ↔ host prompt (read-only, decline, decide later, cancel, decided
+  elsewhere, managing an admitted participant), web-mailbox and
+  desktop-main cross-server sends and receives, refusal reporting. The
+  Electron stub gains `ipcMain.handle` / `powerMonitor` for the latter.
+- New unit tests: `tests/federation/address.test.ts` (renderer/main/relay
+  parity), `share-codes.test.ts`, `relay-capabilities.test.ts`.
+
+**Known gaps.** Web join links (guest passes) don't cross servers; a
+read-only participant's comment-thread edits stay local; the official
+relay only federates if it runs this protocol. The self-hosted federation
+relay has no view passes yet, so spectating isn't available on it (the
+view actions stay hidden), and its editor cap is still 10
+(`RELAY_MAX_STREAMS_PER_ROOM`). Both changed in 1.16.26-f
+(above). Cross-server spectating (`cmview1f`) is not
+implemented, and still isn't.
 
 ## 1.16.1 — 2026-10-26
 
