@@ -4,7 +4,7 @@
 
 ## This is not the original Cardmirror!
 
-The [original Cardmirror](https://github.com/ant981228/cardmirror) is located at the link. This is a modified version of Cardmirror forked to add in new organization-specific features.
+The [original Cardmirror](https://github.com/ant981228/cardmirror) is located at the link. This is a modified version of Cardmirror forked to add in new organization-specific features. If there is some issue with an upstream CardMirror, this is not the right place to report it.
 
 There exist some long-lived forks here. `server-federation` is a fork containing code for a *federated* version of Cardmirror,
 i.e. one that adds ability for different servers to connect together, eliminating cross-server disconnectivity.
