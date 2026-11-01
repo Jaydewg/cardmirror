@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { XMLValidator } from 'fast-xml-parser';
 import { schema, newHeadingId } from '../../src/schema/index.js';
 import { exportDoc } from '../../src/export/index.js';
 import { toDocx } from '../../src/export/index.js';
@@ -587,6 +588,43 @@ describe('image alt text round-trip', () => {
     const reloaded = await Docx.load(bytes);
     const docXml = await reloaded.readText('word/document.xml');
     expect(docXml).toContain('descr="Test alt"');
+  });
+
+  it('escapes double quotes in the alt so document.xml stays well-formed', async () => {
+    // Regression: a raw `"` inside descr="..." ended the attribute early,
+    // document.xml became malformed XML, and Word refused to open the
+    // export. Attribute values need escAttr (&quot;), not escText.
+    const alt = 'Bar chart on how an "America First" policy affects support.';
+    const doc = schema.nodes['doc']!.createChecked(null, [
+      schema.nodes['paragraph']!.create(null, [
+        schema.nodes['image']!.create({
+          data: ONE_BY_ONE_PNG_B64,
+          contentType: 'image/png',
+          widthEmu: 914400,
+          heightEmu: 914400,
+          alt,
+        }),
+      ]),
+    ]);
+    const bytes = await toDocx(doc);
+    const reloaded = await Docx.load(bytes);
+    const docXml = await reloaded.readText('word/document.xml');
+    expect(docXml).toContain('descr="Bar chart on how an &quot;America First&quot; policy affects support."');
+    expect(docXml).not.toContain('"America First"');
+    // Well-formed: a strict XML validator accepts the part.
+    expect(XMLValidator.validate(docXml ?? '')).toBe(true);
+
+    // And the quotes survive the round trip back into the editor.
+    const reimported = await fromDocx(bytes);
+    let foundAlt: string | null = null;
+    reimported.descendants((node) => {
+      if (node.type.name === 'image') {
+        foundAlt = String(node.attrs['alt'] ?? '');
+        return false;
+      }
+      return true;
+    });
+    expect(foundAlt).toBe(alt);
   });
 });
 

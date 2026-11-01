@@ -5,6 +5,26 @@ changes in each release, written for users of the editor. For
 in-depth rationale and implementation context behind each entry,
 see `DETAILED_CHANGELOG.md`.
 
+## 1.17.32 / 1.17.32-f — 2026-11-01
+There were no independent changes in this patch release.
+
+As a note, PATCH in MAJOR.MINOR.PATCH in jaydewg/CardMirror is calendar-based. It's based off of the calendar day — except when a MINOR release crosses a month boundary. In that case, the PATCH number still counts up (so October 31 would make a PATCH number of 31, November 1 a PATCH number of 32, November 2 would have 33). It resets when the next MINOR comes out to the actual day in the month.
+
+### Fixed as a part of upstream's 1.17.2 (2026-11-01):
+
+- **Co-editing windows no longer freeze when rejoining a session or catching up on a burst of partner edits.** Since 1.16.0 a window could lock up at 100% CPU (the rest of the app kept working) the moment it rejoined a room, resumed after a network change, or received several partner edits at once — most often when cards had been moved or inserted since the window last synced. The cause was a bug in the bundled CRDT library (loro-crdt 1.13.6), fixed upstream in 1.13.7; CardMirror now ships 1.13.9. A frozen window of this kind could not be recovered without force-quitting; its unsent edits were always safe in the journal.
+- **A window that stops responding now offers to restart itself.** When a window's editor hangs, CardMirror shows a dialog with Wait, Restart Window and Close Window. Restart reloads the document and restores unsaved work from the recovery journal; the rest of the app keeps running. Previously the only way out was force-quitting CardMirror.
+- **Co-editing could lock up while sending a single oversized change.** An edit that produced one indivisible update larger than the per-update cap (about 4.5 MB) made the send loop retry splitting it forever, freezing the window. Such updates are now sent whole (the relay accepts up to eight times the cap), and if the relay still refuses one, the session backs off and reports it instead of spinning.
+
+### Fixed as a part of upstream's 1.17.1 (2026-10-31):
+
+- **Word opens exports whose image alt text contains quotation marks.**
+  A picture whose alt text had a double quote in it (for example a chart
+  described as showing an "America First" survey) produced a .docx that
+  Word refused to open, because the quote was written into the document
+  XML unescaped. The alt text is now escaped correctly and still reads
+  back verbatim when the file is reimported.
+  
 ## 1.17.29-f — 2026-10-29
 
 Federation build of 1.17.29: everything in 1.17.29 (below), with
