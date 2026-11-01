@@ -908,20 +908,24 @@ function buildDrawingXml(opts: {
   alt: string;
 }): string {
   const { rId, cx, cy, docPrId, alt } = opts;
-  const altEsc = escText(alt);
+  // Attribute context: `"` must become &quot; — a raw quote in the alt text
+  // (common in debate alt text, e.g. an "America First" caption) would end
+  // the attribute early and leave document.xml malformed, and Word refuses
+  // to open the file.
+  const altEsc = escAttr(alt);
   const name = `Picture ${docPrId}`;
   return (
     '<w:drawing>' +
       `<wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0">` +
         `<wp:extent cx="${cx}" cy="${cy}"/>` +
         '<wp:effectExtent l="0" t="0" r="0" b="0"/>' +
-        `<wp:docPr id="${docPrId}" name="${escText(name)}" descr="${altEsc}"/>` +
+        `<wp:docPr id="${docPrId}" name="${escAttr(name)}" descr="${altEsc}"/>` +
         '<wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr>' +
         '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' +
           '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">' +
             '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">' +
               '<pic:nvPicPr>' +
-                `<pic:cNvPr id="${docPrId}" name="${escText(name)}" descr="${altEsc}"/>` +
+                `<pic:cNvPr id="${docPrId}" name="${escAttr(name)}" descr="${altEsc}"/>` +
                 '<pic:cNvPicPr/>' +
               '</pic:nvPicPr>' +
               '<pic:blipFill>' +

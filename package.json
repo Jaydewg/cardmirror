@@ -1,6 +1,6 @@
 {
   "name": "cardmirror",
-  "version": "1.17.29",
+  "version": "1.17.32",
   "description": "CardMirror — ProseMirror-based editor that interoperates with Advanced Verbatim",
   "license": "SEE LICENSE IN LICENSE",
   "author": "Anthony Trufanov",
@@ -38,7 +38,7 @@
   "dependencies": {
     "fast-xml-parser": "^4.5.0",
     "fflate": "^0.8.3",
-    "loro-crdt": "1.13.6",
+    "loro-crdt": "1.13.9",
     "loro-prosemirror": "0.4.3",
     "nspell": "^2.1.5",
     "prosemirror-commands": "^1.6.2",
