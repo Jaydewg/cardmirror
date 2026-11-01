@@ -67,7 +67,10 @@ export function parseRoomInvite(item: Pick<InboxItem, 'type' | 'sliceJson'>): Ro
   // every movable-room invite to a generic "Item" row with no Join
   // button (live find, 2026-08-14) — the minReceiverVersion floor on
   // the envelope, not this parse, is what keeps old builds out.
-  if (typeof shareCode !== 'string' || !/^(?:cmshare[12]|cmview1)\./.test(shareCode)) return null;
+  // Federation codes (`cmshare1f` / `cmshare2f`, relay/FEDERATION.md
+  // §2.1) are invites too — the join flow does the cross-server part.
+  // View codes (`cmview1`) are spectator invites.
+  if (typeof shareCode !== 'string' || !/^(?:cmshare[12]f?|cmview1)\./.test(shareCode)) return null;
   const title = (p as Record<string, unknown>)['title'];
   return { shareCode, title: typeof title === 'string' ? title : '' };
 }

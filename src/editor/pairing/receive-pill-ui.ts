@@ -20,6 +20,8 @@ import { typeBadge, dropzoneDragLevel, previewRowButton } from '../dropzone-ui.j
 import { openCardPreview } from '../card-preview-modal.js';
 import { isAnyOverlayOpen } from '../overlay-stack.js';
 import { settings } from '../settings.js';
+import { normalizePairingCode, pairingCodeRelay } from './pairing-ids.js';
+import { relayHost } from '../federation/address.js';
 import {
   inboxItemCardCount, inboxStore, type InboxItem } from './inbox-store.js';
 import { insertReceivedItem, RECEIVE_NEEDS_DOC_MESSAGE } from './inbox-insert.js';
@@ -555,15 +557,30 @@ export class ReceivePillController {
 /** Prefer your local nickname for the sender, then their self-declared
  *  name, then a short form of their code. */
 export function resolveSender(item: InboxItem): string {
+  // Federation: a sender on ANOTHER server is labelled with it (the
+  // relay-verified one — see pairing-ipc senderCodeFor); the same key on
+  // a different server is a different contact, so matching is by
+  // identity (key + server), never by key alone.
+  const relay = item.senderCode ? pairingCodeRelay(item.senderCode) : null;
+  const server = relay ? ` (${relayHost(relay)})` : '';
   if (item.senderCode) {
+    const id = normalizePairingCode(item.senderCode);
     const partner = settings
       .get('pairingPartners')
-      .find((p) => p.code && p.code === item.senderCode);
+      .find((p) => p.code && normalizePairingCode(p.code) === id);
     if (partner?.name) return item.via ? `${partner.name} · ${item.via}` : partner.name;
   }
-  if (item.senderName) return item.via ? `${item.senderName} · ${item.via}` : item.senderName;
-  if (item.senderCode) return `…${item.senderCode.slice(-4)}`;
+  if (item.senderName) {
+    const name = `${item.senderName}${server}`;
+    return item.via ? `${name} · ${item.via}` : name;
+  }
+  if (item.senderCode) return `…${parsePairingKeyTail(item.senderCode)}${server}`;
   return 'Unknown sender';
+}
+
+/** The last characters of a code's KEY (not of its `@server` suffix). */
+function parsePairingKeyTail(code: string): string {
+  return code.split('@')[0]!.slice(-4);
 }
 
 export function relTime(ts: number): string {

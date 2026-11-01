@@ -28,6 +28,8 @@ import {
   setCollabShareCodeGetter,
   setCollabViewCodeGetter,
   setCollabViewLinkGetter,
+  setCollabCrossServerCodeGetter,
+  setCollabClassicCodeGetter,
 } from '../../src/editor/collab/collab-hooks.js';
 import { showToast } from '../../src/editor/toast.js';
 import * as collabGate from '../../src/editor/collab/collab-gate.js';
@@ -59,6 +61,8 @@ afterEach(() => {
   setCollabInviteLinkGetter(null);
   setCollabViewCodeGetter(null);
   setCollabViewLinkGetter(null);
+  setCollabCrossServerCodeGetter(null);
+  setCollabClassicCodeGetter(null);
   vi.restoreAllMocks();
 });
 
@@ -89,14 +93,18 @@ describe('send pill actions row + hidden recipients', () => {
     const { root } = mountPill();
     const actions = root.querySelectorAll('.pmd-send-action:not(.pmd-pill-settings)');
     // No session: the original row — Add contact first, then Start session
-    // (the three copy buttons exist but are hidden until a session is live).
-    expect(actions.length).toBe(5);
+    // and federation's code-forms ▾ (the ▾ and the three copy buttons
+    // exist but are hidden until a session is live).
+    expect(actions.length).toBe(6);
     expect(actions[0]!.textContent).toContain('Add contact');
     expect(actions[1]!.textContent).toContain('Start session');
     expect(root.querySelector('.pmd-send-actions > .pmd-send-action-contact')).toBeTruthy();
     expect(root.querySelector('.pmd-send-actions-side .pmd-send-action-contact')).toBeNull();
     // No collab starter registered (gate closed) → hidden by class.
     expect(actions[1]!.classList.contains('pmd-send-action-collab-hidden')).toBe(true);
+    // Federation's Copy code ▾ (code forms): hidden with no live session.
+    expect(actions[2]!.textContent).toBe('▾');
+    expect(actions[2]!.classList.contains('pmd-send-action-collab-hidden')).toBe(true);
   });
 
   it('view actions appear with a live session: view code copies the code, view link needs the pass', () => {
@@ -127,7 +135,9 @@ describe('send pill actions row + hidden recipients', () => {
     find('Copy view link').click();
     expect(writeText).toHaveBeenLastCalledWith('https://cardmirror.app/#join=cmview1.abc&pass=v');
     // Grid order: edit row then view row; the side column stacks only now.
-    const gridLabels = [...root.querySelectorAll('.pmd-send-actions-grid .pmd-send-action')].map((b) => b.textContent);
+    const gridLabels = [...root.querySelectorAll('.pmd-send-actions-grid .pmd-send-action:not(.pmd-send-action-caret)')].map(
+      (b) => b.textContent,
+    );
     expect(gridLabels).toEqual(['Copy edit code', 'Copy edit link', 'Copy view code', 'Copy view link']);
     expect(root.querySelector('.pmd-send-actions')!.classList.contains('pmd-send-actions-live')).toBe(true);
     // Live: Add contact sits in the side column under the gear.
@@ -180,7 +190,7 @@ describe('send pill actions row + hidden recipients', () => {
     linkBtn.click();
     expect(writeText).toHaveBeenCalledWith(LINK);
     // Sits right after Copy edit code in the grid.
-    const labels = [...root.querySelectorAll('.pmd-send-action')].map((b) => b.textContent);
+    const labels = [...root.querySelectorAll('.pmd-send-action:not(.pmd-send-action-caret)')].map((b) => b.textContent);
     expect(labels.indexOf('Copy edit link')).toBe(labels.indexOf('Copy edit code') + 1);
   });
 
@@ -213,6 +223,43 @@ describe('send pill actions row + hidden recipients', () => {
     btn.click();
     expect(starter).toHaveBeenCalledTimes(1);
     expect(writeText).toHaveBeenCalledTimes(1); // no second copy
+  });
+
+  it('Copy code ▾ lists the classic and cross-server forms; hidden when there is no choice', async () => {
+    vi.spyOn(collabGate, 'collabEnabled').mockReturnValue(true);
+    setCollabSessionStarter(vi.fn());
+    const PLAIN = `cmshare2.${'a'.repeat(32)}.key456.1.0.0`;
+    const CROSS = `cmshare2f.${'a'.repeat(32)}.key456.1.0.0@https://relay-a.example/relay`;
+    setCollabShareCodeGetter(() => PLAIN);
+    setCollabClassicCodeGetter(() => PLAIN);
+    let cross: string | null = CROSS;
+    setCollabCrossServerCodeGetter(() => cross);
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+
+    const { root } = mountPill();
+    const open = (): void => (root.querySelector('.pmd-send-bar') as HTMLElement).click();
+    open();
+    const caret = root.querySelector<HTMLElement>('.pmd-send-action-caret')!;
+    expect(caret.classList.contains('pmd-send-action-collab-hidden')).toBe(false);
+    expect(caret.classList.contains('pmd-send-action-clickonly')).toBe(true); // not a drop zone
+    // Shares Copy edit code's grid cell.
+    expect(caret.parentElement!.classList.contains('pmd-send-action-split')).toBe(true);
+    caret.click();
+    const items = [...root.querySelectorAll<HTMLElement>('.pmd-send-code-menu-item')];
+    expect(items.map((i) => i.querySelector('.pmd-send-code-menu-title')!.firstChild!.textContent)).toEqual([
+      'Classic code (cmshare2)',
+      'Cross-server code',
+    ]);
+    expect(items[0]!.textContent).toContain('Copy code'); // the default is marked
+    items[1]!.click();
+    expect(writeText).toHaveBeenCalledWith(CROSS);
+    expect(root.querySelector('.pmd-send-code-menu')).toBeNull(); // closes with the pill
+
+    // No relay federation: only one form — no ▾.
+    cross = null;
+    open();
+    expect(caret.classList.contains('pmd-send-action-collab-hidden')).toBe(true);
   });
 
   it('hidden flag survives the settings sanitize round-trip', () => {

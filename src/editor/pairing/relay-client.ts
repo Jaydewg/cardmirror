@@ -15,6 +15,7 @@ import { getElectronHost } from '../host/index.js';
 import { collabEnabled } from '../collab/collab-gate.js';
 import { webEntitlementToken } from '../collab/web-account.js';
 import { RELAY_FIX_PATH } from '../relay-decline.js';
+import { refusalWhy } from '../federation/address.js';
 
 /** The minimal card shape sent over the wire — the dropzone's existing
  *  serialized slice plus a label and node kind. */
@@ -33,6 +34,16 @@ export interface SendResult {
   /** How many of `fail` were credential DECLINES (401/403) rather than
    *  outages. Zero while the official relay runs ungated. */
   authFail: number;
+  /** Federation: how many of `fail` were cross-server sends this relay
+   *  can't make (it doesn't federate, or refuses that server). Optional:
+   *  absent from older hosts = 0. */
+  peerFail?: number;
+  /** Federation: how many of `ok` were queued for a server that is
+   *  unreachable right now (delivered if it comes back in time). */
+  deferred?: number;
+  /** Federation: the relay's reason for the first cross-server refusal
+   *  (`private-address`, `peer-not-federating`, …), for the toast. */
+  peerReason?: string;
 }
 
 /** The toast for a send's outcome — shared by the send pill and
@@ -41,7 +52,20 @@ export interface SendResult {
  *  relay — never "subscription required") instead of the misleading
  *  "couldn't reach". Exported for tests. */
 export function sendOutcomeToast(label: string, res: SendResult): string {
-  if (res.fail === 0) return `Sent to ${label} ✓`;
+  const deferred = res.deferred ?? 0;
+  if (res.fail === 0) {
+    return deferred > 0
+      ? `Queued for ${label} — their server isn't reachable right now; it will be delivered if it comes back within a few hours`
+      : `Sent to ${label} ✓`;
+  }
+  const peerFail = res.peerFail ?? 0;
+  if (peerFail > 0 && peerFail === res.fail) {
+    const scope = res.ok === 0 ? '' : ` for ${peerFail} recipient(s)`;
+    const why = refusalWhy(res.peerReason ?? '');
+    return why
+      ? `Your relay can't reach that server${scope}${why}.`
+      : `Your relay can't reach that server${scope} — it doesn't connect to other servers, or not to that one.`;
+  }
   if (res.authFail > 0) {
     const scope = res.ok === 0 && res.authFail === res.fail ? '' : ` for ${res.authFail} recipient(s)`;
     return `The relay declined your credentials${scope}. ${RELAY_FIX_PATH}`;
@@ -100,7 +124,14 @@ class RelayClient {
         minReceiverVersion: opts?.minReceiverVersion,
       });
       // authFail ?? 0 keeps an older main (no decline counting) working.
-      return { ok: res?.ok ?? 0, fail: res?.fail ?? 0, authFail: res?.authFail ?? 0 };
+      return {
+        ok: res?.ok ?? 0,
+        fail: res?.fail ?? 0,
+        authFail: res?.authFail ?? 0,
+        peerFail: res?.peerFail ?? 0,
+        deferred: res?.deferred ?? 0,
+        ...(res?.peerReason ? { peerReason: res.peerReason } : {}),
+      };
     } catch {
       return { ok: 0, fail: targets.length, authFail: 0 };
     }

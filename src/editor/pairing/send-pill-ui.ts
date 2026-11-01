@@ -31,13 +31,16 @@ import { collabSettingsAvailable, collabSettingsButton } from './collab-settings
 import {
   collabActiveInviteLink,
   collabActiveShareCode,
+  collabActiveCrossServerCode,
+  collabActiveClassicCode,
   collabActiveViewCode,
   collabActiveViewLink,
   collabInviter,
   collabSessionStarter,
 } from '../collab/collab-hooks.js';
 import { promptForText } from '../text-prompt.js';
-import { normalizePairingCode, looksLikePairingCode } from './pairing-ids.js';
+import { normalizePairingCode, looksLikePairingCode, pairingCodeRelay } from './pairing-ids.js';
+import { relayHost } from '../federation/address.js';
 import { recentSenders } from './inbox-store.js';
 import { setIcon } from '../icons';
 
@@ -139,6 +142,10 @@ export class SendPillController {
   /** The always-rendered bottom actions row (click buttons / drag zones). */
   private addContactEl: HTMLButtonElement | null = null;
   private startSessionEl: HTMLButtonElement | null = null;
+  /** Federation: the ▾ beside "Copy code" (click-open only) and the
+   *  dropdown of code forms it opens (classic / cross-server). */
+  private codeMenuToggle: HTMLButtonElement | null = null;
+  private codeMenuEl: HTMLElement | null = null;
   /** "Copy edit link": the focused doc's session invite URL. Click-open
    *  only, and only while that doc has a live session (no drag-mode role). */
   private copyLinkEl: HTMLButtonElement | null = null;
@@ -461,7 +468,28 @@ export class SendPillController {
       },
     );
     this.startSessionEl.classList.toggle('pmd-send-action-collab-hidden', !canInvite);
-    grid.appendChild(this.startSessionEl);
+    // Federation: ▾ beside "Copy edit code" opens a dropdown of every form
+    // of the code (classic cmshare1/2, cross-server) — the same choice as
+    // the session panel's Copy code ▾. Shown only when there IS a choice.
+    // The pair shares one grid cell.
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'pmd-send-action pmd-send-action-caret pmd-send-action-clickonly';
+    toggle.textContent = '▾';
+    toggle.title = 'Other forms of the code';
+    toggle.setAttribute('aria-label', 'Choose which code to copy');
+    toggle.setAttribute('aria-haspopup', 'menu');
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.addEventListener('click', (e) => {
+      if (!this.inviteMode) return;
+      e.stopPropagation();
+      this.toggleCodeMenu();
+    });
+    this.codeMenuToggle = toggle;
+    const split = document.createElement('div');
+    split.className = 'pmd-send-action-split';
+    split.append(this.startSessionEl, toggle);
+    grid.appendChild(split);
     // The three copy actions exist only while the focused doc has a live
     // session, and only on a click-open (`pmd-send-action-link` hides
     // them in drag mode, like the gear) so a drag never sees them as
@@ -522,6 +550,13 @@ export class SendPillController {
     this.startSessionEl.title = live
       ? 'Copy this session’s edit code for a teammate to join and co-edit'
       : 'Start a collaboration session on this document';
+    this.closeCodeMenu();
+    if (this.codeMenuToggle) {
+      this.codeMenuToggle.classList.toggle(
+        'pmd-send-action-collab-hidden',
+        !(live && collabEnabled() && this.codeForms().length > 1),
+      );
+    }
     this.copyLinkEl?.classList.toggle('pmd-send-action-collab-hidden', collabActiveInviteLink() === null);
     this.viewCodeEl?.classList.toggle('pmd-send-action-collab-hidden', collabActiveViewCode() === null);
     this.viewLinkEl?.classList.toggle('pmd-send-action-collab-hidden', collabActiveViewLink() === null);
@@ -538,6 +573,85 @@ export class SendPillController {
         this.actionsEl.insertBefore(this.addContactEl, this.actionsEl.firstChild);
       }
     }
+  }
+
+  /** The forms of the focused session's code, default first-class marked. */
+  private codeForms(): { title: string; code: string; hint: string; isDefault: boolean }[] {
+    const current = collabActiveShareCode();
+    const classic = collabActiveClassicCode();
+    const cross = collabActiveCrossServerCode();
+    const out: { title: string; code: string; hint: string; isDefault: boolean }[] = [];
+    if (classic) {
+      const view = classic.startsWith('cmview');
+      out.push({
+        title: view ? 'View code (cmview1)' : classic.startsWith('cmshare2') ? 'Classic code (cmshare2)' : 'Classic code (cmshare1)',
+        code: classic,
+        hint: view
+          ? 'Whoever joins with it watches too — they can’t edit'
+          : 'For people on the session’s server — works with every CardMirror version',
+        isDefault: classic === current,
+      });
+    }
+    if (cross) {
+      out.push({
+        title: 'Cross-server code',
+        code: cross,
+        hint: 'For people on other servers — they’ll need your OK to join',
+        isDefault: cross === current,
+      });
+    }
+    return out;
+  }
+
+  private closeCodeMenu(): void {
+    this.codeMenuEl?.remove();
+    this.codeMenuEl = null;
+    this.codeMenuToggle?.setAttribute('aria-expanded', 'false');
+  }
+
+  private toggleCodeMenu(): void {
+    if (this.codeMenuEl) {
+      this.closeCodeMenu();
+      return;
+    }
+    const menu = document.createElement('div');
+    menu.className = 'pmd-send-code-menu';
+    menu.setAttribute('role', 'menu');
+    for (const f of this.codeForms()) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'pmd-send-code-menu-item';
+      item.setAttribute('role', 'menuitem');
+      const title = document.createElement('span');
+      title.className = 'pmd-send-code-menu-title';
+      title.textContent = f.title;
+      if (f.isDefault) {
+        const tag = document.createElement('span');
+        tag.className = 'pmd-send-code-menu-default';
+        tag.textContent = 'Copy code';
+        title.appendChild(tag);
+      }
+      const code = document.createElement('span');
+      code.className = 'pmd-send-code-menu-code';
+      code.textContent = f.code;
+      const hint = document.createElement('span');
+      hint.className = 'pmd-send-code-menu-hint';
+      hint.textContent = f.hint;
+      item.append(title, code, hint);
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.collapse();
+        void navigator.clipboard?.writeText(f.code).then(
+          () => showToast(`${f.title} copied`),
+          () => showToast('Could not copy the code'),
+        );
+      });
+      menu.appendChild(item);
+    }
+    this.panel.appendChild(menu);
+    this.codeMenuEl = menu;
+    this.codeMenuToggle?.setAttribute('aria-expanded', 'true');
+    menu.querySelector<HTMLElement>('button')?.focus();
   }
 
   /** One action-row entry: icon + label. Click behavior is live only in
@@ -687,6 +801,16 @@ export class SendPillController {
     name.textContent = label;
     name.title = label;
     row.appendChild(name);
+    // Federation: a contact on ANOTHER server shows which one (host only
+    // — the URL is the server's identity; nicknames aren't labels here).
+    const relay = codes.length === 1 ? pairingCodeRelay(codes[0]!) : null;
+    if (relay) {
+      const server = document.createElement('span');
+      server.className = 'pmd-send-target-server';
+      server.textContent = `· ${relayHost(relay)}`;
+      name.title = `${label} — on ${relay}`;
+      row.appendChild(server);
+    }
     this.targets.set(row, { codes, label: toastLabel, via });
     return row;
   }
@@ -820,6 +944,7 @@ export class SendPillController {
   }
 
   private collapse(): void {
+    this.closeCodeMenu();
     if (this.inviteMode) {
       this.inviteMode = false;
       this.root.classList.remove('pmd-send-invite-mode');

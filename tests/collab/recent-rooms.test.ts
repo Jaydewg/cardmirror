@@ -78,4 +78,10 @@ describe('recent rooms', () => {
     expect(kept).not.toContain('r0');
     expect(await loadRecentRoom('r0')).toBeNull();
   });
+
+  it('never demotes a room this user hosted (the host role is what lets them end it)', async () => {
+    await saveRecentRoom(room('h', { role: 'host' }));
+    await saveRecentRoom(room('h', { role: 'participant', leftAt: 9 }));
+    expect((await loadRecentRoom('h'))?.role).toBe('host');
+  });
 });

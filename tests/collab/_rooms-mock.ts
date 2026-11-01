@@ -36,6 +36,10 @@ export interface RoomsMock {
    *  every write is 403, viewers count against their own cap and are
    *  broadcast as `w` frames, and an editor's 409 carries the pass. */
   setViewPass(value: string | null): void;
+  /** Our relay's spectator presence (`rooms.spectatorPresence`): a view
+   *  pass may post presence, fanned out stamped `"v":1`. Off = upstream's
+   *  403. */
+  setSpectatorPresence(on: boolean): void;
   viewerCount(roomId: string): number;
   close(): Promise<void>;
   streamCount(roomId: string): number;
@@ -87,6 +91,7 @@ export function startRoomsMock(): Promise<RoomsMock> {
   let helloDelayMs = 0;
   let guestPassValue: string | null = null;
   let viewPassValue: string | null = null;
+  let spectatorPresence = false;
   let streamAttempts = 0;
   let pushMuted = false;
   let portalMode = false;
@@ -156,7 +161,8 @@ export function startRoomsMock(): Promise<RoomsMock> {
     const [, roomId, sub] = m;
     if (isViewer) {
       const readOnlyOk =
-        (req.method === 'GET' && (sub === 'stream' || sub === 'updates' || sub === 'view-pass'));
+        (req.method === 'GET' && (sub === 'stream' || sub === 'updates' || sub === 'view-pass')) ||
+        (spectatorPresence && req.method === 'POST' && sub === 'presence');
       if (!readOnlyOk) return json(res, 403, { detail: 'view-only session: this pass cannot write' });
     }
     const pushWatchers = (room: Room): void => {
@@ -274,7 +280,7 @@ export function startRoomsMock(): Promise<RoomsMock> {
       const from = url.searchParams.get('from');
       const room = rooms.get(roomId);
       if (room && !room.tombstoned) {
-        const frame = `data: ${JSON.stringify({ t: 'p', blob: raw.toString('base64') })}\n\n`;
+        const frame = `data: ${JSON.stringify({ t: 'p', blob: raw.toString('base64'), ...(isViewer ? { v: 1 } : {}) })}\n\n`;
         for (const s of room.streams) {
           if (from !== null && streamSids.get(s) === from) continue; // no self-echo
           s.write(frame);
@@ -341,6 +347,9 @@ export function startRoomsMock(): Promise<RoomsMock> {
         },
         setViewPass: (value) => {
           viewPassValue = value;
+        },
+        setSpectatorPresence: (on) => {
+          spectatorPresence = on;
         },
         viewerCount: (roomId) => rooms.get(roomId)?.viewers.size ?? 0,
         mutePush: (on) => {

@@ -13,10 +13,19 @@
 import pkg from '../../package.json';
 import { getHost } from './host/index.js';
 import { isLiteBuild } from './lite.js';
+import { BUILD_VERSION_FLAGS, flaggedVersion } from './relay-protocol.js';
 
 /** The running app's version string (from `package.json`). Exported so
  *  the command palette can surface it without re-importing the manifest. */
 export const appVersion: string = pkg.version;
+
+/** The version as shown to PEOPLE: the numeric version plus this build's
+ *  feature flags (`1.15.0-f`, relay-protocol.ts BUILD_VERSION_FLAGS).
+ *  The manifest stays numeric — the auto-updater, release tags and
+ *  plugin/card version floors all compare `appVersion`, and SemVer would
+ *  read `-f` as a prerelease. Display surfaces use this; machine-facing
+ *  ones (plugin API, file metadata, relay headers) keep `appVersion`. */
+export const displayVersion: string = flaggedVersion(appVersion);
 
 /**
  * Compatibility floor for shared cards (cross-machine card sharing).
@@ -52,7 +61,11 @@ export function getInstallInfo(): InstallInfoEntry[] {
   const entries: InstallInfoEntry[] = [
     // Edition rides on the Version row: "which build is this?" is the
     // first triage question on any bug report from a Lite install.
-    { label: 'Version', value: isLiteBuild() ? `${appVersion} (CardMirror Lite)` : appVersion },
+    { label: 'Version', value: isLiteBuild() ? `${displayVersion} (CardMirror Lite)` : displayVersion },
+    // Whether this BUILD speaks relay federation (the `f` flag). Lite has
+    // no relay at all. Whether the configured relay federates is a live,
+    // per-relay fact — Settings → Collaboration shows it ("Your server").
+    { label: 'Federation', value: isLiteBuild() ? 'N/A' : BUILD_VERSION_FLAGS.includes('f') ? 'On' : 'Off' },
     {
       label: 'Host',
       value: hostKind === 'electron' ? 'Desktop (Electron)' : 'Web browser',

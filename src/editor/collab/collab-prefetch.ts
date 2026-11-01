@@ -14,26 +14,36 @@
 
 import { ensureBakedRelay, relayClient } from './collab-relay.js';
 import { loadPrefetch, savePrefetch } from './collab-store.js';
+import { parseCodePrefix } from '../federation/address.js';
 
 /** Re-fetch when the stored prefetch is older than this — the room
  *  gains updates while the invite sits unopened, and a fresher seed
  *  means less to sync after an offline join. */
 const STALE_MS = 60 * 60 * 1000;
 
-/** Room id straight off a share code (`cmshare1.<roomId>.<key>` or
- *  `cmshare2.<roomId>.<key>.<minVersion>`) — a string split, so light
- *  consumers don't need the crypto module. */
+/** Room id straight off a share code (`cmshare1.<roomId>.<key>`,
+ *  `cmshare2.<roomId>.<key>.<minVersion>`, or the `cmview1` twin) — a
+ *  string split, so light consumers don't need the crypto module. */
 export function roomIdFromShareCode(code: string): string | null {
-  const parts = code.trim().split('.');
-  if (parts.length === 3 && (parts[0] === 'cmshare1' || parts[0] === 'cmview1') && parts[1]) return parts[1];
+  // Federation codes carry `@<home>`; the room id sits before it, and
+  // flags ride on the generation (`cmshare2f`). View codes (`cmview1`)
+  // name the same room as their share code.
+  const parts = code.trim().split('@')[0]!.split('.');
+  const prefix = parseCodePrefix(parts[0] ?? '');
+  if (!prefix || prefix.kind === 'cmk' || !parts[1]) return null;
+  const view = prefix.kind === 'cmview';
+  if (parts.length === 3 && (prefix.gen === 1 || view)) return parts[1];
   // v2 floors contain dots ("1.0.0"), so 4+ parts.
-  if (parts.length >= 4 && (parts[0] === 'cmshare2' || parts[0] === 'cmview1') && parts[1]) return parts[1];
+  if (parts.length >= 4 && (prefix.gen === 2 || view)) return parts[1];
   return null;
 }
 
 const inFlight = new Set<string>();
 
 export async function prefetchInviteSeed(shareCode: string): Promise<void> {
+  // A room on another server can't be read before someone there lets
+  // us in (relay/FEDERATION.md §6.1) — nothing to prefetch.
+  if (shareCode.includes('@')) return;
   const roomId = roomIdFromShareCode(shareCode);
   if (!roomId || inFlight.has(roomId)) return;
   inFlight.add(roomId);

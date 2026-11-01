@@ -242,6 +242,9 @@ export interface ChoicePromptOptions<T extends string> {
   choices: { value: T; label: string; primary?: boolean }[];
   /** Label on the trailing cancel button. Defaults to 'Cancel'. */
   cancelLabel?: string;
+  /** Close the dialog from outside (resolves null) — e.g. the question
+   *  was answered elsewhere (another participant decided a join). */
+  signal?: AbortSignal;
 }
 
 /** Modal that asks the user to pick one of N options. Returns the
@@ -332,6 +335,18 @@ export function promptForChoice<T extends string>(
       }
       return false;
     });
+
+    if (opts.signal) {
+      const onAbort = (): void => {
+        cleanup();
+        resolve(null);
+      };
+      if (opts.signal.aborted) {
+        onAbort();
+        return;
+      }
+      opts.signal.addEventListener('abort', onAbort, { once: true });
+    }
 
     document.body.appendChild(overlay);
     armDialogFocus(dialog, 'dialog', opts.message);

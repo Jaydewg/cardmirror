@@ -14,8 +14,14 @@ import { RoomsClient } from '../../src/editor/collab/room-client.js';
 import {
   RELAY_CLIENT_ROUTING_HEADER,
   RELAY_CLIENT_VERSION_HEADER,
+  numericVersion,
 } from '../../src/editor/relay-protocol.js';
 import { appVersion } from '../../src/editor/install-info.js';
+
+/** What a relay without `client.versionFlags` is sent: the numeric
+ *  version, without any feature flags the manifest carries (`1.16.1-f`
+ *  → `1.16.1`). Equal to `appVersion` for a plain numeric manifest. */
+const wireAppVersion = numericVersion(appVersion);
 
 /** Capture the headers of every request the client makes. */
 function recordingClient(routingCode?: () => string): {
@@ -45,7 +51,7 @@ describe('relay client version header', () => {
     const { client, sent } = recordingClient();
     await client.createRoom();
     expect(sent).toHaveLength(1);
-    expect(sent[0]![RELAY_CLIENT_VERSION_HEADER]).toBe(appVersion);
+    expect(sent[0]![RELAY_CLIENT_VERSION_HEADER]).toBe(wireAppVersion);
   });
 
   it('survives calls that add their own headers', async () => {
@@ -54,7 +60,7 @@ describe('relay client version header', () => {
     const { client, sent } = recordingClient();
     await client.postUpdate('room-1', new Uint8Array([1, 2, 3]));
     expect(sent[0]!['Content-Type']).toBe('application/octet-stream');
-    expect(sent[0]![RELAY_CLIENT_VERSION_HEADER]).toBe(appVersion);
+    expect(sent[0]![RELAY_CLIENT_VERSION_HEADER]).toBe(wireAppVersion);
   });
 
   it('keeps sending the Authorization header alongside it', async () => {
@@ -89,7 +95,7 @@ describe('relay client routing header (entitlement machine binding)', () => {
     await client.createRoom();
     expect(sent[0]![RELAY_CLIENT_ROUTING_HEADER]).toBe('rc-machine-a');
     // ...and never displaces its neighbors.
-    expect(sent[0]![RELAY_CLIENT_VERSION_HEADER]).toBe(appVersion);
+    expect(sent[0]![RELAY_CLIENT_VERSION_HEADER]).toBe(wireAppVersion);
     expect(sent[0]!['Authorization']).toBe('Bearer test-token');
   });
 
@@ -150,6 +156,6 @@ describe('relay client routing header (entitlement machine binding)', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(seen).toHaveLength(1);
     expect(seen[0]![RELAY_CLIENT_ROUTING_HEADER]).toBe('rc-machine-a');
-    expect(seen[0]![RELAY_CLIENT_VERSION_HEADER]).toBe(appVersion);
+    expect(seen[0]![RELAY_CLIENT_VERSION_HEADER]).toBe(wireAppVersion);
   });
 });

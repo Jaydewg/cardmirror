@@ -760,6 +760,43 @@ entitlement seam as card sharing, so turning co-editing auth on is a
 pure env flip; a subscription lapse blocks *starting* new sessions but a
 3-day grace keeps live sessions working.
 
+**Federation (cross-server sessions and card sharing).** A self-hosted
+relay can federate with other relays (`relay/FEDERATION.md` is the
+protocol; off unless the operator sets `RELAY_FEDERATION=on`). A relay's
+identity is its canonical public URL — relays prove it to each other by
+dialback, and a configured nickname is display-only, always shown next to
+the host. The app learns whether its own relay federates from
+`/relay/capabilities` (`federation/relay-capabilities.ts`); with no
+federation block every surface below stays dormant, so a new build on an
+older relay behaves exactly like an old build.
+
+- *Addressing.* Codes carry feature flags beside their generation
+  (`federation/address.ts`): `cmk1f.<key>@<relay-url>` and
+  `cmshare1f` / `cmshare2f.…@<home-url>`. Older parsers reject `f` codes
+  at the prefix, and plain codes stay the default. A person is their key
+  **on a relay**: the same key elsewhere is a different contact, and
+  `normalizePairingCode` returns that identity normal form so existing
+  comparisons mean "same person". App versions carry flags the same way
+  (`1.15.0-f`, `relay-protocol.ts`), sent only to relays that list
+  `client.versionFlags`; every other relay gets the plain numeric version.
+- *Card sharing.* A recipient on another relay is sealed to their key as
+  always and posted to the relay's `/federation/v1/outbox` (desktop main
+  `pairing-ipc.ts`, web `web-mailbox.ts`); the relay stores and forwards
+  it. Received mail carries the relay-verified `viaRelay`, which the
+  inbox uses as the sender's relay in place of the sealed claim.
+- *Co-editing.* A room has exactly one home relay (one seq authority —
+  none of the sync discipline below changes). A remote participant's
+  `RoomsClient` simply targets `<own relay>/federation/v1/via/<home>`,
+  which proxies the unchanged wire contract, room pass attached
+  (`collab-relay.ts relayClientForHome`). Same-server participants trust
+  each other as before; a cross-server joiner is admitted only by a
+  participant on the home relay (Accept / Accept read-only / Decline —
+  `federation/collab-federation.ts`), and the home relay enforces it.
+  Read-only participants keep presence but never post (session
+  `readOnly`, editor clamp `collabReadOnlyPlugin`); access changes and
+  revocations arrive live on the stream (`a` / `x` frames), and `j`
+  frames nudge local participants to re-list requests.
+
 **Sync discipline (why it survives a tournament network).** The session
 layer (`collab-session.ts`) is built for connectivity that comes and
 goes: a durable send queue holds updates across outages and posts them
