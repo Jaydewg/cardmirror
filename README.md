@@ -27,11 +27,10 @@ workflow, same Word-compatible `.docx` files — but with no Word, no
 macros, and no add-in. That keeps it fast on the multi-megabyte
 evidence files debaters work in, and enables cross-platform feature parity.
 
-Run it as a **desktop app** for tournament-day work, or as a **web
-preview** in any browser for trying it out or working from a Chromebook
+Run it as a **desktop app** for tournament-day work, or the *upstream* version as a **web preview** in 
+any browser for trying it out or working from a Chromebook
 or locked-down school machine.
 
-**▶ Try the live web preview: <https://cardmirror.app/>**
 
 > **Keep backups.** CardMirror is stable and used daily, but no
 > editor is bug-free — keep a copy of anything critical in a second
@@ -39,7 +38,7 @@ or locked-down school machine.
 >
 > **Desktop builds are unsigned**, so Windows and macOS warn you the
 > first time you launch. The one-time workaround for each is in the
-> install steps below.
+> install steps below. (By the way -- I'm thinking of buying a IV certificate, so watch out for that.)
 >
 > **Be cautious of third-party servers.** Versions of Cardmirror that 
 > support federation can link to servers that in themselves link many
@@ -81,12 +80,12 @@ person. Please go donate to them: there's two ways to help keep it going:
 ## Install
 
 
-**Installing directly doesn't work right now.** I still need to get to doing releases. Go [here](#run-from-source) for instructions on how to manually build the software.
-When I get around to it, desktop builds will eventually live on the [Releases page](https://github.com/ant981228/cardmirror/releases).
+**Releases are now built.** There are now releases for the versions here.
+I still need to get to doing releases. Go [here](#run-from-source) for instructions on how to manually build the software.
+Desktop builds now live on the [Releases page](https://github.com/ant981228/cardmirror/releases).
 Pick the file for your operating system, run the installer, and
 launch CardMirror like any other app.
 
-I'm a lazy person right now, though, so go to build instructions below.
 
 ### macOS
 
@@ -145,15 +144,27 @@ Two options for installation, depending upon distribution:
 
 There's no corresponding web-app for this. The original one (that is the one located upstream) is located at [cardmirror.app](https://cardmirror.app)
 
+**On a Chromebook made after 2018?** .AppImage files can be run through the Linux Development Environment, built into most Chromebooks. (Don't worry -- it doesn't change the normal appearance of your system at all!)
+
+1. Open Settings (the gear icon in the system tray).
+2. Go to About (or Advanced) > Developers. Look for the Linux development environment (or  Linux beta) menu, and select "Turn on" or "Set up".
+3. Follow that setup wizard: Click *Next*. Then enter a preferred username and a disk size (I recommend keeping it at the recommended 10GB).
+4. It will take a while to download the Linux environment. While waiting for this, download the non-Lite AppImage from the Releases Tab (or your preferred version). Keep the file in Downloads.
+5. When the environment finishes downloading, restart your computer to completely apply all changes.
+6. After you log back in, first grant Linux permission to your Documents folder by right-clicking Documents and selecting *Share with Linux*.
+7. Open Terminal (which is now avaliable) and run `cp /mnt/chromeos/MyFiles/Downloads/*.AppImage ~; cd ~ && chmod +x *.AppImage`.
+8. Now install MenuLibre: Run `sudo apt update && sudo apt install menulibre -y`.
+9. Launch it, and press the `+` button in the top left corner and select *Add Launcher*. Set the name to "CardMirror", and find the CardMirror AppImage in the Linux Files section for *Command*. Click Save, and you're done!
+
+
+- *My Chromebook doesn't have the Linux Development Environment / has that option greyed out!* This isn't all too uncommon. Either:
+1. You're on a Google Family Share account, which this has completely disabled,
+2. On a enterprise managed device, and typically schools/enterprises tend to disable this, or
+3. You're on a 32-bit Chromebook or a Chromebook with less than 2GB of memory. Alternatively, you don't have Intel VT-x or AMD-V turned on, it will also fail. Lastly, if Intel VT-x or AMD-V have critical security issues, it will refuse to activate.
+
 ### Updates
 
-Please don't update. There's no Releases to grab from, and not everything points towards the 
-fork's Github. Updates are always consentual -- just don't. Turn off autoupdates at Settings → General → "About 
-this install" → **Check for updates automatically**.
-
-If you wish to move to the original version (at your own risk), **Help → Check for Updates…** checks manually: it 
-tells you you're current, or announces an available update and downloads it in the
-background.
+Updates now target the version you're on. It will update to this fork, not any others.
 
 CardMirror also checks for updates automatically — silently at launch
 and once a day, speaking up only when a new version is actually ready.
@@ -220,10 +231,7 @@ Translation key. Configure it under Settings → Editing → Translation.
 
 ## Run from source
 
-You **always need this for now**. It's easy, and as long as your computer is recent (and you're not 
-running a Windows ARM or Apple Intel computer), you can share
-(contribute, run a development branch, or use the editor on a
-platform we don't publish binaries for). For day-to-day use,
+**This step is no longer required**. Releases are now published. For day-to-day use,
 download a release above.
 
 ### 1. Install Node.js
@@ -466,7 +474,7 @@ built off of. They have made many of Cardmirror's core decisions, features, and 
 made it truly useful, including read mode, the original contributing framework, as well as 
 making an astonishing number of QoL improvements.
 
-Thank you to these wonderful people for making this awesome application for debate for me and much of the debate community.
+Thank you to these wonderful people for making this awesome application for debate for much of the debate community.
 
 Original CardMirror is built on [ProseMirror](https://prosemirror.net/), the
 modular rich-text editor framework created and maintained by
@@ -475,7 +483,7 @@ primitive CardMirror leans on — the schema-validated transactions,
 the typed-tree document model, NodeViews, plugin state, the keymap
 and history modules — is ProseMirror's.
 
-The idea to use ProseMirror, as well as credit for dozens of course-corrections along the way, belongs to [text editor wizard Slim Lim](https://slim.computer/). 
+The idea to use ProseMirror in Original Cardmirror, as well as credit for dozens of course-corrections along the way, belongs to [text editor wizard Slim Lim](https://slim.computer/). 
 
 If you're curious how ProseMirror works under the hood,
 [Marijn's launch post](https://marijnhaverbeke.nl/blog/prosemirror-1.html)
@@ -488,7 +496,7 @@ careful library design that made this project tractable. If
 ProseMirror has been useful to you too, Marijn's work is supported
 directly at <https://marijnhaverbeke.nl/fund/>.
 
-CardMirror's voice control was shaped by ideas pioneered in the
+Original CardMirror's voice control was shaped by ideas pioneered in the
 hands-free-editing community — [Talon](https://talonvoice.com/),
 [Cursorless](https://www.cursorless.org/), and
 [Pokey Rule](https://github.com/pokey).
@@ -513,7 +521,7 @@ third-party attributions and license terms.
 
 ## License
 
-CardMirror is licensed under the
+Original CardMirror is licensed under the
 [PolyForm Noncommercial License 1.0.0](./LICENSE). You can read,
 fork, modify, and share the source for any noncommercial purpose
 (personal use, hobby projects, debate-team and academic use,
