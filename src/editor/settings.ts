@@ -76,6 +76,10 @@ const SECRET_SETTING_KEYS = new Set<string>([
   'myMemoryEmail',
 ]);
 
+/** Clamp for `pluginPanelWidth` (the panel's resize handle uses it too). */
+export const PLUGIN_PANEL_MIN_WIDTH = 220;
+export const PLUGIN_PANEL_MAX_WIDTH = 640;
+
 /** Reader profile for read-time estimates: name + words-per-minute.
  *  `tagWpm` is the optional SECOND speed most readers actually have —
  *  the rate for tags, analytics, and cites (the structural read), with
@@ -661,6 +665,8 @@ export interface Settings {
    *  240 threads get cramped, above 560 the column eats too much
    *  editor space. Default 320. */
   commentsColumnWidth: number;
+  /** Width (px) of the right-side plugin panel (`ui.panel`). */
+  pluginPanelWidth: number;
   /** UI motion preference. `'auto'` (default) follows the OS
    *  `prefers-reduced-motion` media query and gives the user the
    *  motion-reduction state their system advertises. `'on'` always
@@ -1728,6 +1734,11 @@ export interface Settings {
    *  plugins are full-trust code, so casual discovery is the thing being
    *  prevented. Re-armed into main each boot; enforcement lives there. */
   pluginCommunityInstalls: boolean;
+  /** Plugins: register the built-in Permission Demo plugin (a dev
+   *  fixture exercising the permission consent path). Console-only
+   *  (`window.__plugins('perm-demo-on')`), no settings row, off by
+   *  default — its command stays out of the palette unless set. */
+  pluginPermissionDemo: boolean;
   /** Pairing: master switch for cross-machine card sharing (the send /
    *  receive pills + the delivery channel). Off by default. Desktop +
    *  web (web since the Phase-4 renderer mailbox). */
@@ -1898,6 +1909,7 @@ const DEFAULTS: Settings = {
   checkForUpdatesOnLaunch: true,
   updateChecksPausedUntil: 0,
   commentsColumnWidth: 320,
+  pluginPanelWidth: 320,
   reduceMotion: 'auto',
   readerReduceMotion: false,
   colorVisionFriendly: false,
@@ -2132,6 +2144,7 @@ const DEFAULTS: Settings = {
   cardCutterReadTimeSec: 0,
   pluginsEnabled: false,
   pluginCommunityInstalls: false,
+  pluginPermissionDemo: false,
   pairingEnabled: false,
   pairingPollSeconds: 30,
   pairingRelayUrl: '',
@@ -4984,6 +4997,10 @@ function sanitize(s: Settings): Settings {
       typeof s.commentsColumnWidth === 'number' && Number.isFinite(s.commentsColumnWidth)
         ? Math.max(240, Math.min(560, s.commentsColumnWidth))
         : 320,
+    pluginPanelWidth:
+      typeof s.pluginPanelWidth === 'number' && Number.isFinite(s.pluginPanelWidth)
+        ? Math.max(PLUGIN_PANEL_MIN_WIDTH, Math.min(PLUGIN_PANEL_MAX_WIDTH, s.pluginPanelWidth))
+        : 320,
     reduceMotion:
       s.reduceMotion === 'on' || s.reduceMotion === 'off' ? s.reduceMotion : 'auto',
     disableCursorBlink: s.disableCursorBlink === true,
@@ -5454,6 +5471,7 @@ function sanitize(s: Settings): Settings {
 
     pluginsEnabled: !isLiteBuild() && s.pluginsEnabled === true,
     pluginCommunityInstalls: s.pluginCommunityInstalls === true,
+    pluginPermissionDemo: s.pluginPermissionDemo === true,
     pairingEnabled: !isLiteBuild() && s.pairingEnabled === true,
     pairingConnectedUntil: Number.isFinite(Number(s.pairingConnectedUntil))
       ? Math.max(0, Number(s.pairingConnectedUntil))

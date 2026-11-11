@@ -1,9 +1,14 @@
 /**
  * Public plugin API surface — the types a plugin author codes against,
- * plus `createPluginApi`, the renderer-side implementation. Narrow by
- * design: only what flowing commands need (see the v1 spec).
+ * plus `createPluginApi`, the renderer-side implementation.
+ *
+ * The v1 core (extract / jump / flow / storage / settings / toast) lives
+ * here. Everything else is an OPTIONAL namespace behind a permission,
+ * one module each under `plugin-caps/`; `createPluginApi` assembles
+ * them from the `NAMESPACES` table below. To add a capability: a catalog
+ * entry in plugin-permissions.ts, a `plugin-caps/<name>.ts` builder, one
+ * row in `NAMESPACES`, one optional field on `CardMirrorPluginApi`.
  */
-import type { EditorView } from 'prosemirror-view';
 import { postNotice } from './status-notices.js';
 import { getElectronHost } from './host/index.js';
 import { showToast } from './toast.js';
@@ -11,6 +16,46 @@ import { extractSelection } from './plugin-extract.js';
 import { jumpToTokenInView } from './plugin-jump.js';
 import { getPluginSettingValue, subscribePluginSettings } from './plugin-settings.js';
 import { parseSourceToken } from './plugin-source-token.js';
+import { permissionStatus, type PermissionStatus } from './plugin-permissions.js';
+import type { CapabilityContext, PluginApiDeps } from './plugin-caps/context.js';
+import { buildUiApi, type PluginUiApi } from './plugin-caps/ui.js';
+import { buildFilesApi, type PluginFilesApi } from './plugin-caps/files.js';
+import { buildCollabApi, type PluginCollabApi } from './plugin-caps/collab.js';
+import { buildDocApi, type PluginDocApi } from './plugin-caps/doc.js';
+import { buildEventsApi, type PluginEventsApi } from './plugin-caps/events.js';
+import { buildPanelApi, type PluginPanelApi } from './plugin-caps/panel.js';
+import { buildMenuApi, type PluginMenuApi } from './plugin-caps/menu.js';
+
+export type { PluginApiDeps } from './plugin-caps/context.js';
+export type { PluginChoiceOption, PluginUiApi } from './plugin-caps/ui.js';
+export type { PluginDocContext, PluginFilesApi, PluginSaveResult } from './plugin-caps/files.js';
+export type {
+  PluginCollabApi,
+  PluginCollabBridge,
+  PluginJoinOutcome,
+  PluginLocalSessionRecord,
+  PluginSessionInfo,
+} from './plugin-caps/collab.js';
+export type {
+  PluginCard,
+  PluginDocApi,
+  PluginDocSnapshot,
+  PluginDocStats,
+  PluginEditError,
+  PluginEditResult,
+  PluginHeadingType,
+  PluginInsertRequest,
+  PluginInsertRole,
+  PluginOutlineItem,
+} from './plugin-caps/doc.js';
+export type {
+  PluginDocChangeEvent,
+  PluginEventsApi,
+  PluginFocusEvent,
+  PluginSelectionEvent,
+} from './plugin-caps/events.js';
+export type { PluginPanelApi, PluginPanelHandle } from './plugin-caps/panel.js';
+export type { PluginMenuApi, PluginMenuItem, PluginMenuTarget } from './plugin-caps/menu.js';
 
 export type ExtractedKind =
   | 'pocket'
@@ -84,6 +129,33 @@ export interface PluginSettingsApi {
   onChanged(cb: (key: string, value: boolean | string | number) => void): () => void;
 }
 
+/** What this plugin was granted (see plugin-permissions.ts). Absent on
+ *  CardMirror builds that predate permissions — feature-detect with
+ *  `api.permissions?.has('ui.dialogs')`. */
+export interface PluginPermissionsApi {
+  has(permission: string): boolean;
+  /** Granted permissions, sorted. */
+  list(): string[];
+  /** Why a permission is or isn't available, so the plugin can point
+   *  the user at the right fix: `denied` → Settings → Plugins (the
+   *  user declined or revoked it), `unsupported` → update CardMirror,
+   *  `undeclared` → the plugin's own definition never asked for it. */
+  status(permission: string): PermissionStatus;
+}
+
+/**
+ * The api object handed to every command's `run`.
+ *
+ * Growing the API: optional namespaces appear only when the plugin
+ * declared the matching permission (`permissions: ['ui.dialogs']` in
+ * both `cardmirror-plugin.json` and the registered definition) AND the
+ * user granted it. Always feature-detect — `api.ui?.choose(...)` — since
+ * a user can revoke a permission at any time, and older CardMirror
+ * builds have neither `permissions` nor the optional namespaces. Use
+ * `api.permissions?.status(p)` to tell the user why something is
+ * missing. Set `minAppVersion` in the manifest if the plugin can't work
+ * without them.
+ */
 export interface CardMirrorPluginApi {
   readonly appVersion: string;
   extractSelection(): ExtractResult | ExtractError;
@@ -94,22 +166,70 @@ export interface CardMirrorPluginApi {
   showToast(message: string): void;
   storage: PluginStorage;
   settings: PluginSettingsApi;
+  /** Present on permission-aware builds (optional in the type because
+   *  older hosts lack it). */
+  readonly permissions?: PluginPermissionsApi;
+  /** `ui.dialogs`. */
+  readonly ui?: PluginUiApi;
+  /** `files.data`. */
+  readonly files?: PluginFilesApi;
+  /** Any `collab.*` (methods per permission). */
+  readonly collab?: PluginCollabApi;
+  /** `doc.read` / `doc.edit` (methods per permission). */
+  readonly doc?: PluginDocApi;
+  /** `doc.events`. */
+  readonly events?: PluginEventsApi;
+  /** `ui.panel`. */
+  readonly panel?: PluginPanelApi;
+  /** `ui.contextMenu`. */
+  readonly menu?: PluginMenuApi;
 }
 
-export interface PluginApiDeps {
-  appVersion: string;
-  getView(): EditorView | null;
-  /** Live view of any pane in this window holding `docId` (focused or
-   *  not), or null. Lets a jump land locally without the IPC hop even
-   *  when the target doc is in an unfocused pane. */
-  findViewForDocId(docId: string): EditorView | null;
-  /** Identity of the focused doc; docId null until minted. */
-  getDocIdentity(): { docId: string | null; docTitle: string } | null;
-  /** Mint + stamp a docId for the focused doc; null when no doc. */
-  ensureDocId(): string | null;
+/** What the registry hands `createPluginApi` for one plugin. */
+export interface PluginGrantContext {
+  /** Effective grant (registry-resolved). */
+  granted: ReadonlySet<string>;
+  /** Sanitized permissions the running definition declared. */
+  declared: readonly string[];
+  /** Plugin's display name — labels plugin-originated UI. */
+  name: string;
 }
 
-export function createPluginApi(pluginId: string, deps: PluginApiDeps): CardMirrorPluginApi {
+/** Optional namespaces, each built from the plugin's grant (a builder
+ *  returns undefined when none of its permissions is granted). */
+type OptionalNamespaces = Pick<
+  CardMirrorPluginApi,
+  'ui' | 'files' | 'collab' | 'doc' | 'events' | 'panel' | 'menu'
+>;
+const NAMESPACES: {
+  [K in keyof OptionalNamespaces]-?: (ctx: CapabilityContext) => OptionalNamespaces[K] | undefined;
+} = {
+  ui: buildUiApi,
+  files: buildFilesApi,
+  collab: buildCollabApi,
+  doc: buildDocApi,
+  events: buildEventsApi,
+  panel: buildPanelApi,
+  menu: buildMenuApi,
+};
+
+function buildNamespaces(ctx: CapabilityContext): OptionalNamespaces {
+  const out: Record<string, unknown> = {};
+  for (const [key, build] of Object.entries(NAMESPACES)) {
+    const ns = (build as (c: CapabilityContext) => unknown)(ctx);
+    if (ns !== undefined) out[key] = ns;
+  }
+  return out as OptionalNamespaces;
+}
+
+/** Mint one plugin's api object. Namespaces outside `grant.granted` are
+ *  simply absent, so they can't run. Without a grant context (tests, legacy callers) the
+ *  plugin is treated as declaring nothing — the plain v1 surface. */
+export function createPluginApi(
+  pluginId: string,
+  deps: PluginApiDeps,
+  grant: PluginGrantContext = { granted: new Set(), declared: [], name: pluginId },
+): CardMirrorPluginApi {
   const storageKey = `plugin:${pluginId}`;
   const readBag = (): Record<string, unknown> => {
     try {
@@ -118,7 +238,18 @@ export function createPluginApi(pluginId: string, deps: PluginApiDeps): CardMirr
       return {};
     }
   };
+  // Snapshot: the registry re-mints the api object on any grant change,
+  // so a plugin holding an old reference will keep that reference's grant.
+  const grantSet: ReadonlySet<string> = new Set(grant.granted);
+  const declared = Object.freeze([...grant.declared]);
+  const permissions: PluginPermissionsApi = Object.freeze({
+    has: (p: string) => grantSet.has(p),
+    list: () => [...grantSet].sort(),
+    status: (p: string) => permissionStatus(String(p), declared, grantSet),
+  });
   return {
+    permissions,
+    ...buildNamespaces({ pluginId, name: grant.name || pluginId, granted: grantSet, deps }),
     appVersion: deps.appVersion,
     extractSelection() {
       const view = deps.getView();

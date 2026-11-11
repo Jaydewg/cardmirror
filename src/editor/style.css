@@ -6493,6 +6493,199 @@ html.pmd-nav-flat .pmd-nav-type-analytic:hover .pmd-nav-label {
   color: var(--pmd-c-text);
 }
 
+/* Plugin permission consent + management dialogs. Route-dialog chrome;
+   a plain list of permission rows (label, muted description, optional
+   "Sensitive" badge), with checkboxes in the management variant. */
+.pmd-plugin-perm-dialog {
+  width: min(30rem, 92vw);
+}
+.pmd-plugin-perm-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.pmd-plugin-perm-subhead {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-top: 0.25rem;
+}
+.pmd-plugin-perm-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pmd-plugin-perm-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--pmd-c-divider-faint);
+}
+.pmd-plugin-perm-row:last-child {
+  border-bottom: none;
+}
+label.pmd-plugin-perm-row {
+  cursor: pointer;
+}
+.pmd-plugin-perm-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.pmd-plugin-perm-label {
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+.pmd-plugin-perm-desc {
+  font-size: 0.82rem;
+  color: var(--pmd-c-text-muted);
+  line-height: 1.35;
+}
+.pmd-plugin-perm-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0 0.35rem;
+  border-radius: 3px;
+  border: 1px solid currentColor;
+  color: var(--pmd-c-danger);
+  vertical-align: 1px;
+}
+.pmd-plugin-perm-unknown {
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  color: var(--pmd-c-text-muted);
+  padding: 0.1rem 0;
+}
+.pmd-plugin-perm-note {
+  margin-top: 0.4rem;
+}
+
+/* Plugin panel (`ui.panel`, plugin-caps/panel.ts): a right-docked column
+   the host frames (tabs naming each plugin, hide button, resize handle)
+   and plugins render into. Width rides `--pmd-plugin-panel-width`, set
+   by the host from the `pluginPanelWidth` setting. */
+.pmd-plugin-panel {
+  display: flex;
+  flex-direction: column;
+  width: var(--pmd-plugin-panel-width, 320px);
+  background: var(--pmd-c-bg-soft);
+  border-left: 1px solid var(--pmd-c-border-soft);
+  font-family: var(--pmd-ui-font);
+  font-size: 0.85rem;
+  color: var(--pmd-c-text);
+  position: relative;
+  min-width: 0;
+}
+.pmd-plugin-panel[hidden] { display: none; }
+/* Single-doc: pinned to the viewport's right edge in the editor band,
+   like the comments column; the comments column (when open) moves left
+   of it, and the editor row reserves the panel's width. */
+body:not(.pmd-multi-doc) #plugin-panel {
+  position: fixed;
+  top: var(--ribbon-height);
+  bottom: var(--status-bar-height);
+  right: 0;
+  z-index: 100;
+}
+body.pmd-speech-banner-visible:not(.pmd-multi-doc) #plugin-panel {
+  top: calc(var(--ribbon-height) + var(--speech-banner-height));
+}
+body:not(.pmd-multi-doc):has(#plugin-panel:not([hidden])) #comments-column {
+  right: var(--pmd-plugin-panel-width, 320px);
+}
+body:not(.pmd-multi-doc):has(#plugin-panel:not([hidden])) .pmd-editor-row {
+  padding-right: var(--pmd-plugin-panel-width, 320px);
+}
+/* Three-pane: a narrow extra slot at the end of the shell row. */
+body.pmd-multi-doc #plugin-panel {
+  flex: 0 0 var(--pmd-plugin-panel-width, 320px);
+}
+.pmd-plugin-panel-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 1;
+}
+.pmd-plugin-panel-resize:hover,
+body.pmd-plugin-panel-resizing .pmd-plugin-panel-resize {
+  background: var(--pmd-c-accent);
+  opacity: 0.4;
+}
+body.pmd-plugin-panel-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+.pmd-plugin-panel-header {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--pmd-c-border-soft);
+  flex: 0 0 auto;
+}
+.pmd-plugin-panel-tabs {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+}
+.pmd-plugin-panel-tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--pmd-c-text-muted);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 0.35rem 0.6rem;
+  max-width: 12rem;
+  font: inherit;
+}
+.pmd-plugin-panel-tab:hover { background: var(--pmd-c-hover); }
+.pmd-plugin-panel-tab-active {
+  color: var(--pmd-c-text);
+  border-bottom-color: var(--pmd-c-accent);
+}
+.pmd-plugin-panel-tab-label,
+.pmd-plugin-panel-tab-owner {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pmd-plugin-panel-tab-label { font-weight: 500; }
+.pmd-plugin-panel-tab-owner {
+  font-size: 0.72rem;
+  color: var(--pmd-c-text-muted);
+}
+.pmd-plugin-panel-close {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--pmd-c-text-muted);
+  cursor: pointer;
+  font-size: 1.1rem;
+  padding: 0 0.6rem;
+}
+.pmd-plugin-panel-close:hover { color: var(--pmd-c-text); }
+.pmd-plugin-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.pmd-plugin-panel-content {
+  padding: 0.6rem;
+}
+.pmd-plugin-panel-content[hidden] { display: none; }
+
 /* The plugin-settings modal itself — route-dialog vocabulary, settings
    controls inside. Changes apply immediately; Done just closes. */
 .pmd-plugin-settings-dialog {

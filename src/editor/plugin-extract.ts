@@ -68,13 +68,19 @@ function enclosingSectionRange(
 /** The governing heading id at `pos` - for selections that start
  *  mid-card (undertag selected without its tag). */
 function governingHeadingId(doc: PMNode, pos: number): string | null {
+  return governingHeading(doc, pos)?.id ?? null;
+}
+
+/** The last heading at or before `pos` (a card's tag inside a card), or
+ *  null. Also the plugin context-menu target's heading. */
+export function governingHeading(doc: PMNode, pos: number): HeadingEntry | null {
   const headings = collectHeadings(doc, { skipCite: true });
   let best: HeadingEntry | null = null;
   for (const h of headings) {
     if (h.pos <= pos) best = h;
     else break;
   }
-  return best?.id ?? null;
+  return best;
 }
 
 function collectItems(

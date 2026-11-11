@@ -46,7 +46,15 @@ import {
 } from './collab-hooks.js';
 import { RoomsError, type RoomsClient } from './room-client.js';
 import { getElectronHost } from '../host/index.js';
-import { ensureBakedRelay, relayClient, relayClientWithGuestPass, relayClientWithViewPass, endRoomOnRelay } from './collab-relay.js';
+import type { SessionRole } from './session-role.js';
+import {
+  ensureBakedRelay,
+  relayBaseUrl,
+  relayClient,
+  relayClientWithGuestPass,
+  relayClientWithViewPass,
+  endRoomOnRelay,
+} from './collab-relay.js';
 import { buildJoinLink, parseJoinLinkHash } from './join-link.js';
 import { relayClient as pairingRelayClient } from '../pairing/relay-client.js';
 import { resolveStarredTarget } from '../pairing/send-to-starred.js';
@@ -187,6 +195,53 @@ export function roomLiveInWindow(roomId: string): boolean {
 function sessionFor(uid: string | null | undefined): ActiveSession | null {
   return uid != null ? sessions.get(uid) ?? null : null;
 }
+
+/** Public facts about the live session owned by doc `uid` (plugin API,
+ *  `collab.read`): never the key. Null when that doc has no session. */
+export function sessionInfoForUid(uid: string): {
+  roomId: string;
+  role: SessionRole;
+  title: string | null;
+  relayHost: string | null;
+} | null {
+  const sess = sessionFor(uid);
+  if (!sess) return null;
+  let relayHost: string | null = null;
+  try {
+    const base = relayBaseUrl();
+    relayHost = base ? new URL(base).host : null;
+  } catch {
+    relayHost = null;
+  }
+  return {
+    roomId: sess.session.roomId,
+    role: sess.session.role,
+    title: docTitleResolver?.(uid) ?? null,
+    relayHost,
+  };
+}
+
+/** The EDIT share code of doc `uid`'s live session (plugin API,
+ *  `collab.shareCode`) — null for no session or a spectator seat (a
+ *  spectator holds no edit code to hand out). */
+export function editShareCodeForUid(uid: string): string | null {
+  const sess = sessionFor(uid);
+  if (!sess || sess.session.role === 'spectator') return null;
+  const decoded = decodeShareCode(sess.shareCode);
+  return decoded && !decoded.view ? sess.shareCode : null;
+}
+
+/** How a join attempt ended — the plugin API needs more than the
+ *  boolean `joinSessionWithCode` returns (which is also true for a room
+ *  that turned out to have ended). */
+export type JoinOutcome =
+  | 'joined'
+  | 'ended'
+  | 'invalid'
+  | 'needs-update'
+  | 'cancelled'
+  | 'unavailable'
+  | 'failed';
 
 // Feed the multi-pane shell's per-slot footers: each slot paints the copresence
 // of ITS visible doc's session (or nothing when that doc isn't in a session).
@@ -633,6 +688,7 @@ function installSeams(
     ],
     ownsUndo: () => true,
     canRedo: () => undoManager.canRedo(),
+    isolateNextStep: () => undoGuard.isolateNextStep(),
     // Read-mode clamp (M4): swallow undo/redo entirely while reading — the Loro
     // undo transactions carry the binding meta (→ sync-origin) and would
     // otherwise sail through the read-mode lock and revert real edits.
@@ -1177,7 +1233,7 @@ const resumesInFlight = new Set<string>();
 export async function joinSessionWithCode(
   deps: CollabUiDeps,
   code: string,
-  opts?: { guestPass?: string | null },
+  opts?: { guestPass?: string | null; report?: (outcome: JoinOutcome) => void },
 ): Promise<boolean> {
   const roomId = decodeShareCode(code.trim())?.roomId ?? null;
   if (roomId && joinsInFlight.has(roomId)) return true; // already joining — consumed
@@ -1192,9 +1248,13 @@ export async function joinSessionWithCode(
 async function joinSessionWithCodeInner(
   deps: CollabUiDeps,
   code: string,
-  opts?: { guestPass?: string | null },
+  opts?: { guestPass?: string | null; report?: (outcome: JoinOutcome) => void },
 ): Promise<boolean> {
-  if (!collabEnabled()) return false;
+  const report = (o: JoinOutcome): void => opts?.report?.(o);
+  if (!collabEnabled()) {
+    report('unavailable');
+    return false;
+  }
   // Don't overwrite the doc you're working in — or bump the session you're
   // already in: unless this window holds the disposable starter, hand the
   // join to a fresh window (which re-enters here with the starter open, so it
@@ -1203,17 +1263,22 @@ async function joinSessionWithCodeInner(
   // refusing, and the session + binding are born in the window that keeps them.
   // (Single-pane desktop only; the multi-pane deps have no spawnJoinWindow.)
   // Counts as consumed: the join continues in the spawned window.
-  if (deps.spawnJoinWindow?.(code.trim())) return true;
+  if (deps.spawnJoinWindow?.(code.trim())) {
+    report('joined');
+    return true;
+  }
   // Don't overwrite a doc that's ITSELF in a session (spawnJoinWindow already
   // redirected windows holding a real doc; this guards the edge case).
   if (sessionFor(deps.getOwnerUid?.())) {
     showToast('This document is in a session — end or leave it before joining here');
+    report('failed');
     return false;
   }
   await ensureBakedRelay();
   const decoded = decodeShareCode(code);
   if (!decoded) {
     showToast('That does not look like a share code');
+    report('invalid');
     return false;
   }
   let client: RoomsClient | null;
@@ -1232,6 +1297,7 @@ async function joinSessionWithCodeInner(
           ? 'Could not get a viewer pass for this session — ask for a fresh view link'
           : `No relay connection — ${RELAY_FIX_PATH}`,
       );
+      report('failed');
       return false;
     }
   } else {
@@ -1241,6 +1307,7 @@ async function joinSessionWithCodeInner(
     client = relayClient() ?? (opts?.guestPass ? relayClientWithGuestPass(opts.guestPass) : null);
     if (!client) {
       showToast(`No relay connection — ${RELAY_FIX_PATH}`);
+      report('failed');
       return false;
     }
   }
@@ -1251,6 +1318,7 @@ async function joinSessionWithCodeInner(
     showToast(
       `This session needs CardMirror ${decoded.minVersion} or newer — update to join.`,
     );
+    report('needs-update');
     return false;
   }
   // A resumable record for this room means WE'VE been in it before — resume
@@ -1265,7 +1333,9 @@ async function joinSessionWithCodeInner(
   // session's own persistence.
   const prior = await loadSessionRecord(decoded.roomId);
   if (prior && (prior.role === 'spectator') === decoded.view) {
-    return resumeSessionFlow(deps, decoded.roomId);
+    const resumed = await resumeSessionFlow(deps, decoded.roomId);
+    report(resumed ? 'joined' : 'failed');
+    return resumed;
   }
   // Resolved after newSessionDoc/installSeams; callbacks read it lazily.
   let sessRef: ActiveSession | null = null;
@@ -1318,6 +1388,7 @@ async function joinSessionWithCodeInner(
     if (!(await deps.newSessionDoc())) {
       await session.stop();
       showToast('Join cancelled');
+      report('cancelled');
       return false;
     }
     // The session owner is the doc newSessionDoc() just created — capture its
@@ -1359,6 +1430,7 @@ async function joinSessionWithCodeInner(
           : 'Joined the session',
     );
     deps.getView()?.focus();
+    report('joined');
     return true;
   } catch (err) {
     if (sessRef) void teardownSession(sessRef).catch((e) => surfaceError('collab teardown', e));
@@ -1371,6 +1443,7 @@ async function joinSessionWithCodeInner(
       void deleteRecentRoom(decoded.roomId).catch((e) => surfaceError('collab recent rooms', e));
     }
     showToast(relayFailureMessage(err, { initiating: false, verb: 'join' }));
+    report(ended ? 'ended' : 'failed');
     return ended;
   }
 }
