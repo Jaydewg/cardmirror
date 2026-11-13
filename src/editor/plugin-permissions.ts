@@ -19,8 +19,10 @@
  * Permissions are a consent + supported-API contract, NOT a sandbox:
  * bundles run in the renderer's main world. The consent copy says so.
  *
- * The id-shape sanitizer is duplicated in apps/desktop/src/plugin-manager.ts
- * (main can't import renderer modules) — keep the two in sync.
+ * The id-shape sanitizer (and PLUGIN_API_VERSION, in plugin-registry.ts)
+ * are copied into apps/desktop/src/plugin-manager.ts, since main can't
+ * import renderer modules. tests/editor/plugin-permissions.test.ts
+ * ("main/renderer parity") fails the moment the copies drift.
  */
 
 /** `namespace.action` (one or more dotted segments). */
@@ -50,6 +52,12 @@ export const PLUGIN_PERMISSIONS: Readonly<Record<string, PluginPermissionInfo>> 
       'Ask you to choose between options or confirm an action. Its dialogs are always labeled with the plugin’s name.',
     sensitivity: 'low',
   },
+  'ui.notices': {
+    label: 'Post notices in the status bar',
+    description:
+      'Leave a notice under the status-bar \u24d8 chip, optionally with up to two buttons. Its notices are always labeled with the plugin\u2019s name.',
+    sensitivity: 'low',
+  },
   'files.data': {
     label: 'Store its own data in your documents',
     description:
@@ -59,8 +67,20 @@ export const PLUGIN_PERMISSIONS: Readonly<Record<string, PluginPermissionInfo>> 
   'collab.read': {
     label: 'See your live co-editing sessions',
     description:
-      'See whether a document is in a live co-editing session, and that session\u2019s room, title and relay. Never the session\u2019s key.',
+      'See whether a document is in a live co-editing session, and that session\u2019s room and title. Never the session\u2019s key.',
     sensitivity: 'medium',
+  },
+  'collab.server': {
+    label: 'See which co-editing server you use',
+    description:
+      'See the address of the server your co-editing sessions run on, and whether a session on another server can be reached from here.',
+    sensitivity: 'low',
+  },
+  'collab.probe': {
+    label: 'Check if a session is still live',
+    description:
+      'Ask the session\u2019s server whether the session behind a share code still exists, without joining it or showing you as present.',
+    sensitivity: 'low',
   },
   'collab.shareCode': {
     label: 'Read your session share codes',
@@ -68,10 +88,16 @@ export const PLUGIN_PERMISSIONS: Readonly<Record<string, PluginPermissionInfo>> 
       'Read the share code of a live session you are in. Anyone who gets that code can join and edit the session.',
     sensitivity: 'high',
   },
+  'collab.viewCode': {
+    label: 'Read your sessions\u2019 view-only links',
+    description:
+      'Read the view-only link of a live session you are in. Anyone who gets that link can watch the session, but not edit it.',
+    sensitivity: 'medium',
+  },
   'collab.join': {
     label: 'Join co-editing sessions',
     description:
-      'Join a live co-editing session from a share code. Joining connects to the relay and shows you as present in that session.',
+      'Join a live co-editing session from a share code. Joining connects to the session\u2019s server and shows you as present in that session.',
     sensitivity: 'high',
   },
   'doc.read': {

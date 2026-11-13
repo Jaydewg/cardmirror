@@ -29,6 +29,11 @@ export interface PluginApiDeps {
   docIdentityForUid?(uid: string): { docId: string | null; docTitle: string } | null;
   /** `collab.*` host bridge; absent where co-editing isn't available. */
   collab?: PluginCollabBridge;
+  /** Whether the plugin holds `permission` RIGHT NOW (the registry's
+   *  live grant). Every namespace method re-checks it when called, so a
+   *  reference kept from before a revoke stops working. Absent (tests,
+   *  legacy callers): the minted grant is final. */
+  isGranted?(pluginId: string, permission: string): boolean;
 }
 
 /** Everything a namespace builder needs about one plugin. */

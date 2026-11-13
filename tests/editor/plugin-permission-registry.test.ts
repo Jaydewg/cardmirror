@@ -5,15 +5,19 @@ vi.mock('../../src/editor/toast.js', () => ({ showToast: vi.fn() }));
 
 import {
   installPluginRegistry,
+  pluginHasPermission,
+  pluginManifestDrift,
   pluginPermissionInfo,
   regrantPlugin,
   registerPluginDefinition,
   resetPluginRegistryForTests,
   runPluginCommand,
   setPluginConsent,
+  setPluginManifestPermissions,
+  unregisterPlugin,
   type PluginDefinition,
 } from '../../src/editor/plugin-registry.js';
-import type { CardMirrorPluginApi, PluginGrantContext } from '../../src/editor/plugin-api.js';
+import { createPluginApi, type CardMirrorPluginApi, type PluginGrantContext } from '../../src/editor/plugin-api.js';
 
 /** Records every mint so tests can see what grant each api got. */
 function recordingFactory(): {
@@ -148,3 +152,137 @@ describe('dev-load permission requests', () => {
     expect(onPermissionRequest).not.toHaveBeenCalled();
   });
 });
+
+describe('activate lifecycle', () => {
+  it('activates with the minted api once registered, and re-activates on regrant after cleanup', () => {
+    const f = recordingFactory();
+    installPluginRegistry(f.create);
+    setPluginConsent('demo', []);
+    const log: string[] = [];
+    const seen: CardMirrorPluginApi[] = [];
+    const activate = vi.fn((api: CardMirrorPluginApi) => {
+      seen.push(api);
+      log.push(`activate ${seen.length}`);
+      const n = seen.length;
+      return () => void log.push(`cleanup ${n}`);
+    });
+    expect(registerPluginDefinition(def({ permissions: ['ui.dialogs'], activate })).ok).toBe(true);
+    expect(activate).toHaveBeenCalledTimes(1);
+    // The api handed to activate is the one the registry just minted.
+    expect((seen[0] as unknown as { grant: PluginGrantContext }).grant).toBe(f.mints[f.mints.length - 1]!.grant);
+    regrantPlugin('demo', ['ui.dialogs']);
+    expect(log).toEqual(['activate 1', 'cleanup 1', 'activate 2']);
+    // The new activation sees the new grant.
+    expect([...(seen[1] as unknown as { grant: PluginGrantContext }).grant.granted]).toEqual(['ui.dialogs']);
+  });
+
+  it('unregister runs the cleanup', () => {
+    installPluginRegistry(recordingFactory().create);
+    const cleanup = vi.fn();
+    registerPluginDefinition(def({ activate: () => cleanup }));
+    unregisterPlugin('demo');
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it('a re-registered bundle activates its NEW activate function', () => {
+    installPluginRegistry(recordingFactory().create);
+    const first = vi.fn();
+    const second = vi.fn();
+    registerPluginDefinition(def({ activate: first }));
+    registerPluginDefinition(def({ activate: second }));
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it('a throwing activate (or rejected promise) is logged and the plugin stays registered', async () => {
+    installPluginRegistry(recordingFactory().create);
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(
+      registerPluginDefinition(
+        def({
+          activate: () => {
+            throw new Error('boom');
+          },
+        }),
+      ).ok,
+    ).toBe(true);
+    expect(pluginPermissionInfo('demo')).not.toBeNull();
+    registerPluginDefinition(
+      def({ id: 'other', commands: [], activate: (async () => { throw new Error('later'); }) as never }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(err).toHaveBeenCalledTimes(2);
+    err.mockRestore();
+  });
+
+  it('rejects a non-function activate', () => {
+    installPluginRegistry(recordingFactory().create);
+    const res = registerPluginDefinition(def({ activate: 'nope' as never }));
+    expect(res).toEqual({ ok: false, error: 'activate must be a function' });
+  });
+});
+
+describe('manifest vs definition permissions', () => {
+  it('reports and warns where they disagree; silent when they agree or there is no manifest', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    installPluginRegistry(recordingFactory().create);
+    setPluginConsent('demo', ['ui.dialogs', 'files.data']);
+    setPluginManifestPermissions('demo', ['ui.dialogs', 'files.data']);
+    registerPluginDefinition(def({ permissions: ['ui.dialogs', 'collab.read'] }));
+    expect(pluginManifestDrift('demo')).toEqual({ onlyInManifest: ['files.data'], onlyInDefinition: ['collab.read'] });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]![0])).toMatch(/Only in the manifest: files\.data\. Only in the definition: collab\.read/);
+    resetPluginRegistryForTests();
+
+    installPluginRegistry(recordingFactory().create);
+    setPluginManifestPermissions('demo', ['ui.dialogs']);
+    registerPluginDefinition(def({ permissions: ['ui.dialogs'] }));
+    expect(pluginManifestDrift('demo')).toBeNull();
+    resetPluginRegistryForTests();
+
+    installPluginRegistry(recordingFactory().create); // dev load: no manifest
+    registerPluginDefinition(def({ permissions: ['ui.dialogs'] }));
+    expect(pluginManifestDrift('demo')).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+});
+
+describe('a revoke reaches api references kept from before it', () => {
+  it('the old api refuses calls once the registry withdraws the permission', async () => {
+    installPluginRegistry((id, grant) =>
+      createPluginApi(
+        id,
+        {
+          appVersion: 'test',
+          getView: () => null,
+          findViewForDocId: () => null,
+          getDocIdentity: () => null,
+          ensureDocId: () => null,
+          isGranted: pluginHasPermission,
+        },
+        grant,
+      ),
+    );
+    let kept: CardMirrorPluginApi | null = null;
+    setPluginConsent('demo', ['files.data']);
+    registerPluginDefinition(
+      def({
+        permissions: ['files.data'],
+        activate: (api) => {
+          kept ??= api;
+        },
+      }),
+    );
+    expect(kept!.files!.focusedDoc()).toBeNull();
+    regrantPlugin('demo', []); // revoke
+    expect(() => kept!.files!.focusedDoc()).toThrow(/no longer granted/);
+    expect(kept!.permissions!.has('files.data')).toBe(false);
+    regrantPlugin('demo', ['files.data']); // granted again: the old reference works again
+    expect(kept!.files!.focusedDoc()).toBeNull();
+    unregisterPlugin('demo'); // unregistered: nothing is granted
+    expect(() => kept!.files!.focusedDoc()).toThrow(/no longer granted/);
+  });
+});
+

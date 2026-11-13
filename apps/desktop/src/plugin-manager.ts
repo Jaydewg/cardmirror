@@ -12,7 +12,11 @@ import { randomUUID } from 'node:crypto';
 
 export const MANIFEST_NAME = 'cardmirror-plugin.json';
 export const BUNDLE_NAME = 'plugin.js';
-const PLUGIN_API_VERSION = 1; // keep in sync with src/editor/plugin-registry.ts
+/** Main can't import renderer modules, so this, `PERMISSION_ID_RE`,
+ *  `MAX_PERMISSIONS` and `sanitizePermissionList` are copies of the
+ *  renderer's. tests/editor/plugin-permissions.test.ts ("main/renderer
+ *  parity") fails the moment they drift. */
+export const PLUGIN_API_VERSION = 1;
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 const RESERVED_ID_RE = /^(con|prn|aux|nul|com\d|lpt\d)$/i; // Windows device names
 const MAX_ASSET_BYTES = 5 * 1024 * 1024; // 5 MiB per release asset
@@ -37,11 +41,10 @@ export interface PluginManifest {
   grantedPermissions?: string[];
 }
 
-// Permission-id shape — keep in sync with src/editor/plugin-permissions.ts
-// (sanitizePermissionList). Main only guards SHAPE; which permissions
-// exist is the renderer's catalog.
-const PERMISSION_ID_RE = /^[a-z]+(\.[a-z][a-zA-Z]*)+$/;
-const MAX_PERMISSIONS = 32;
+// Permission-id shape (parity-tested against src/editor/plugin-permissions.ts).
+// Main only guards SHAPE; which permissions exist is the renderer's catalog.
+export const PERMISSION_ID_RE = /^[a-z]+(\.[a-z][a-zA-Z]*)+$/;
+export const MAX_PERMISSIONS = 32;
 
 export function sanitizePermissionList(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];

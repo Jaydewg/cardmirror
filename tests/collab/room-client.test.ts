@@ -768,3 +768,42 @@ describe('RoomStream.restartIfStale — tab return (web audit 2026-09-04)', () =
     }
   });
 });
+
+describe('RoomsClient.probeRoom', () => {
+  it('live for an open room, ended for a deleted or unknown one', async () => {
+    const { roomId } = await client.createRoom();
+    await client.postUpdate(roomId, bytes('content'));
+    expect(await client.probeRoom(roomId)).toBe('live');
+    await client.deleteRoom(roomId);
+    expect(await client.probeRoom(roomId)).toBe('ended');
+    expect(await client.probeRoom('0123456789abcdef')).toBe('ended');
+  });
+
+  it('asks past every seq (no snapshot / updates) and maps failures to unknown', async () => {
+    const urls: string[] = [];
+    const respond = (status: number) =>
+      new RoomsClient({
+        baseUrl: () => 'https://relay.test',
+        token: () => 'tok',
+        fetchImpl: async (input) => {
+          urls.push(String(input));
+          return new Response('{}', { status });
+        },
+      });
+    expect(await respond(200).probeRoom('abcd')).toBe('live');
+    expect(urls[0]).toBe(`https://relay.test/rooms/abcd/updates?after=${Number.MAX_SAFE_INTEGER}`);
+    expect(await respond(410).probeRoom('abcd')).toBe('ended');
+    expect(await respond(500).probeRoom('abcd')).toBe('unknown');
+    expect(await respond(401).probeRoom('abcd')).toBe('unknown');
+    const offline = new RoomsClient({
+      baseUrl: () => 'https://relay.test',
+      token: () => 'tok',
+      fetchImpl: async () => {
+        throw new TypeError('network');
+      },
+    });
+    expect(await offline.probeRoom('abcd')).toBe('unknown');
+    const noCredential = new RoomsClient({ baseUrl: () => 'https://relay.test', token: () => '', fetchImpl: vi.fn() });
+    expect(await noCredential.probeRoom('abcd')).toBe('unknown');
+  });
+});

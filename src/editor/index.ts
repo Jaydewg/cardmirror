@@ -78,6 +78,7 @@ import {
   pluginHasPermission,
   regrantPlugin,
   setPluginConsent,
+  setPluginManifestPermissions,
 } from './plugin-registry.js';
 import {
   createPluginApi,
@@ -2605,6 +2606,30 @@ async function replaceWithSessionDoc(): Promise<boolean> {
 const pluginCollabBridge: PluginCollabBridge = {
   sessionInfo: (uid) => collabUiLoaded?.sessionInfoForUid(uid) ?? null,
   editShareCode: (uid) => collabUiLoaded?.editShareCodeForUid(uid) ?? null,
+  editAddress: (uid) => collabUiLoaded?.editAddressForUid(uid) ?? null,
+  viewCode: (uid) => collabUiLoaded?.viewCodeForUid(uid) ?? null,
+  viewAddress: (uid) => collabUiLoaded?.viewAddressForUid(uid) ?? null,
+  server: async () => {
+    try {
+      return await (await loadCollabUi()).currentServer();
+    } catch {
+      return null;
+    }
+  },
+  reach: async (url) => {
+    try {
+      return await (await loadCollabUi()).serverReach(url);
+    } catch {
+      return 'unknown';
+    }
+  },
+  parseAddress: async (raw) => {
+    try {
+      return await (await loadCollabUi()).parseAddressForPlugin(raw);
+    } catch {
+      return null;
+    }
+  },
   localRecord: async (roomId) => {
     try {
       const rec = (await listSessionRecords()).find((r) => r.roomId === roomId);
@@ -2613,8 +2638,26 @@ const pluginCollabBridge: PluginCollabBridge = {
       return null;
     }
   },
-  join: async (code, intoDocUid) => {
+  probe: async (code) => {
+    try {
+      return await (await loadCollabUi()).probeShareCode(code);
+    } catch {
+      return 'unknown';
+    }
+  },
+  join: async (codeOrAddress, requestedIntoDoc) => {
     const m = await loadCollabUi();
+    // Addresses name their server: one this build can't reach ends here,
+    // before any join UI. A plain code with no server configured goes on
+    // to the normal join path, which explains the missing relay.
+    const route = await m.routeSessionAddress(codeOrAddress);
+    if (route.kind === 'unreachable') return 'unreachable';
+    if (route.kind === 'invalid') return 'invalid';
+    const code = route.kind === 'here' ? route.code : codeOrAddress;
+    // A plugin may ask long after the file opened (a status-bar notice's
+    // Join): if that doc is gone, join as a fresh session doc rather
+    // than letting the fallback replace whatever doc is current.
+    const intoDocUid = requestedIntoDoc && isDocUidOpen(requestedIntoDoc) ? requestedIntoDoc : null;
     let outcome: PluginJoinOutcome = 'failed';
     const opts = { report: (o: PluginJoinOutcome) => (outcome = o) };
     if (multiDocActive) {
@@ -2641,6 +2684,12 @@ const pluginCollabBridge: PluginCollabBridge = {
     return outcome;
   },
 };
+
+/** Whether doc `uid` is open in this window (any pane). */
+function isDocUidOpen(uid: string): boolean {
+  if (multiDocActive) return (multiDocGetFilenameForUid?.(uid) ?? null) !== null;
+  return uid === currentDocUid;
+}
 
 /** Join-from-file (plugin API `collab.join` with `intoDoc`): like
  *  `replaceWithSessionDoc`, but the session doc KEEPS the file the user
@@ -10493,6 +10542,9 @@ async function initPlugins(): Promise<void> {
   installPluginRegistry((pluginId, grant) =>
     createPluginApi(pluginId, {
       appVersion,
+      // Live grant: a call through an api object minted before a revoke
+      // is refused (see CALL_TIME_PERMISSIONS in plugin-api.ts).
+      isGranted: pluginHasPermission,
       getView: () => getActiveView(),
       findViewForDocId: (docId) => findViewForDocId(docId),
       getDocIdentity: () => {
@@ -10573,6 +10625,7 @@ async function initPlugins(): Promise<void> {
         id: string;
         name: string;
         incompatible?: string;
+        permissions?: string[];
         grantedPermissions?: string[];
       }[]
     | undefined;
@@ -10591,7 +10644,10 @@ async function initPlugins(): Promise<void> {
   // Stored consent for EVERY install (enabled or not): a plugin switched on
   // later from Settings registers with its grant, and an installed plugin
   // is never mistaken for an unconsented dev load.
-  for (const p of installed) setPluginConsent(p.id, p.grantedPermissions ?? []);
+  for (const p of installed) {
+    setPluginConsent(p.id, p.grantedPermissions ?? []);
+    setPluginManifestPermissions(p.id, p.permissions ?? []);
+  }
   for (const p of installed) {
     if (!isPluginEnabled(p.id)) continue;
     // Listed-but-incompatible (needs a newer CardMirror): main refuses to

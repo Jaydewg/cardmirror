@@ -84,6 +84,7 @@ import { importRoomKey, decryptBlob, viewCodeFromShareCode } from './collab-cryp
 import { resetSessionCommentIds } from '../comments-plugin.js';
 import { collabEnabled } from './collab-gate.js';
 import { decodeShareCode } from './collab-crypto.js';
+import { canonRelayUrl, parseSessionAddress, relayHost, type ParsedSessionAddress } from './server-address.js';
 import { CollabSession } from './collab-session.js';
 import { compareAppVersions } from '../relay-protocol.js';
 import { appVersion } from '../install-info.js';
@@ -196,28 +197,83 @@ function sessionFor(uid: string | null | undefined): ActiveSession | null {
   return uid != null ? sessions.get(uid) ?? null : null;
 }
 
+/** This build's co-editing server as a canonical URL, or null when none
+ *  resolves. Synchronous: before the baked relay has loaded it can be
+ *  null; `currentServer()` waits for it. Sessions follow the configured
+ *  relay (their clients read `relayBaseUrl()` per request), so this is
+ *  also every live session's server. */
+function selfServerSync(): string | null {
+  return canonRelayUrl(relayBaseUrl());
+}
+
+/** This machine's co-editing server (plugin API, `collab.server`). */
+export async function currentServer(): Promise<{ url: string; host: string; nickname: string | null } | null> {
+  try {
+    await ensureBakedRelay();
+  } catch {
+    /* fall through: a configured URL may still resolve */
+  }
+  const url = selfServerSync();
+  return url ? { url, host: relayHost(url), nickname: null } : null;
+}
+
+/** Can this build open sessions on `server`? Without federation only
+ *  your own server is reachable. */
+export async function serverReach(server: string): Promise<'home' | 'unreachable' | 'unknown'> {
+  const want = canonRelayUrl(server);
+  if (!want) return 'unknown';
+  const self = (await currentServer())?.url ?? null;
+  if (!self) return 'unknown';
+  return want === self ? 'home' : 'unreachable';
+}
+
+/** Resolve a code or session address against this machine's server
+ *  (plugin API, `collab.server`). */
+export async function parseAddressForPlugin(raw: string): Promise<ParsedSessionAddress | null> {
+  const self = (await currentServer())?.url ?? null;
+  return parseSessionAddress(String(raw ?? ''), self);
+}
+
+/** Where a plugin-supplied code or address leads on THIS build:
+ *  `here` with a code this build decodes, `unreachable` for a session on
+ *  another server, `invalid` for something that isn't a session code,
+ *  `unknown` when no server resolves. */
+export async function routeSessionAddress(
+  raw: string,
+): Promise<{ kind: 'here'; code: string; roomId: string } | { kind: 'unreachable' | 'invalid' | 'unknown' }> {
+  const text = String(raw ?? '').trim();
+  const self = (await currentServer())?.url ?? null;
+  const parsed = parseSessionAddress(text, self);
+  if (!parsed) {
+    // A plain code with no server configured still names "here".
+    if (!self && !text.includes('@') && decodeShareCode(text)) return { kind: 'unknown' };
+    return { kind: 'invalid' };
+  }
+  if (!self) return { kind: 'unknown' };
+  if (parsed.server !== self) return { kind: 'unreachable' };
+  if (!decodeShareCode(parsed.code)) return { kind: 'invalid' };
+  return { kind: 'here', code: parsed.code, roomId: parsed.roomId };
+}
+
 /** Public facts about the live session owned by doc `uid` (plugin API,
- *  `collab.read`): never the key. Null when that doc has no session. */
+ *  `collab.read`; `server` is stripped there without `collab.server`):
+ *  never the key. Null when that doc has no session. */
 export function sessionInfoForUid(uid: string): {
   roomId: string;
   role: SessionRole;
   title: string | null;
-  relayHost: string | null;
+  server: string | null;
+  crossServer: 'federated' | 'off' | 'unsupported';
 } | null {
   const sess = sessionFor(uid);
   if (!sess) return null;
-  let relayHost: string | null = null;
-  try {
-    const base = relayBaseUrl();
-    relayHost = base ? new URL(base).host : null;
-  } catch {
-    relayHost = null;
-  }
   return {
     roomId: sess.session.roomId,
     role: sess.session.role,
     title: docTitleResolver?.(uid) ?? null,
-    relayHost,
+    server: selfServerSync(),
+    // This build has no cross-server sessions.
+    crossServer: 'unsupported',
   };
 }
 
@@ -229,6 +285,47 @@ export function editShareCodeForUid(uid: string): string | null {
   if (!sess || sess.session.role === 'spectator') return null;
   const decoded = decodeShareCode(sess.shareCode);
   return decoded && !decoded.view ? sess.shareCode : null;
+}
+
+/** The EDIT session address (`code@server`) of doc `uid`'s session, or
+ *  null (no session, spectator seat, or no known server). */
+export function editAddressForUid(uid: string): string | null {
+  const code = editShareCodeForUid(uid);
+  const self = selfServerSync();
+  return code && self ? parseSessionAddress(code, self)?.address ?? null : null;
+}
+
+/** The VIEW-ONLY code of doc `uid`'s session (plugin API,
+ *  `collab.viewCode`), or null. Spectators hold the view code itself. */
+export function viewCodeForUid(uid: string): string | null {
+  const sess = sessionFor(uid);
+  if (!sess) return null;
+  const decoded = decodeShareCode(sess.shareCode);
+  if (!decoded) return null;
+  return decoded.view ? sess.shareCode : viewCodeFromShareCode(sess.shareCode);
+}
+
+/** The VIEW-ONLY session address of doc `uid`'s session, or null (no
+ *  session or no known server). */
+export function viewAddressForUid(uid: string): string | null {
+  const viewCode = viewCodeForUid(uid);
+  const self = selfServerSync();
+  return viewCode && self ? parseSessionAddress(viewCode, self)?.address ?? null : null;
+}
+
+/** Is the session behind a code or address still live? (plugin API
+ *  `collab.probe`.) Read-only: no presence, no session record, no
+ *  prefetch. `unreachable` for a session on another server (this build
+ *  has no route there, so it says nothing about liveness); `unknown`
+ *  when the code doesn't decode, there's no relay connection, or the
+ *  relay can't be reached. */
+export async function probeShareCode(code: string): Promise<'live' | 'ended' | 'unknown' | 'unreachable'> {
+  const route = await routeSessionAddress(code);
+  if (route.kind === 'unreachable') return 'unreachable';
+  if (route.kind !== 'here') return 'unknown';
+  const client = relayClient();
+  if (!client) return 'unknown';
+  return client.probeRoom(route.roomId);
 }
 
 /** How a join attempt ended — the plugin API needs more than the

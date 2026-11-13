@@ -15,6 +15,7 @@ import { CollabSession } from '../../src/editor/collab/collab-session.js';
 import * as collabUi from '../../src/editor/collab/collab-ui.js';
 import { viewCodeFromShareCode } from '../../src/editor/collab/collab-crypto.js';
 import { RoomsClient } from '../../src/editor/collab/room-client.js';
+import { canonRelayUrl } from '../../src/editor/collab/server-address.js';
 import { startRoomsMock, type RoomsMock } from './_rooms-mock.js';
 import { settle, simpleDoc } from './_loro-helpers.js';
 
@@ -95,8 +96,17 @@ describe('join outcomes', () => {
     const info = collabUi.sessionInfoForUid(uid)!;
     expect(info.roomId).toBe(host.roomId);
     expect(info.role).toBe('participant');
-    expect(info.relayHost).toBe(new URL(mock.url).host);
+    const self = canonRelayUrl(mock.url)!;
+    expect(info.server).toBe(self);
+    expect(info.crossServer).toBe('unsupported');
     expect(collabUi.editShareCodeForUid(uid)).toBe(shareCode);
+    // Addresses: the code plus this machine's server, edit and view.
+    expect(collabUi.editAddressForUid(uid)).toBe(`${shareCode}@${self}`);
+    expect(collabUi.viewCodeForUid(uid)).toBe(viewCodeFromShareCode(shareCode));
+    expect(collabUi.viewAddressForUid(uid)).toBe(`${viewCodeFromShareCode(shareCode)}@${self}`);
+    expect(collabUi.editAddressForUid('no-such-doc')).toBeNull();
+    expect(collabUi.viewCodeForUid('no-such-doc')).toBeNull();
+    expect(collabUi.viewAddressForUid('no-such-doc')).toBeNull();
     expect(collabUi.sessionInfoForUid('no-such-doc')).toBeNull();
     expect(collabUi.editShareCodeForUid('no-such-doc')).toBeNull();
 
@@ -127,6 +137,9 @@ describe('join outcomes', () => {
     expect(outcomes).toEqual(['joined']);
     expect(collabUi.sessionInfoForUid(uid)!.role).toBe('spectator');
     expect(collabUi.editShareCodeForUid(uid)).toBeNull();
+    expect(collabUi.editAddressForUid(uid)).toBeNull();
+    // A spectator still has the view address to hand on.
+    expect(collabUi.viewAddressForUid(uid)).toBe(`${viewCodeFromShareCode(shareCode)}@${canonRelayUrl(mock.url)}`);
     const stop = collabUi.endSessionFlow(depsFor(uid, v));
     await settle();
     clickPromptButton('Stop Watching');
@@ -134,5 +147,60 @@ describe('join outcomes', () => {
     await host.end();
     document.getElementById('collab-chip')!.hidden = true;
     v.destroy();
+  }, 30_000);
+});
+
+describe('probeShareCode', () => {
+  it('live while hosted, ended after the host ends, unknown for codes it cannot route', async () => {
+    const { host, shareCode } = await hostRoom();
+    expect(await collabUi.probeShareCode(shareCode)).toBe('live');
+    await host.end();
+    expect(await collabUi.probeShareCode(shareCode)).toBe('ended');
+    expect(await collabUi.probeShareCode('not-a-code')).toBe('unknown');
+  }, 30_000);
+});
+
+describe('servers and session addresses', () => {
+  const OTHER = 'https://other-server.example/relay';
+
+  it('names this machine\'s server and what this build can reach', async () => {
+    const self = canonRelayUrl(mock.url)!;
+    expect(await collabUi.currentServer()).toEqual({ url: self, host: new URL(self).hostname, nickname: null });
+    expect(await collabUi.serverReach(`${self}/`)).toBe('home');
+    expect(await collabUi.serverReach(OTHER)).toBe('unreachable');
+    expect(await collabUi.serverReach('not a url')).toBe('unknown');
+  });
+
+  it('a plain code resolves to this server; f and plain addresses parse alike', async () => {
+    const self = canonRelayUrl(mock.url)!;
+    const { host, shareCode } = await hostRoom();
+    const plain = await collabUi.parseAddressForPlugin(shareCode);
+    expect(plain).toMatchObject({ code: shareCode, roomId: host.roomId, server: self, view: false });
+    const fCode = shareCode.replace(/^cmshare(\d+)/, 'cmshare$1f');
+    expect(await collabUi.parseAddressForPlugin(`${fCode}@${self}`)).toEqual(plain);
+    expect(await collabUi.parseAddressForPlugin(`${shareCode}@${self}`)).toEqual(plain);
+    expect(await collabUi.parseAddressForPlugin(fCode)).toBeNull(); // f needs a server
+    await host.end();
+  }, 30_000);
+
+  it('probes by address: own server live, another server unreachable without a request', async () => {
+    const self = canonRelayUrl(mock.url)!;
+    const { host, shareCode } = await hostRoom();
+    const fCode = shareCode.replace(/^cmshare(\d+)/, 'cmshare$1f');
+    expect(await collabUi.probeShareCode(`${shareCode}@${self}`)).toBe('live');
+    expect(await collabUi.probeShareCode(`${fCode}@${self}`)).toBe('live');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    expect(await collabUi.probeShareCode(`${shareCode}@${OTHER}`)).toBe('unreachable');
+    expect(await collabUi.probeShareCode(`${fCode}@${OTHER}`)).toBe('unreachable');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+    expect(await collabUi.routeSessionAddress(`${shareCode}@${OTHER}`)).toEqual({ kind: 'unreachable' });
+    expect(await collabUi.routeSessionAddress(`${fCode}@${self}`)).toEqual({
+      kind: 'here',
+      code: shareCode,
+      roomId: host.roomId,
+    });
+    expect(await collabUi.routeSessionAddress('nope')).toEqual({ kind: 'invalid' });
+    await host.end();
   }, 30_000);
 });
