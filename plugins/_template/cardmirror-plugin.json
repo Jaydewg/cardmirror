@@ -1,0 +1,11 @@
+{
+  "id": "my-plugin",
+  "name": "My Plugin",
+  "version": "0.1.0",
+  "description": "What it does, in one sentence.",
+  "author": "Your name",
+  "apiVersion": 1,
+  "permissions": [
+    "ui.dialogs"
+  ]
+}
