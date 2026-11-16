@@ -2965,9 +2965,38 @@ How things look. None of these change the file — only your view (see
 **Theme & chrome**
 
 - **Theme** — light, dark, or follow the system.
-- **Apply theme to the document area** — off by default, so dark mode
-  darkens only the interface and the document stays paper-like; on darkens
-  the document too.
+- **Palette** — tint the interface: Default, Sepia, Slate, Forest, or
+  Rosé. Each has a light and a dark version that follows **Theme**.
+- **Accent color** — the color of primary buttons, focus rings, selected
+  toggles, and drag indicators. **Palette** uses the palette's own accent.
+  **+** picks any color: if it's too light for white text on it (or too
+  faint to see), CardMirror uses the nearest darker shade that passes and
+  says so, and dark mode gets a lighter shade of it. While the color-vision
+  friendly preset (Accessibility) is on, it sets the accent instead.
+- **Background texture** — a faint pattern behind the ribbon, navigation
+  pane, and status bar: Grain, Dots, Grid, Linen, or your own image.
+  **Palette** uses the palette's paired texture (Default has none).
+  **Intensity** sets how strong it is; 100% is as strong as it can be while
+  every label stays readable, worked out from the colors actually on
+  screen. To go past that, right-click the slider and choose **Allow
+  textures that make text harder to read**. The slider then runs to a
+  fixed maximum instead, with an amber tick where the readable range ends
+  (the texture keeps its strength when you switch — only the percentage
+  changes); past the tick it says "past readable", and a **Turn off** link
+  sits under it. A custom image is shrunk (longest side 1600 px, at most 250 KB)
+  and kept in CardMirror's local storage, not your settings, so it isn't
+  part of settings backups. **Repeat** tiles it; **Fill** stretches it
+  across each bar. **Match light/dark to the image** lets a dark image
+  turn the bars dark (or a bright one light) so it can show more strongly:
+  **Just the bars** switches only the ribbon, navigation pane, and status
+  bar; **Whole interface** switches everything, as if you'd changed
+  **Theme**; **Off** keeps your theme and keeps the image faint. An image
+  with both deep darks and bright highlights switches nothing. Desktop
+  layout only.
+- **Apply theme and palette to the document area** — off by default, so
+  dark mode and palettes tint only the interface and the document stays
+  paper-white; on, the document follows them too (for example, sepia
+  paper). Highlights and exported files are never affected.
 - **Icon style** — modern line icons (default) or classic glyphs;
   interface only.
 - **Show doc name in ribbon** — show the active filename as a pill in the

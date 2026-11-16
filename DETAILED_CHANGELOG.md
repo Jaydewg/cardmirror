@@ -5,6 +5,100 @@ behavior, rationale, and (where useful) the implementation context
 behind a change. For a shorter, jargon-free summary of what's new
 in each release, see `CHANGELOG.md`.
 
+## Unreleased
+
+### Added: lightweight theming (palettes, accent colors, chrome textures)
+
+**What.** Three new Appearance → Theme & chrome settings: `themePalette`
+(default / sepia / slate / forest / rose), `themeAccent` (auto = the
+palette's, blue / teal / violet / rose / amber / green, or custom with
+`themeAccentCustom`), and `chromeTexture` (auto = the palette's, none,
+grain, dots, grid, linen, or a custom image) with `chromeTextureIntensity`,
+`chromeTextureFit`, `chromeTextureMatch` (off / bars / interface) and
+`chromeTextureCustomTones`.
+`themeAppliesToDocument` now also gates whether a palette tints the
+document.
+
+**How.** `src/editor/theme-apply.ts` resolves the settings into
+attributes on `<html>` (`data-palette`, `data-accent`, `data-texture`,
+`data-doc-paper`) for both main windows and the timer popout, replacing
+`applyTheme` in index.ts and the popout's duplicate. `src/editor/themes.css`
+(loaded after style.css) holds the token blocks: each palette has a light
+and a dark block; palettes and accents set only `--pmd-accent` /
+`--pmd-accent-hover`, and one `color-mix` rule derives the accent family —
+skipped under `data-cvd`, so the color-vision preset keeps the accent.
+Inline Color overrides still win over everything. The four "dark chrome,
+paper document" restore selectors in style.css now key off
+`data-doc-paper`, set whenever the chrome is themed (dark and/or a palette)
+and apply-to-document is off. `data-theme-doc` keeps its dark-only meaning.
+
+**Custom accent.** `deriveCustomAccent` (theme-apply.ts) turns the picked
+color into light and dark variants held to the presets' bar — white on it
+≥ 4.5:1 in light and ≥ 3:1 in dark, ≥ 3:1 against every palette background —
+moving it toward black (or, in dark, from a 20%-lighter start toward
+black/white) only as far as needed, judged on the rounded hex. They're
+written inline as `--pmd-accent-custom*`, which the `data-accent="custom"`
+blocks feed into the same derivation rule as the presets.
+
+**Textures.** Bundled tiles are inline SVG data URIs under 1 KB each,
+painted by a `::before` under `#ribbon`, `#status-bar` and `.pmd-nav-panel`.
+Dark mode inverts the bundled tiles. The opacity is a live readability cap,
+not a constant: after `applyAppearance` (in a microtask, so Color overrides
+are already applied), theme-apply.ts reads each bar's background and its
+`--pmd-c-text`, `-secondary`, `-muted` (held to 4.5:1) and `--pmd-c-accent`
+(3:1) from the cascade and finds the strongest opacity at which each still
+passes over the texture's most extreme pixel — black/white × the tile's
+darkest-pixel coverage, or a custom image's measured tones. Intensity scales
+0–100% of that, with ceilings of 0.16 (tiles) and 0.35 (images).
+`chromeTextureUncapped` skips the cap (100% = the ceiling). It has no
+settings row on purpose: it's toggled from a right-click menu on the
+Intensity slider (keyboard: Menu key / Shift+F10), and while on the slider
+shows an amber tick at the readable limit (the guard keeps measuring it
+while uncapped), reads "past readable" beyond it, and carries a warning
+line with a **Turn off** link. The two scales differ (readable range vs.
+the fixed ceiling), so switching converts the stored percentage —
+`rescaleIntensity`, capped % × limit/ceiling — and the texture keeps its
+strength. The menu
+closes on Escape through a window-capture listener, ahead of the Settings
+dialog's own document-capture Escape handler. Muted text
+has the least headroom, which is why the cap is computed rather than fixed:
+a fixed 0.16 left it at ~3.1–3.9:1 over dots/grid, and 0.3 for images at
+~2:1. The pseudo-element is only mounted when a texture can
+resolve, so the stock look adds no layer. A custom image is downscaled
+(long side ≤ 1600 px, stepped down until ≤ 250 KB of WebP) and stored as a
+data URL in IndexedDB via `WebSharedStore` (`chrome-texture-store.ts`), not
+in the settings blob; `chromeTextureCustomRev` changes on replace/remove so
+other windows reload it. On import the image's 1st/99th-percentile tones
+(of a 64 px sample, so a stray pixel doesn't count but a dark region does)
+are stored in settings as `chromeTextureCustomTones`, so the light/dark
+match and the cap resolve synchronously at boot without waiting for
+IndexedDB.
+
+**Light/dark match.** `resolveScheme` picks the scheme whose surface the
+image's far tone strays from least, with a dead band so a full-range image
+switches nothing. *Whole interface* sets `data-theme` as if Theme had
+changed. *Just the bars* sets `data-bar-scheme` instead: every color block
+in style.css and themes.css (stock, dark, color-vision, each palette and
+accent, the derivation rule) has a twin selector
+`:root[data-bar-scheme=X]… :is(#ribbon, #status-bar, .pmd-nav-panel,
+.pmd-multi-nav)` that re-declares the tokens on the bars. To make that
+safe, the stock `:root` block is split so color tokens are separate from
+layout values such as the inline `--nav-width`. Bars re-resolve `color` and
+`color-scheme`, which `<body>` computed in the page's scheme. Inline Color
+overrides would lose to those per-bar declarations, so theme-apply.ts
+mirrors them into an `!important` rule scoped to the bars.
+
+**Guardrails.** `tests/editor/themes-css.test.ts` checks that every dark
+palette block re-sets its light tokens, that the picker previews match the
+CSS, and WCAG contrast: chrome text ≥ 4.5:1 on each palette surface, and
+white on the accent ≥ 4.5:1 in light and ≥ 3:1 in dark (the stock dark
+blue's own level). It also runs the live cap over every palette × mode ×
+tile to confirm all three text colors and the accent pass at 100% while the
+texture stays visible, and checks that every color block has its
+`data-bar-scheme` twin. `theme-apply.test.ts` covers the custom accent over
+awkward picks (white, black, pure yellow, neon green), the match modes, and
+the cap math.
+
 ## 1.17.2 — 2026-11-01 (part of 1.17.32)
 
 (The following section has been kept verbatim from upstream.)

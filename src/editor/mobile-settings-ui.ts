@@ -16,6 +16,7 @@
  */
 
 import { confirmDialog } from './text-prompt.js';
+import { ACCENT_OPTIONS, PALETTE_OPTIONS } from './theme-options.js';
 import {
   settings,
   SETTING_METADATA,
@@ -152,6 +153,18 @@ function buildEditor(meta: SettingMeta): HTMLElement {
       return buildNumberField(meta.key);
     case 'theme':
       return buildSegment(meta.key, ['light', 'dark', 'system']);
+    case 'themePalette':
+      return buildSegment(
+        'themePalette',
+        PALETTE_OPTIONS.map((o) => o.value),
+        Object.fromEntries(PALETTE_OPTIONS.map((o) => [o.value, o.label])),
+      );
+    case 'themeAccent':
+      return buildSegment(
+        'themeAccent',
+        ACCENT_OPTIONS.map((o) => o.value),
+        Object.fromEntries(ACCENT_OPTIONS.map((o) => [o.value, o.label])),
+      );
     case 'reduceMotion':
       return buildSegment(meta.key, ['system', 'on', 'off']);
     case 'saveFormat':
