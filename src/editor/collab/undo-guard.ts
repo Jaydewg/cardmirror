@@ -83,6 +83,10 @@ export interface UndoGuard {
   redo: Command;
   /** Install alongside the session plugins — the partner-touched ledger. */
   plugin: Plugin;
+  /** Give the NEXT local commit an undo step of its own (no merging with
+   *  the step before or after) — for programmatic edits such as a
+   *  plugin's `doc.insert`, which must undo on their own. */
+  isolateNextStep(): void;
   /** Test/diagnostic counters. `unrecoverable` = a reversal was needed
    *  but the manager could no longer perform it (a new local edit had
    *  already cleared the redo stack). */
@@ -449,6 +453,7 @@ export function createUndoGuard(opts: UndoGuardOptions): UndoGuard {
     undo: wrap(loroUndo, true),
     redo: wrap(loroRedo, false),
     plugin,
+    isolateNextStep: isolateStep,
     stats,
     dispose: () => {
       unsubscribe();

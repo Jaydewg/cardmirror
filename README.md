@@ -38,12 +38,11 @@ or locked-down school machine.
 >
 > **Desktop builds are unsigned**, so Windows and macOS warn you the
 > first time you launch. The one-time workaround for each is in the
-> install steps below. (By the way -- I'm thinking of buying a IV certificate, so watch out for that.)
+> install steps below.
 >
 > **Be cautious of third-party servers.** Versions of Cardmirror that 
 > support federation can link to servers that in themselves link many
 > other servers. Trust the server you are linking to.
-
 See [`MANUAL.md`](./MANUAL.md) for the full user
 manual; [`PRIVACY.md`](./PRIVACY.md) for how CardMirror handles your data;
 [`TERMS.md`](./TERMS.md) for the terms of use;

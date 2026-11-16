@@ -220,7 +220,12 @@ interface ElectronAPI {
    *  after consent; discard drops the staged release on decline. */
   pluginInstallInspect?(ref: string): Promise<Record<string, unknown>>;
   pluginBrowse?(): Promise<Record<string, unknown>>;
-  pluginInstallCommit?(token: string): Promise<Record<string, unknown>>;
+  /** `granted` = the consented permissions (omitted = keep the prior
+   *  consent on an update, none on a fresh install). */
+  pluginInstallCommit?(token: string, granted?: string[]): Promise<Record<string, unknown>>;
+  /** Change an installed plugin's consented permissions (clamped
+   *  main-side to its manifest's request). */
+  pluginSetPermissions?(id: string, granted: string[]): Promise<Record<string, unknown>>;
   pluginInstallDiscard?(token: string): Promise<void>;
   pluginCommunityInstalls?(on: boolean): Promise<void>;
   pluginList?(): Promise<unknown[]>;
@@ -692,8 +697,11 @@ export class ElectronHost implements Host {
       (await api().pluginBrowse?.()) ?? { ok: false, error: 'This build has no plugin directory.' }
     );
   }
-  async pluginInstallCommit(token: string): Promise<Record<string, unknown>> {
-    return (await api().pluginInstallCommit?.(token)) ?? { ok: false, error: 'unsupported' };
+  async pluginInstallCommit(token: string, granted?: string[]): Promise<Record<string, unknown>> {
+    return (await api().pluginInstallCommit?.(token, granted)) ?? { ok: false, error: 'unsupported' };
+  }
+  async pluginSetPermissions(id: string, granted: string[]): Promise<Record<string, unknown>> {
+    return (await api().pluginSetPermissions?.(id, granted)) ?? { ok: false, error: 'unsupported' };
   }
   async pluginInstallDiscard(token: string): Promise<void> {
     await api().pluginInstallDiscard?.(token);

@@ -19,8 +19,8 @@
  * async clipboard API and, if the browser blocks it, tells the user
  * the keyboard shortcut instead of failing silently.
  *
- * Styling reuses `.pmd-nav-context-menu` to match the other context
- * menus; open/close is coordinated through the shared registry.
+ * Rendering is the shared context-menu builder; granted plugins'
+ * `ui.contextMenu` items follow after a separator.
  */
 
 import { Plugin } from 'prosemirror-state';
@@ -29,7 +29,10 @@ import { showToast } from './toast.js';
 import { writeClipboardHtml, CLIPBOARD_BUSY_MESSAGE } from './clipboard-write.js';
 import { cutInPlaceApplies, markCutInPlace } from './cut-in-place.js';
 import { getElectronHost } from './host/index.js';
-import { registerOpenContextMenu, clearOpenContextMenu } from './context-menu-registry.js';
+import { showContextMenu, type MenuEntry } from './context-menu-builder.js';
+import { pluginMenuEntries, type PluginMenuTarget } from './plugin-caps/menu.js';
+import { governingHeading } from './plugin-extract.js';
+import { getSpeechDocResolver } from './speech-doc-registry.js';
 import { formatKeyForDisplay } from './ribbon-commands.js';
 import { isRightClickContextMenu } from './context-menu-gate.js';
 
@@ -51,101 +54,46 @@ export const textContextMenuPlugin: Plugin = new Plugin({
   },
 });
 
-interface MenuItem {
-  label: string;
-  hint?: string;
-  disabled?: boolean;
-  action: () => void;
-}
-
-let openMenuEl: HTMLElement | null = null;
-
 function showTextContextMenu(x: number, y: number, view: EditorView): void {
-  closeTextContextMenu();
-
   const sel = view.state.selection;
-  const items: MenuItem[] = [
+  const entries: MenuEntry[] = [
     {
+      kind: 'item',
       label: 'Cut',
       hint: formatKeyForDisplay('Mod-X'),
       disabled: sel.empty || !view.editable,
       action: () => void cutSelection(view),
     },
     {
+      kind: 'item',
       label: 'Copy',
       hint: formatKeyForDisplay('Mod-C'),
       disabled: sel.empty,
       action: () => void copySelection(view),
     },
     {
+      kind: 'item',
       label: 'Paste',
       hint: formatKeyForDisplay('Mod-V'),
       disabled: !view.editable,
       action: () => void pasteFromClipboard(view),
     },
+    ...pluginMenuEntries(() => textMenuTarget(view)),
   ];
-
-  const menu = document.createElement('div');
-  menu.className = 'pmd-nav-context-menu';
-  for (const item of items) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'pmd-nav-context-item';
-    btn.textContent = item.label;
-    if (item.hint) {
-      const hint = document.createElement('span');
-      hint.className = 'pmd-context-item-hint';
-      hint.textContent = item.hint;
-      btn.appendChild(hint);
-    }
-    if (item.disabled) {
-      btn.disabled = true;
-      btn.classList.add('pmd-nav-context-item-disabled');
-    }
-    // Keep focus (and the visible DOM selection Copy is about to
-    // serialize) in the editor while the menu is clicked.
-    btn.addEventListener('mousedown', (e) => e.preventDefault());
-    btn.addEventListener('click', () => {
-      if (item.disabled) return;
-      closeTextContextMenu();
-      item.action();
-    });
-    menu.appendChild(btn);
-  }
-
-  document.body.appendChild(menu);
-  const rect = menu.getBoundingClientRect();
-  const maxX = window.innerWidth - rect.width - 4;
-  const maxY = window.innerHeight - rect.height - 4;
-  menu.style.left = `${Math.min(x, Math.max(0, maxX))}px`;
-  menu.style.top = `${Math.min(y, Math.max(0, maxY))}px`;
-
-  openMenuEl = menu;
-  registerOpenContextMenu(closeTextContextMenu);
-  // Defer, so the contextmenu's own trailing events can't instantly
-  // dismiss the menu (same reason the image menu defers).
-  setTimeout(() => {
-    window.addEventListener('mousedown', maybeCloseTextContextMenu, { capture: true });
-    window.addEventListener('keydown', maybeCloseTextContextMenu, { capture: true });
-  });
+  showContextMenu(x, y, entries);
 }
 
-function closeTextContextMenu(): void {
-  if (!openMenuEl) return;
-  openMenuEl.remove();
-  openMenuEl = null;
-  clearOpenContextMenu(closeTextContextMenu);
-  window.removeEventListener('mousedown', maybeCloseTextContextMenu, { capture: true });
-  window.removeEventListener('keydown', maybeCloseTextContextMenu, { capture: true });
-}
-
-function maybeCloseTextContextMenu(e: MouseEvent | KeyboardEvent): void {
-  if (e instanceof KeyboardEvent) {
-    if (e.key === 'Escape') closeTextContextMenu();
-    return;
-  }
-  if (!openMenuEl) return;
-  if (!openMenuEl.contains(e.target as Node)) closeTextContextMenu();
+/** What a plugin menu item is told about this right-click. */
+function textMenuTarget(view: EditorView): PluginMenuTarget {
+  const { doc, selection } = view.state;
+  const heading = governingHeading(doc, selection.from);
+  return {
+    surface: 'text',
+    docUid: getSpeechDocResolver().uidForView(view),
+    headingId: heading?.id ?? null,
+    headingType: (heading?.type as PluginMenuTarget['headingType']) ?? null,
+    selectionText: selection.empty ? '' : doc.textBetween(selection.from, selection.to, '\n'),
+  };
 }
 
 /** Serialize the live selection exactly as a keyboard copy would and

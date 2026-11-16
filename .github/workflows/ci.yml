@@ -56,6 +56,14 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: npm run check:links
 
+      - name: Check plugin packages
+        # Plugins under plugins/ are standalone packages (their own tests,
+        # typecheck and build) that the root suite doesn't run. They use
+        # the root's tools, so this runs after `npm ci`; one runner is
+        # enough, since they don't touch the filesystem layer.
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run check:plugins
+
       - name: Run tests
         # File-dependent round-trip / mark-fidelity suites discover
         # fixtures via CARDMIRROR_DOCS_DIR (default `reference-docs/

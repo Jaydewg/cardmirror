@@ -73,8 +73,31 @@ import { installExternalConsent } from './external-consent-ui.js';
 import { maybeSnapshotVersion } from './version-history.js';
 import { awaitWithSaveWatchdog, warnIfSlow } from './save-watchdog.js';
 import { installExternalInsertHost } from './external-insert-host.js';
-import { installPluginRegistry } from './plugin-registry.js';
-import { createPluginApi } from './plugin-api.js';
+import {
+  installPluginRegistry,
+  pluginHasPermission,
+  regrantPlugin,
+  setPluginConsent,
+  setPluginManifestPermissions,
+} from './plugin-registry.js';
+import {
+  createPluginApi,
+  type PluginCollabBridge,
+  type PluginJoinOutcome,
+} from './plugin-api.js';
+import { permissionConsentDialog } from './plugin-permission-dialog.js';
+import {
+  adoptPluginFileData,
+  collectPluginFileData,
+  setUnclaimedPluginDataListener,
+} from './plugin-file-data.js';
+import type { PluginFileBag } from '../native/plugin-data.js';
+import { syncPermissionDemo } from './plugin-permission-demo.js';
+import {
+  notifyPluginDocChanged,
+  notifyPluginFocusChanged,
+  notifyPluginSelectionChanged,
+} from './plugin-caps/events.js';
 import { installPluginJumpHost } from './plugin-jump-host.js';
 import { isPluginEnabled, reconcilePluginState } from './plugins-store.js';
 import { appVersion } from './install-info.js';
@@ -1114,6 +1137,9 @@ let multiDocGetFilenameForUid: ((uid: string) => string | null) | null = null;
 let multiDocGetDocIdForUid: ((uid: string) => string | null) | null = null;
 // Collab join/resume in the workspace (slot-picker session docs).
 let multiDocCreateSessionDoc: (() => Promise<string | null>) | null = null;
+/** Join-from-file: replace the clean pane `uid` with a session doc that
+ *  keeps its file. */
+let multiDocCreateSessionDocReplacing: ((uid: string) => Promise<string | null>) | null = null;
 let multiDocSetFilenameForUid: ((uid: string, name: string) => void) | null = null;
 /** App-quit path: the shell prompts to save every unsaved pane, returning false
  *  if the user cancels (abort the quit). null in single-doc mode. */
@@ -1127,6 +1153,7 @@ let multiDocGetFocusedFile:
       handle: unknown | null;
       format: 'cmir' | 'docx' | null;
       docId: string | null;
+      plugins?: PluginFileBag | null;
       uid: string;
       dirty?: boolean;
     } | null)
@@ -1190,6 +1217,7 @@ let multiDocOnRecoveredDoc:
       handle: unknown;
       format: 'cmir' | 'docx' | null;
       docId: string | null;
+      plugins?: PluginFileBag | null;
       doc: import('prosemirror-model').Node;
       threads: Thread[];
       dirty: boolean;
@@ -1247,6 +1275,7 @@ export function enableMultiDocMode(opts: {
    *  user-picked slot to hold the session. Returns its uid, or null when the
    *  user cancels the slot picker. */
   createSessionDoc?: () => Promise<string | null>;
+  createSessionDocReplacing?: (uid: string) => Promise<string | null>;
   /** Rename the open doc with `uid` wherever it lives — session title adoption
    *  targets the owner doc, which may no longer be the focused one. */
   setFilenameForUid?: (uid: string, name: string) => void;
@@ -1265,6 +1294,7 @@ export function enableMultiDocMode(opts: {
     handle: unknown;
     format: 'cmir' | 'docx' | null;
     docId: string | null;
+    plugins?: PluginFileBag | null;
     doc: import('prosemirror-model').Node;
     threads: Thread[];
     dirty: boolean;
@@ -1306,6 +1336,7 @@ export function enableMultiDocMode(opts: {
   multiDocGetFilenameForUid = opts.getFilenameForUid ?? null;
   multiDocGetDocIdForUid = opts.getDocIdForUid ?? null;
   multiDocCreateSessionDoc = opts.createSessionDoc ?? null;
+  multiDocCreateSessionDocReplacing = opts.createSessionDocReplacing ?? null;
   multiDocSetFilenameForUid = opts.setFilenameForUid ?? null;
   multiDocPromptSaveAllForQuit = opts.promptSaveAllForQuit ?? null;
   multiDocCaptureFocusedCleanToken = opts.captureFocusedCleanToken ?? null;
@@ -1400,6 +1431,8 @@ export function setActiveView(v: EditorView | null): void {
   // The shared collab chip follows the focused doc's session — repaint it
   // now instead of waiting for that session's next status event.
   notifyCollabFocusChange();
+  // Plugins with `doc.events` (deduped: fires only on an actual switch).
+  if (focusChanged) notifyPluginFocusChanged(() => (view ? activeDocIdentity().sessionUid : null));
   // Re-sync the chrome that depends on `view` (font-size chip,
   // word-count display, paragraph integrity indicator,
   // read-mode toggle pressed-state, speech-mark button, etc.).
@@ -1455,6 +1488,9 @@ export function endBenchmark(snapshot: EditorState | null): void {
 // and the two state-swap capabilities it needs. Dormant unless the
 // collab gate is open (see collab/collab-gate.ts).
 let collabUiModule: Promise<typeof import('./collab/collab-ui.js')> | null = null;
+/** The collab module once loaded — sync access for the plugin API (no
+ *  module loaded ⇒ no live session anywhere in this window). */
+let collabUiLoaded: typeof import('./collab/collab-ui.js') | null = null;
 /** Display filename for a doc uid across single-doc + multi-pane. Collab names
  *  a session after its OWNER doc via this; document.title is unusable in
  *  multi-pane (every open doc joined by " · "). Null when the uid isn't open
@@ -1474,6 +1510,7 @@ function resolveDocPersistentId(uid: string): string | null {
 
 function loadCollabUi(): Promise<typeof import('./collab/collab-ui.js')> {
   return (collabUiModule ??= import('./collab/collab-ui.js').then((m) => {
+    collabUiLoaded = m;
     // Tell collab-ui which doc is focused so its shared chip / no-deps flows
     // (copy-code, invite) act on the session the user is looking at when a
     // window holds more than one.
@@ -1616,7 +1653,7 @@ const collabDeps = {
  *  the pin, getOwnerUid() would stay null and the session would bind
  *  to nothing. Ordinary flows omit it: uid is set when the slot picker
  *  creates the session doc. */
-function makeMultiPaneSessionDeps(existingUid?: string) {
+function makeMultiPaneSessionDeps(existingUid?: string, opts?: { replaceUid?: string }) {
   let uid: string | null = existingUid ?? null;
   const viewFor = (u: string | null): EditorView | null =>
     u ? getSpeechDocResolver().viewForUid(u) : null;
@@ -1643,7 +1680,10 @@ function makeMultiPaneSessionDeps(existingUid?: string) {
     // Fresh unsaved doc in a user-picked slot; the Loro binding replaces its
     // blank content with the session's CRDT state after refreshPlugins.
     newSessionDoc: async (): Promise<boolean> => {
-      const created = (await multiDocCreateSessionDoc?.()) ?? null;
+      const created =
+        (opts?.replaceUid && multiDocCreateSessionDocReplacing
+          ? await multiDocCreateSessionDocReplacing(opts.replaceUid)
+          : await multiDocCreateSessionDoc?.()) ?? null;
       if (!created) return false;
       uid = created;
       return true;
@@ -2556,6 +2596,127 @@ async function replaceWithSessionDoc(): Promise<boolean> {
   // Focus after hide (2026-07-27 focus audit: mountView drops focus to
   // body; the Loro binding then replaces the content, which focus
   // survives). Keyboard works in the joined session with no click.
+  view?.focus();
+  return true;
+}
+
+/** Host side of the plugin API's `collab.*` permissions. Sync reads go
+ *  through the already-loaded collab module (not loaded ⇒ no session in
+ *  this window); join loads it. */
+const pluginCollabBridge: PluginCollabBridge = {
+  sessionInfo: (uid) => collabUiLoaded?.sessionInfoForUid(uid) ?? null,
+  editShareCode: (uid) => collabUiLoaded?.editShareCodeForUid(uid) ?? null,
+  editAddress: (uid) => collabUiLoaded?.editAddressForUid(uid) ?? null,
+  viewCode: (uid) => collabUiLoaded?.viewCodeForUid(uid) ?? null,
+  viewAddress: (uid) => collabUiLoaded?.viewAddressForUid(uid) ?? null,
+  server: async () => {
+    try {
+      return await (await loadCollabUi()).currentServer();
+    } catch {
+      return null;
+    }
+  },
+  reach: async (url) => {
+    try {
+      return await (await loadCollabUi()).serverReach(url);
+    } catch {
+      return 'unknown';
+    }
+  },
+  parseAddress: async (raw) => {
+    try {
+      return await (await loadCollabUi()).parseAddressForPlugin(raw);
+    } catch {
+      return null;
+    }
+  },
+  localRecord: async (roomId) => {
+    try {
+      const rec = (await listSessionRecords()).find((r) => r.roomId === roomId);
+      return rec ? { docId: rec.docId ?? null, role: rec.role } : null;
+    } catch {
+      return null;
+    }
+  },
+  probe: async (code) => {
+    try {
+      return await (await loadCollabUi()).probeShareCode(code);
+    } catch {
+      return 'unknown';
+    }
+  },
+  join: async (codeOrAddress, requestedIntoDoc) => {
+    const m = await loadCollabUi();
+    // Addresses name their server: one this build can't reach ends here,
+    // before any join UI. A plain code with no server configured goes on
+    // to the normal join path, which explains the missing relay.
+    const route = await m.routeSessionAddress(codeOrAddress);
+    if (route.kind === 'unreachable') return 'unreachable';
+    if (route.kind === 'invalid') return 'invalid';
+    const code = route.kind === 'here' ? route.code : codeOrAddress;
+    // A plugin may ask long after the file opened (a status-bar notice's
+    // Join): if that doc is gone, join as a fresh session doc rather
+    // than letting the fallback replace whatever doc is current.
+    const intoDocUid = requestedIntoDoc && isDocUidOpen(requestedIntoDoc) ? requestedIntoDoc : null;
+    let outcome: PluginJoinOutcome = 'failed';
+    const opts = { report: (o: PluginJoinOutcome) => (outcome = o) };
+    if (multiDocActive) {
+      await m.joinSessionWithCode(
+        makeMultiPaneSessionDeps(undefined, intoDocUid ? { replaceUid: intoDocUid } : undefined),
+        code,
+        opts,
+      );
+    } else if (intoDocUid) {
+      // In place of the just-opened file (never a spawned window), keeping
+      // its file so Save writes the live copy back to it.
+      await m.joinSessionWithCode(
+        {
+          ...collabDeps,
+          spawnJoinWindow: undefined,
+          newSessionDoc: () => replaceWithSessionDocKeepingFile(intoDocUid),
+        },
+        code,
+        opts,
+      );
+    } else {
+      await m.joinSessionWithCode(collabDeps, code, opts);
+    }
+    return outcome;
+  },
+};
+
+/** Whether doc `uid` is open in this window (any pane). */
+function isDocUidOpen(uid: string): boolean {
+  if (multiDocActive) return (multiDocGetFilenameForUid?.(uid) ?? null) !== null;
+  return uid === currentDocUid;
+}
+
+/** Join-from-file (plugin API `collab.join` with `intoDoc`): like
+ *  `replaceWithSessionDoc`, but the session doc KEEPS the file the user
+ *  just opened (name, handle, format, docId), so saving writes the live
+ *  copy back to it. Only for the clean doc `expectedUid`; anything else
+ *  (doc switched, edits made) takes the normal path with its prompt. */
+async function replaceWithSessionDocKeepingFile(expectedUid: string): Promise<boolean> {
+  if (multiDocActive) return false;
+  if (currentDocUid !== expectedUid || currentDocDirty) return replaceWithSessionDoc();
+  const keep = {
+    filename: currentDocFilename,
+    handle: currentDocHandle,
+    format: currentDocFormat,
+    docId: currentDocId,
+  };
+  void clearCurrentJournal();
+  mountView(makeNewDocBody());
+  currentDocFilename = keep.filename;
+  setCurrentDocHandle(keep.handle);
+  currentDocFormat = keep.format;
+  currentDocUid = newSessionDocUid();
+  currentDocId = keep.docId;
+  markCurrentDocClean();
+  syncSingleDocSpeechRegistration();
+  markNonPristineStarter();
+  updateWindowTitle();
+  homeScreen.hide();
   view?.focus();
   return true;
 }
@@ -6178,6 +6339,9 @@ function mountView(doc: PMNode, threads: Thread[] = []): void {
       ) {
         scheduleSelectionChromeRefresh();
       }
+      // Plugins with `doc.events` (debounced there; no-ops with no listener).
+      if (tx.docChanged) notifyPluginDocChanged(currentDocUid, isSyncOrigin(tx));
+      else if (!prevState.selection.eq(next.selection)) notifyPluginSelectionChanged(currentDocUid);
       // Doc-walking work (nav rebuild, word count, comments column
       // refresh, comments-plugin orphan GC) is all O(doc) and the
       // dominant per-keystroke cost on big docs. Debounce it, and run
@@ -6600,11 +6764,21 @@ async function stampActiveFileDocId(docId: string): Promise<void> {
 /** Adopt the docId read from an opened file (null ⇒ minted on next save)
  *  and register the doc so the Learn "By file" view + open-in-context can
  *  find it. */
-function adoptDocId(docId: string | null, name: string, handle: unknown, format: 'cmir' | 'docx' | null): void {
+function adoptDocId(
+  docId: string | null,
+  name: string,
+  handle: unknown,
+  format: 'cmir' | 'docx' | null,
+  plugins?: PluginFileBag | null,
+): void {
   currentDocId = docId;
   if (docId) {
     learnStore.registerDoc({ docId, path: typeof handle === 'string' ? handle : null, name, format });
   }
+  // Plugin data travels with the file (files.data); keyed by the session
+  // uid the caller just set. A .docx (or a .cmir without the field)
+  // clears it — the doc in this uid carries none.
+  adoptPluginFileData({ docUid: currentDocUid, docId, title: name }, plugins ?? null);
   void checkSessionRejoinForOpenedDoc(docId);
 }
 
@@ -7020,11 +7194,13 @@ async function routeOpenedFile(opened: OpenedFile): Promise<void> {
     let docNode: PMNode;
     let docThreads: Thread[] | undefined;
     let docId: string | null = null;
+    let plugins: PluginFileBag | null = null;
     if (!bytesLookLikeDocx(openBytes)) {
       const parsed = parseNative(openBytes);
       docNode = parsed.doc;
       docThreads = parsed.threads.length > 0 ? parsed.threads : undefined;
       docId = parsed.docId;
+      plugins = parsed.plugins;
     } else {
       const result = await openDocxOffThread(openBytes);
       docNode = result.doc;
@@ -7035,6 +7211,7 @@ async function routeOpenedFile(opened: OpenedFile): Promise<void> {
       docNode,
       docThreads,
       docId,
+      plugins,
       name: src.name,
       handle: src.handle ?? null,
       format,
@@ -7058,6 +7235,8 @@ function mountOpenedSingleDoc(args: {
   docNode: PMNode;
   docThreads: Thread[] | undefined;
   docId: string | null;
+  /** The file's plugin data (files.data); absent for .docx / salvage. */
+  plugins?: PluginFileBag | null;
   name: string;
   handle: unknown;
   format: 'cmir' | 'docx';
@@ -7074,7 +7253,7 @@ function mountOpenedSingleDoc(args: {
   // Restore this file's remembered autosave toggle (off if unknown).
   settings.set('autosaveEnabled', isAutosaveOnForPath(args.handle));
   currentDocUid = newSessionDocUid();
-  adoptDocId(args.docId, args.name, args.handle ?? null, args.format);
+  adoptDocId(args.docId, args.name, args.handle ?? null, args.format, args.plugins);
   // A recovered journal / salvaged copy mounts dirty (no on-disk file
   // to be in sync with), so closing prompts to save; a normal open is
   // clean.
@@ -7215,11 +7394,13 @@ async function loadFileInPlace(file: {
   let docNode: PMNode;
   let docThreads: Thread[] | undefined;
   let docId: string | null = null;
+  let plugins: PluginFileBag | null = null;
   if (!bytesLookLikeDocx(openBytes)) {
     const parsed = parseNative(openBytes);
     docNode = parsed.doc;
     docThreads = parsed.threads.length > 0 ? parsed.threads : undefined;
     docId = parsed.docId;
+    plugins = parsed.plugins;
   } else {
     const result = await openDocxOffThread(openBytes);
     docNode = result.doc;
@@ -7234,7 +7415,7 @@ async function loadFileInPlace(file: {
   // Restore this file's remembered autosave toggle (off if unknown).
   settings.set('autosaveEnabled', isAutosaveOnForPath(file.handle));
   currentDocUid = newSessionDocUid();
-  adoptDocId(docId, file.filename, file.handle, file.format);
+  adoptDocId(docId, file.filename, file.handle, file.format, plugins);
   if (file.recovered) markCurrentDocDirty();
   else markCurrentDocClean();
   syncSingleDocSpeechRegistration();
@@ -8328,7 +8509,22 @@ async function serializeForSave(
     // benefit for free). Output bytes are identical to the sync path.
     // `.cmir` keeps intra-doc windows (self_ref) as live references — the
     // source is in the same file, so the file stays self-contained.
-    return serializeNativeAsync(exportDocNode, { ...threadsOpt, ...(docId ? { docId } : {}) });
+    // Plugin data (files.data) rides the same rule as the docId: only a
+    // working-copy / full save of the active doc carries it; derived and
+    // lossy exports stay clean.
+    const plugins =
+      docId && !source
+        ? collectPluginFileData({
+            docUid: activeDocIdentity().sessionUid,
+            docId,
+            title: activeFile().filename || 'Untitled',
+          })
+        : undefined;
+    return serializeNativeAsync(exportDocNode, {
+      ...threadsOpt,
+      ...(docId ? { docId } : {}),
+      ...(plugins ? { plugins } : {}),
+    });
   }
   // Word has no live-window concept: materialize each self_ref window to real
   // cards (resolved from the source, ids re-stamped) before export.
@@ -8938,11 +9134,13 @@ async function reloadActiveFromDisk(handle: string): Promise<void> {
     let docNode: PMNode;
     let docThreads: Thread[] | undefined;
     let docId: string | null;
+    let plugins: PluginFileBag | null = null;
     if (!bytesLookLikeDocx(openBytes)) {
       const parsed = parseNative(openBytes);
       docNode = parsed.doc;
       docThreads = parsed.threads.length > 0 ? parsed.threads : undefined;
       docId = parsed.docId;
+      plugins = parsed.plugins;
     } else {
       const result = await openDocxOffThread(openBytes);
       docNode = result.doc;
@@ -8953,6 +9151,7 @@ async function reloadActiveFromDisk(handle: string): Promise<void> {
       docNode,
       docThreads,
       docId,
+      plugins,
       name: file.name,
       handle: file.handle,
       format: file.format,
@@ -9445,9 +9644,11 @@ async function runJournalWrite(): Promise<boolean> {
   const format = currentDocFormat;
   const docId = currentDocId;
   try {
+    const plugins = collectPluginFileData({ docUid: uid, docId, title: filename || 'Untitled' });
     const bytes = await serializeNativeAsync(view.state.doc, {
       threads: Array.from(getCommentsState(view.state).threads.values()),
       ...(docId ? { docId } : {}),
+      ...(plugins ? { plugins } : {}),
     });
     // The doc was swapped out while we serialized: these bytes belong to a
     // session that is over, and its journal was cleared by the switch.
@@ -10338,15 +10539,25 @@ async function initPlugins(): Promise<void> {
     // the async plugin load), and an uninstalled plugin's button vanishes.
     renderCustomRibbonButtons();
   };
-  installPluginRegistry((pluginId) =>
+  installPluginRegistry((pluginId, grant) =>
     createPluginApi(pluginId, {
       appVersion,
+      // Live grant: a call through an api object minted before a revoke
+      // is refused (see CALL_TIME_PERMISSIONS in plugin-api.ts).
+      isGranted: pluginHasPermission,
       getView: () => getActiveView(),
       findViewForDocId: (docId) => findViewForDocId(docId),
       getDocIdentity: () => {
         const a = activeDocIdentity();
         return { docId: a.docId, docTitle: activeFile().filename || 'Untitled' };
       },
+      getFocusedDocUid: () => activeDocIdentity().sessionUid,
+      viewForUid: (uid) => getSpeechDocResolver().viewForUid(uid),
+      docIdentityForUid: (uid) => {
+        if (!getSpeechDocResolver().viewForUid(uid)) return null;
+        return { docId: resolveDocPersistentId(uid), docTitle: resolveDocFilename(uid) || 'Untitled' };
+      },
+      collab: pluginCollabBridge,
       ensureDocId: () => {
         try {
           // Same three-step path the Learn flows use: mint the id, register
@@ -10366,21 +10577,77 @@ async function initPlugins(): Promise<void> {
           return null;
         }
       },
-    }),
-    { onCommandsChanged: rebuildKeymapsForPluginCommands },
+    }, grant),
+    {
+      onCommandsChanged: rebuildKeymapsForPluginCommands,
+      // A bundle loaded from file (no install-time consent) that declares
+      // supported permissions: ask once; the answer holds for this session.
+      onPermissionRequest: (pluginId, name, known, unknown) => {
+        void permissionConsentDialog({ mode: 'dev', name, known, unknown }).then((ok) => {
+          regrantPlugin(pluginId, ok ? known : []);
+          if (ok) showToast(`${name} can use the permissions you allowed until CardMirror restarts.`);
+        });
+      },
+    },
   );
-  let installed: { id: string; name: string; incompatible?: string }[];
+  // Files carrying data from a plugin that can't read it: say why, once
+  // per opened doc — after the installed plugins have loaded, so a plugin
+  // still booting isn't reported as missing.
+  let markPluginsBooted: () => void = () => {};
+  const pluginsBooted = new Promise<void>((resolve) => {
+    markPluginsBooted = resolve;
+  });
+  setUnclaimedPluginDataListener((ctx, entries) => {
+    void pluginsBooted.then(() => {
+      const lines = entries
+        .filter((e) => !pluginHasPermission(e.id, 'files.data'))
+        .map((e) => {
+          const inst = installed?.find((p) => p.id === e.id);
+          const why = !inst
+            ? 'isn\u2019t installed'
+            : !isPluginEnabled(e.id)
+              ? 'is turned off'
+              : 'doesn\u2019t have permission to use its data';
+          return `\u2022 ${e.name} ${why}`;
+        });
+      if (lines.length === 0) return;
+      postNotice({
+        severity: 'info',
+        title: `Plugin data in \u201c${ctx.title}\u201d`,
+        body:
+          `This file has data from plugins that can\u2019t read it here:\n${lines.join('\n')}\n` +
+          'Saving keeps that data unchanged.',
+      });
+    });
+  });
+  let installed:
+    | {
+        id: string;
+        name: string;
+        incompatible?: string;
+        permissions?: string[];
+        grantedPermissions?: string[];
+      }[]
+    | undefined;
   try {
-    installed = (await host.pluginList()) as { id: string; name: string; incompatible?: string }[];
+    installed = (await host.pluginList()) as NonNullable<typeof installed>;
   } catch (err) {
     console.warn('[plugins] could not list installed plugins:', err);
     showToast('Plugins failed to load.');
+    markPluginsBooted();
     return;
   }
   // Drop leftovers (enabled flags, storage bags, key overrides) from
   // plugins whose install DIRECTORY is gone — the one unambiguous
   // "really uninstalled" signal; a mere load failure prunes nothing.
   reconcilePluginState(new Set(installed.map((p) => p.id)));
+  // Stored consent for EVERY install (enabled or not): a plugin switched on
+  // later from Settings registers with its grant, and an installed plugin
+  // is never mistaken for an unconsented dev load.
+  for (const p of installed) {
+    setPluginConsent(p.id, p.grantedPermissions ?? []);
+    setPluginManifestPermissions(p.id, p.permissions ?? []);
+  }
   for (const p of installed) {
     if (!isPluginEnabled(p.id)) continue;
     // Listed-but-incompatible (needs a newer CardMirror): main refuses to
@@ -10397,6 +10664,10 @@ async function initPlugins(): Promise<void> {
       showToast(`Plugin ${p.name} failed to load.`);
     }
   }
+  // Dev fixture behind the `__plugins('perm-demo-on')` console flag —
+  // registered last, so its consent prompt never interleaves with boot.
+  if (settings.get('pluginPermissionDemo')) syncPermissionDemo(true);
+  markPluginsBooted();
 }
 void initPlugins();
 // Console gate for community (non-allowlisted) plugin installs. Installs
@@ -10902,12 +11173,14 @@ async function mountFromSpawnPayload(
     let docNode: PMNode;
     let docThreads: Thread[] | undefined;
     let docId: string | null;
+    let plugins: PluginFileBag | null = null;
     const format = payload.format ?? formatFromFilename(payload.filename) ?? 'docx';
     if (!bytesLookLikeDocx(openBytes)) {
       const parsed = parseNative(openBytes);
       docNode = parsed.doc;
       docThreads = parsed.threads.length > 0 ? parsed.threads : undefined;
       docId = parsed.docId;
+      plugins = parsed.plugins;
     } else {
       const result = await openDocxOffThread(openBytes);
       docNode = result.doc;
@@ -10926,7 +11199,7 @@ async function mountFromSpawnPayload(
     if (payload.uid && payload.recoveredFromSavedAt) {
       markRecoveredDraft(payload.uid, payload.recoveredFromSavedAt);
     }
-    adoptDocId(docId, payload.filename, payload.handle, format);
+    adoptDocId(docId, payload.filename, payload.handle, format, plugins);
     // Newly spawned window starts clean — even though it has
     // pre-loaded content from the originating window, it hasn't
     // been edited in THIS window's session. Exception: a mode-
@@ -11294,6 +11567,7 @@ async function runStartupRecoveryInner(): Promise<void> {
             handle: entry.handle,
             format: entry.format,
             docId: parsed.docId,
+            plugins: parsed.plugins,
             doc: parsed.doc,
             threads: parsed.threads,
             // Sidebar recovery = crash recovery: the journal holds
@@ -11535,6 +11809,7 @@ async function autoRecoverAll(
           handle: entry.handle,
           format: entry.format,
           docId: parsed.docId,
+          plugins: parsed.plugins,
           doc: parsed.doc,
           threads: parsed.threads,
           dirty: wasDirty(entry.uid),
@@ -11630,7 +11905,7 @@ async function applyRecovery(
   // Restore the Learn doc id from the recovered bytes so flashcards
   // re-associate (and a never-saved doc's cards stay keyed to the
   // reused uid above). adoptDocId registers it when present.
-  adoptDocId(parsed.docId, entry.filename, entry.handle, entry.format);
+  adoptDocId(parsed.docId, entry.filename, entry.handle, entry.format, parsed.plugins);
   // Crash recovery restores content that wasn't successfully saved
   // on the previous session, so it mounts dirty. A mode-switch
   // reopen of a pre-switch-clean doc mounts clean instead.

@@ -19,6 +19,7 @@
  *     "formatVersion": 1,
  *     "createdBy": "CardMirror 0.x",
  *     "createdAt": "2026-…",
+ *     "plugins": { "<id>": {...} }, // optional (see plugin-data.ts)
  *     "doc": { ...PM-doc JSON },
  *     "threads": [ ...Thread[] ]   // optional
  *   }
@@ -43,7 +44,8 @@ import {
 } from '../schema/migrate.js';
 import { normalizeReadingMarkers } from '../schema/reading-marker.js';
 import type { Thread } from '../editor/comments-plugin.js';
-import { gzip, gzipAsync, gunzip, isGzip } from './codec.js';
+import { gzip, gzipAsync, gunzip, isGzip, withGzipComment } from './codec.js';
+import { gzipCommentForBag, sanitizePluginBag, type PluginFileBag } from './plugin-data.js';
 
 /** Magic identifier present in every CardMirror native file. Rejects
  *  arbitrary JSON files. */
@@ -63,6 +65,9 @@ export interface NativeFile {
   createdBy: string;
   /** ISO 8601 timestamp. */
   createdAt: string;
+  /** Per-plugin data (see plugin-data.ts). Written BEFORE `doc` so a
+   *  quick `zcat | head` shows it. Omitted when empty. */
+  plugins?: PluginFileBag;
   /** ProseMirror doc JSON. Round-tripped via `PMNode.toJSON` and
    *  `Schema.nodeFromJSON`. */
   doc: unknown;
@@ -84,6 +89,9 @@ export interface SerializeNativeOptions {
   /** Stable per-document UUID (see `NativeFile.docId`). Written only
    *  when provided, so callers that don't track it are unaffected. */
   docId?: string;
+  /** Per-plugin data to embed (sanitized here); summaries also go into
+   *  the gzip header comment. Omit for clean exports. */
+  plugins?: PluginFileBag;
 }
 
 /** Diagnostic hook for the save-time structural tripwire below. The
@@ -146,11 +154,13 @@ function tripwireForSave(doc: PMNode): PMNode {
  *  tell compressed files from legacy plaintext ones (which begin
  *  with `{`). */
 function buildNativeEnvelope(doc: PMNode, opts: SerializeNativeOptions): Uint8Array {
+  const plugins = opts.plugins ? sanitizePluginBag(opts.plugins) : {};
   const file: NativeFile = {
     format: FORMAT_ID,
     formatVersion: FORMAT_VERSION,
     createdBy: opts.appVersion ?? 'CardMirror',
     createdAt: new Date().toISOString(),
+    ...(Object.keys(plugins).length > 0 ? { plugins } : {}),
     doc: tripwireForSave(doc).toJSON(),
   };
   if (opts.threads && opts.threads.length > 0) {
@@ -168,7 +178,14 @@ export function serializeNative(
   doc: PMNode,
   opts: SerializeNativeOptions = {},
 ): Uint8Array {
-  return gzip(buildNativeEnvelope(doc, opts));
+  return withPluginComment(gzip(buildNativeEnvelope(doc, opts)), opts);
+}
+
+/** Splice the plugins' summaries into the gzip header comment. A no-op
+ *  (identical bytes) when no plugin entry has a summary. */
+function withPluginComment(gz: Uint8Array, opts: SerializeNativeOptions): Uint8Array {
+  const comment = opts.plugins ? gzipCommentForBag(sanitizePluginBag(opts.plugins)) : undefined;
+  return comment ? withGzipComment(gz, comment) : gz;
 }
 
 /** `serializeNative`, but the gzip DEFLATE runs off the main thread
@@ -181,9 +198,21 @@ export function serializeNativeAsync(
   opts: SerializeNativeOptions = {},
 ): Promise<Uint8Array> {
   const last = lastAsyncSerialize;
-  if (last && last.doc === doc && sameSerializeInputs(last.opts, opts)) return last.bytes;
-  const bytes = gzipAsync(buildNativeEnvelope(doc, opts));
-  lastAsyncSerialize = { doc, opts: { ...opts, threads: opts.threads ? [...opts.threads] : undefined }, bytes };
+  if (
+    last &&
+    last.doc === doc &&
+    sameSerializeInputs(last.opts, opts) &&
+    last.pluginsKey === pluginsKey(opts.plugins)
+  ) {
+    return last.bytes;
+  }
+  const bytes = gzipAsync(buildNativeEnvelope(doc, opts)).then((gz) => withPluginComment(gz, opts));
+  lastAsyncSerialize = {
+    doc,
+    opts: { ...opts, threads: opts.threads ? [...opts.threads] : undefined },
+    pluginsKey: pluginsKey(opts.plugins),
+    bytes,
+  };
   // A failed gzip must not be served to the next caller.
   bytes.catch(() => {
     if (lastAsyncSerialize?.bytes === bytes) lastAsyncSerialize = null;
@@ -200,8 +229,20 @@ export function serializeNativeAsync(
 let lastAsyncSerialize: {
   doc: PMNode;
   opts: SerializeNativeOptions;
+  /** Plugin data is plain JSON a hook may rebuild each save — compared
+   *  by content, not identity. */
+  pluginsKey: string;
   bytes: Promise<Uint8Array>;
 } | null = null;
+
+function pluginsKey(plugins: PluginFileBag | undefined): string {
+  if (!plugins || Object.keys(plugins).length === 0) return '';
+  try {
+    return JSON.stringify(plugins);
+  } catch {
+    return `uncacheable:${Math.random()}`;
+  }
+}
 
 function sameSerializeInputs(a: SerializeNativeOptions, b: SerializeNativeOptions): boolean {
   if (a.docId !== b.docId || a.appVersion !== b.appVersion) return false;
@@ -216,6 +257,8 @@ export interface ParseNativeResult {
   threads: Thread[];
   /** Stable per-document UUID, or null on files that predate it. */
   docId: string | null;
+  /** Per-plugin data (sanitized); empty when the file has none. */
+  plugins: PluginFileBag;
   meta: {
     createdBy: string;
     createdAt: string;
@@ -369,6 +412,7 @@ function parseNativeImpl(
     doc,
     threads: Array.isArray(file.threads) ? file.threads : [],
     docId: typeof file.docId === 'string' && file.docId ? file.docId : null,
+    plugins: sanitizePluginBag(file.plugins),
     meta: {
       createdBy: typeof file.createdBy === 'string' ? file.createdBy : '',
       createdAt: typeof file.createdAt === 'string' ? file.createdAt : '',

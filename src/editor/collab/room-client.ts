@@ -306,6 +306,31 @@ export class RoomsClient {
     }
   }
 
+  /** Is this room still live? One tiny read — `after` past every seq, so
+   *  the relay sends neither the snapshot nor any updates — that never
+   *  posts presence or touches session state (plugin API `collab.probe`).
+   *  `ended` on 404/410 (the same "room gone" test join uses); `unknown`
+   *  for anything else (offline, auth, timeout, odd answers). Bypasses
+   *  `request()` on purpose: a probe of an ended room is an expected
+   *  answer, not a relay failure for the health stats. */
+  async probeRoom(roomId: string, timeoutMs = 5_000): Promise<'live' | 'ended' | 'unknown'> {
+    const headers = this.headers();
+    if ((headers['Authorization'] ?? '').trim() === 'Bearer') return 'unknown';
+    let res: Response;
+    try {
+      res = await this.fetchImpl(
+        `${this.opts.baseUrl()}/rooms/${roomId}/updates?after=${Number.MAX_SAFE_INTEGER}`,
+        { headers, signal: withDeadline(undefined, timeoutMs) },
+      );
+    } catch {
+      return 'unknown';
+    }
+    // Release the connection; the body itself doesn't matter.
+    await res.text().catch(() => '');
+    if (res.status === 404 || res.status === 410) return 'ended';
+    return res.ok ? 'live' : 'unknown';
+  }
+
   /** `keepalive`: let the browser finish the request after the page
    *  unloads (tab close / reload) — the only way a send started from a
    *  hidden or unloading page survives. Browsers cap keepalive bodies

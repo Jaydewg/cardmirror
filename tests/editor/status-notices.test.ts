@@ -115,3 +115,39 @@ describe('status notices', () => {
     expect(bodyEl.textContent).toBe(long);
   });
 });
+
+describe('notice actions', () => {
+  it('render before Copy/Dismiss; a click dismisses, then runs; a throw is contained', () => {
+    const run = vi.fn();
+    const boom = vi.fn(() => {
+      throw new Error('boom');
+    });
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    postNotice({ severity: 'info', title: 'A', body: 'a', key: 'a', actions: [{ label: 'Join', run }] });
+    postNotice({ severity: 'info', title: 'B', body: 'b', key: 'b', actions: [{ label: 'Boom', run: boom }] });
+    chip().click();
+    const labels = [...document.querySelectorAll('.pmd-notice-actions')].map((row) =>
+      [...row.querySelectorAll('button')].map((b) => b.textContent),
+    );
+    expect(labels).toContainEqual(['Join', 'Copy', 'Dismiss']);
+    btn('Join')!.click();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(noticeCount()).toBe(1);
+    btn('Boom')!.click();
+    expect(boom).toHaveBeenCalledTimes(1);
+    expect(err).toHaveBeenCalled();
+    expect(noticeCount()).toBe(0);
+    err.mockRestore();
+  });
+
+  it('a keyed repeat replaces the actions', () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    postNotice({ severity: 'info', title: 'A', body: 'a', key: 'k', actions: [{ label: 'Go', run: first }] });
+    postNotice({ severity: 'info', title: 'A', body: 'a', key: 'k', actions: [{ label: 'Go', run: second }] });
+    chip().click();
+    btn('Go')!.click();
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+});
