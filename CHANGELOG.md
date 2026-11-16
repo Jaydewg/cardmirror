@@ -5,6 +5,20 @@ changes in each release, written for users of the editor. For
 in-depth rationale and implementation context behind each entry,
 see `DETAILED_CHANGELOG.md`.
 
+## Unreleased
+
+- **Palettes, accent colors, and background textures.** Appearance →
+  Theme & chrome now offers palettes (Sepia, Slate, Forest, Rosé, each with
+  a dark version), an accent color, and a faint background texture for the
+  ribbon, navigation pane, and status bar — built-in patterns or your own
+  image. The accent can be any color you pick; it's adjusted only as far as
+  needed to stay readable. Textures are kept faint enough that every label
+  stays readable, and a dark image can switch the bars (or the whole
+  interface) to dark — a bright one to light — so it can show more
+  strongly. The document stays paper-white unless "Apply theme and palette
+  to the document area" is on. Nothing changes until you pick something,
+  and exported files are never affected.
+
 ## 1.17.32 — 2026-11-01
 There were no independent changes in this patch release.
 

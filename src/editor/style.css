@@ -601,10 +601,20 @@ button {
      font (`--pmd-body-font`), which is the editor-content font. */
   --pmd-ui-font: -apple-system, BlinkMacSystemFont, 'Segoe UI',
     Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
 
+/* Color tokens — a separate block from the layout values above so
+   `data-bar-scheme="light"` (theme-apply.ts: a bright custom texture on
+   dark chrome, "Just the bars") can re-declare them on the textured bars
+   without also resetting inline layout values like --nav-width. The dark
+   block below carries the matching `data-bar-scheme="dark"` selector. */
+:root,
+:root[data-bar-scheme="light"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) {
   /* Color palette. Every UI color flows through one of these tokens
      so dark mode / colorblind / high-contrast presets can swap a small
      set of values rather than sweeping through 1000+ lines of CSS.
+     Named palettes, accent colors, and chrome textures layer on top
+     in themes.css (loaded after this file).
      See ARCHITECTURE.md §17. New colors should reuse a token if a
      reasonable fit exists; only add a new token when the role is
      genuinely distinct from the existing ones.
@@ -854,7 +864,8 @@ button {
    User overrides from the accessibility panel land as inline
    styles on `<html>`, which beat any CSS-rule specificity — so a
    user customization wins over the theme automatically. */
-:root[data-theme="dark"] {
+:root[data-theme="dark"],
+:root[data-bar-scheme="dark"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) {
   /* Tell the browser to render native form controls (select
      dropdowns, scrollbars, native date/color pickers, etc.) in
      their dark variants. Without this, the popup `<option>` list
@@ -889,6 +900,9 @@ button {
   --pmd-c-text-muted: #9a9a9a;
   --pmd-c-text-faint: #7a7a7a;
   --pmd-c-text-on-accent: #fff;
+  /* Re-resolved here (not just inherited from :root) so bars re-schemed
+     by data-bar-scheme pick up their own muted text. */
+  --pmd-c-card-number: var(--pmd-c-text-muted);
 
   /* Hover / press — solid surfaces lift toward lighter grays;
      button-* overlays flip to translucent WHITE so they brighten
@@ -1043,7 +1057,8 @@ button {
      pure luminance contrast — hue-independent);
    - comment gold + warning amber (already CVD-safe yellow/orange);
    - error reds (always text/icon-redundant in this UI). */
-:root[data-cvd="friendly"] {
+:root[data-cvd="friendly"],
+:root[data-bar-scheme="light"][data-cvd="friendly"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) {
   /* Blue anchor — flashcard identity, focused pane, voice command
      dot, autosave-effective, links, prep-timer Aff. */
   --pmd-c-accent: #0072b2;
@@ -1099,7 +1114,8 @@ button {
 /* Dark theme + preset: brighter Okabe-Ito variants (sky-blue anchor),
    mirroring how the base dark block brightens the base palette. Chip
    foregrounds must brighten too or they vanish on dark surfaces. */
-:root[data-theme="dark"][data-cvd="friendly"] {
+:root[data-theme="dark"][data-cvd="friendly"],
+:root[data-bar-scheme="dark"][data-cvd="friendly"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) {
   --pmd-c-accent: #56b4e9;
   --pmd-c-accent-hover: #7cc4ee;
   --pmd-c-accent-soft: rgba(86, 180, 233, 0.18);
@@ -1137,15 +1153,26 @@ button {
   --pmd-c-cat-undertag-fg: #66d2b3;
 }
 
-/* "Dark chrome, light document" mode. When the theme is dark BUT
-   `themeAppliesToDocument` is off (the default), re-declare the
+/* Bars re-themed by `data-bar-scheme`: text color and native-control
+   scheme are computed on <body> in the PAGE's scheme and inherited, so
+   re-resolve them on the bars. :where() keeps this at zero specificity —
+   any bar's own `color` (e.g. the status bar's secondary text) still wins. */
+:where(:root[data-bar-scheme]) :where(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) {
+  color: var(--pmd-c-text);
+}
+:root[data-bar-scheme="light"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) { color-scheme: light; }
+
+/* "Themed chrome, paper document" mode. `data-doc-paper` is set by
+   theme-apply.ts when the chrome is themed — dark theme and/or a named
+   palette (themes.css) — BUT `themeAppliesToDocument` is off (the
+   default). It re-declares the
    subset of tokens that surface inside the editor back to their
    light-mode values. The chrome above stays dark; the editor
    reads like paper. The few tokens here are the ones that
    actually render inside `.ProseMirror` (or `#editor` /
    `.pmd-pane-editor`) — button / ribbon / status-bar tokens stay
    dark because those don't appear inside the document. */
-:root[data-theme="dark"]:not([data-theme-doc="dark"]) :is(#editor, .pmd-pane-editor) {
+:root[data-doc-paper] :is(#editor, .pmd-pane-editor) {
   /* Re-set the inherited text color directly. CSS-variable
      redefinitions inside this scope don't reach back up to body's
      already-computed `color` value — descendants of body have
@@ -1221,14 +1248,14 @@ button {
    underneath. Container backgrounds in `overflow: auto` cover the
    full scrollable extent regardless of where inner content's box
    ends. */
-:root[data-theme="dark"]:not([data-theme-doc="dark"]) body:not(.pmd-multi-doc) #app,
-:root[data-theme="dark"]:not([data-theme-doc="dark"]) .pmd-pane-body,
+:root[data-doc-paper] body:not(.pmd-multi-doc) #app,
+:root[data-doc-paper] .pmd-pane-body,
 /* …and the document previews (Receive / shelf card preview, Recover,
    version history), whose scroller is `.pmd-recover-preview-scroll`
    around a content-sized `.pmd-pane-editor` host: without this the
    editor's paper stops where the cards end and the rest of the pane
    shows the dark chrome. */
-:root[data-theme="dark"]:not([data-theme-doc="dark"]) .pmd-recover-preview-scroll {
+:root[data-doc-paper] .pmd-recover-preview-scroll {
   background: var(--pmd-c-doc-paper);
 }
 
@@ -3696,6 +3723,252 @@ body.pmd-override-shading [data-shading] {
 }
 .pmd-theme-editor-btn:last-child { border-right: none; }
 
+/* Appearance pickers (palette / accent / texture). Swatch colors are
+   set inline from theme-options.ts — they preview palettes that aren't
+   live on :root, so they can't come from tokens. */
+.pmd-palette-editor,
+.pmd-texture-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.pmd-palette-card,
+.pmd-texture-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.3rem;
+  padding: 0.3rem;
+  background: var(--pmd-c-bg);
+  color: var(--pmd-c-text);
+  border: 1px solid var(--pmd-c-border);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.pmd-palette-card:hover,
+.pmd-texture-tile:hover {
+  background: var(--pmd-c-hover);
+}
+.pmd-palette-card[aria-pressed='true'],
+.pmd-texture-tile[aria-pressed='true'] {
+  border-color: var(--pmd-c-accent);
+  box-shadow: 0 0 0 1px var(--pmd-c-accent);
+}
+.pmd-palette-preview {
+  display: flex;
+  flex-direction: column;
+  width: 4.5rem;
+  height: 2.6rem;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--pmd-c-border-soft);
+}
+.pmd-palette-preview-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 0.85rem;
+  padding: 0 0.25rem;
+}
+.pmd-palette-preview-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+}
+.pmd-palette-preview-line {
+  width: 55%;
+  height: 0.18rem;
+  margin: 0.45rem 0 0 0.35rem;
+  border-radius: 2px;
+  opacity: 0.75;
+}
+.pmd-palette-card-label,
+.pmd-texture-tile-label {
+  text-align: center;
+}
+
+.pmd-accent-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.pmd-accent-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.pmd-accent-swatch {
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--pmd-c-bg);
+  box-shadow: 0 0 0 1px var(--pmd-c-border);
+  cursor: pointer;
+}
+.pmd-accent-swatch[aria-pressed='true'] {
+  box-shadow: 0 0 0 2px var(--pmd-c-text);
+}
+/* "Palette" = follow the palette: a dashed ring marks it as automatic. */
+.pmd-accent-swatch-auto {
+  border-style: dashed;
+  border-color: var(--pmd-c-text-on-accent);
+}
+.pmd-accent-cvd-note {
+  font-size: 0.8rem;
+  color: var(--pmd-c-text-muted);
+}
+.pmd-accent-cvd-note[hidden] { display: none; }
+/* Custom accent: the swatch shows the derived color with a "+" mark; the
+   native color input sits invisibly on top so the OS picker anchors to
+   the swatch. */
+.pmd-accent-custom {
+  position: relative;
+  display: inline-flex;
+}
+.pmd-accent-swatch-custom {
+  position: relative;
+}
+.pmd-accent-swatch-custom::after {
+  content: '+';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--pmd-c-text-on-accent);
+}
+.pmd-accent-custom-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.pmd-texture-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.pmd-texture-tile-tex {
+  position: relative;
+  display: block;
+  width: 3.4rem;
+  height: 2.2rem;
+  border-radius: 4px;
+  background-color: var(--pmd-c-surface);
+  border: 1px solid var(--pmd-c-border-soft);
+  overflow: hidden;
+}
+/* Bundled tiles are black line art: show them faint, and inverted on
+   dark chrome (the same treatment themes.css gives the real chrome). */
+.pmd-texture-tile-tex::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: var(--pmd-tile-tex, none);
+  opacity: 0.35;
+}
+:root[data-theme="dark"] .pmd-texture-tile-tex:not(.pmd-texture-tile-tex-custom)::after {
+  filter: invert(1);
+}
+.pmd-texture-tile-tex-custom {
+  background-size: cover;
+  background-position: center;
+}
+.pmd-texture-custom-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.pmd-texture-custom-row[hidden] { display: none; }
+.pmd-texture-match {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+}
+.pmd-texture-match[hidden] { display: none; }
+.pmd-texture-match .pmd-theme-editor { align-self: flex-start; }
+.pmd-texture-match-status {
+  font-size: 0.8rem;
+  color: var(--pmd-c-text-muted);
+}
+.pmd-texture-intensity {
+  /* Anchors the slider's right-click menu. */
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+/* The nav pane's context-menu look, but placed inside the Settings
+   dialog (absolute to the Intensity row) rather than fixed on <body>. */
+/* Doubled class: .pmd-nav-context-menu (position: fixed) comes later. */
+.pmd-nav-context-menu.pmd-texture-uncap-menu {
+  position: absolute;
+  z-index: 5;
+  white-space: nowrap;
+}
+.pmd-texture-uncap-note {
+  font-size: 0.8rem;
+  color: var(--pmd-c-warning);
+}
+.pmd-texture-uncap-note[hidden] { display: none; }
+.pmd-texture-uncap-off {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--pmd-c-accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.pmd-texture-slider {
+  position: relative;
+  display: inline-flex;
+  flex: 0 1 10rem;
+}
+.pmd-texture-slider input[type='range'] {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--pmd-c-accent);
+}
+/* Readable-limit tick (uncapped only). The native thumb's center runs
+   from half a thumb in from each end, so the track position maps over
+   (100% - thumb width). */
+.pmd-texture-limit-tick {
+  --pmd-thumb: 16px;
+  position: absolute;
+  top: 50%;
+  left: calc(var(--pmd-thumb) / 2 + var(--pmd-limit, 1) * (100% - var(--pmd-thumb)));
+  width: 2px;
+  height: 14px;
+  margin-left: -1px;
+  transform: translateY(-50%);
+  border-radius: 1px;
+  background: var(--pmd-c-warning);
+  pointer-events: none;
+}
+.pmd-texture-limit-tick[hidden] { display: none; }
+.pmd-texture-intensity-value {
+  min-width: 2.5rem;
+  color: var(--pmd-c-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.pmd-texture-intensity-off {
+  opacity: 0.5;
+}
+
 
 /* Multi-slot color editor — highlight / shading display
    overrides. Ordered list of 1-3 color pickers with grow/shrink
@@ -5656,13 +5929,14 @@ html.pmd-nav-flat .pmd-nav-type-analytic:hover .pmd-nav-label {
    inconsistent dimmer entries against the dark chrome, and the
    empty-state message disappears entirely at faint-grey. The nav
    pane is chrome (not gated by `themeAppliesToDocument`) so this
-   only watches `data-theme`. Covers both the single-doc nav panel
+   only watches `data-theme` — and `data-bar-scheme`, which re-themes
+   just the textured bars (theme-apply.ts). Covers both the single-doc nav panel
    and the multi-pane nav rail. */
-:root[data-theme="dark"] :is(.pmd-nav-panel, .pmd-multi-nav),
-:root[data-theme="dark"] :is(.pmd-nav-panel, .pmd-multi-nav) .pmd-nav-empty,
-:root[data-theme="dark"] :is(.pmd-nav-panel, .pmd-multi-nav) .pmd-nav-level-4,
-:root[data-theme="dark"] :is(.pmd-nav-panel, .pmd-multi-nav) .pmd-nav-type-analytic .pmd-nav-label,
-:root[data-theme="dark"] :is(.pmd-nav-panel, .pmd-multi-nav) .pmd-nav-type-analytic:hover .pmd-nav-label {
+:root:is([data-theme="dark"]:not([data-bar-scheme="light"]), [data-bar-scheme="dark"]) :is(.pmd-nav-panel, .pmd-multi-nav),
+:root:is([data-theme="dark"]:not([data-bar-scheme="light"]), [data-bar-scheme="dark"]) :is(.pmd-nav-panel, .pmd-multi-nav) .pmd-nav-empty,
+:root:is([data-theme="dark"]:not([data-bar-scheme="light"]), [data-bar-scheme="dark"]) :is(.pmd-nav-panel, .pmd-multi-nav) .pmd-nav-level-4,
+:root:is([data-theme="dark"]:not([data-bar-scheme="light"]), [data-bar-scheme="dark"]) :is(.pmd-nav-panel, .pmd-multi-nav) .pmd-nav-type-analytic .pmd-nav-label,
+:root:is([data-theme="dark"]:not([data-bar-scheme="light"]), [data-bar-scheme="dark"]) :is(.pmd-nav-panel, .pmd-multi-nav) .pmd-nav-type-analytic:hover .pmd-nav-label {
   color: var(--pmd-c-text-strong);
 }
 
@@ -14255,10 +14529,12 @@ body.pmd-mobile-tablet .pmd-mobile-sheet {
 }
 .pmd-msheet-segment {
   display: flex;
+  flex-wrap: wrap; /* palette / accent segments carry 5–7 options */
   gap: 0.4rem;
 }
 .pmd-msheet-segment button {
   flex: 1 1 0;
+  min-width: 4.25rem;
   min-height: 2.1rem;
   border: 1px solid var(--pmd-c-border-soft);
   border-radius: 6px;

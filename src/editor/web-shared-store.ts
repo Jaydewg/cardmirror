@@ -6,7 +6,9 @@
  * since IndexedDB has no built-in cross-tab change event: after a write we ping
  * the channel and other tabs re-`load()`.
  *
- * WEB ONLY — the Electron editions keep their main-process backends. All ops are
+ * Used web-only by the dropzone + quick-cards stores (their Electron editions
+ * keep main-process backends); the custom chrome texture
+ * (chrome-texture-store.ts) uses it on every host. All ops are
  * best-effort: where IndexedDB is unavailable (private mode, disabled storage,
  * jsdom in tests) `load()` returns null and `save()` no-ops, so the store still
  * works in-memory for the current tab, just without persistence or cross-tab

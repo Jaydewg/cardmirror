@@ -207,6 +207,8 @@ import {
   CHROME_SCALE_MIN_PCT,
   CHROME_SCALE_MAX_PCT,
   migrateAutoUpdateOptOut, migrateDistinguishShadingDefault, effectiveDocTypeFormat } from './settings.js';
+import { applyAppearance } from './theme-apply.js';
+import { initChromeTexture } from './chrome-texture-store.js';
 import { openSaveAs } from './save-as-ui.js';
 import { highlightColorLabel, shadingColorLabel } from './color-palette.js';
 import { viewportSpellcheckPlugin } from './viewport-spellcheck.js';
@@ -2432,7 +2434,7 @@ const ribbonContext: RibbonContext = {
   },
   cycleTheme: () => {
     // light → dark → system → light. The settings subscription
-    // re-runs applyTheme, so this is all the command needs to do.
+    // re-runs applyAppearance, so this is all the command needs to do.
     const order = ['light', 'dark', 'system'] as const;
     const cur = settings.get('theme');
     const next = order[(order.indexOf(cur) + 1) % order.length]!;
@@ -3932,46 +3934,12 @@ function applyUnderlineFollowsFontColor(on: boolean): void {
   document.documentElement.classList.toggle('pmd-underline-follows-color', on);
 }
 
-/** Resolve the user's theme preference + the "apply theme to
- *  document" toggle into `data-theme` / `data-theme-doc`
- *  attributes on the document root. Light is the absence of a
- *  `data-theme` attribute (CSS defaults handle it). Dark mode
- *  toggles every `--pmd-c-*` token via the
- *  `:root[data-theme="dark"]` rule in style.css. When the
- *  theme is dark but `themeAppliesToDocument` is false, the
- *  editor scope re-declares the relevant tokens back to light
- *  so the document keeps its paper-like surface. */
-function applyTheme(
-  pref: 'light' | 'dark' | 'system',
-  appliesToDocument: boolean,
-): void {
-  let effective: 'light' | 'dark';
-  if (pref === 'system') {
-    effective = window.matchMedia('(prefers-color-scheme: dark)').matches
-      ? 'dark'
-      : 'light';
-  } else {
-    effective = pref;
-  }
-  if (effective === 'dark') {
-    document.documentElement.setAttribute('data-theme', 'dark');
-  } else {
-    document.documentElement.removeAttribute('data-theme');
-  }
-  if (effective === 'dark' && appliesToDocument) {
-    document.documentElement.setAttribute('data-theme-doc', 'dark');
-  } else {
-    document.documentElement.removeAttribute('data-theme-doc');
-  }
-}
-
-/** Listen for OS-level prefers-color-scheme changes so 'system'
- *  mode tracks them live. Set up once at boot. */
+/** Theme, palette, accent, and chrome-texture attributes on <html> —
+ *  see theme-apply.ts. 'system' mode tracks OS-level changes live via
+ *  the listener below (set up once at boot). */
 const systemDarkMedia = window.matchMedia('(prefers-color-scheme: dark)');
 systemDarkMedia.addEventListener('change', () => {
-  if (settings.get('theme') === 'system') {
-    applyTheme('system', settings.get('themeAppliesToDocument'));
-  }
+  if (settings.get('theme') === 'system') applyAppearance(settings.all());
 });
 
 /** Apply the `showDocNameChip` setting to `<html>`. The chip's CSS
@@ -4272,7 +4240,7 @@ function applyPillVisibility(): void {
 // Apply read-mode visual state and editing lockdown whenever the
 // setting changes (and once now to handle the persisted value).
 settings.subscribe((s) => {
-  applyTheme(s.theme, s.themeAppliesToDocument);
+  applyAppearance(s);
   applyShowDocNameChip(s.showDocNameChip);
   applyIconSet(s.iconSet);
   applyReduceMotion(s.reduceMotion);
@@ -4548,7 +4516,8 @@ function initRibbonResizer(): void {
 }
 initRibbonResizer();
 
-applyTheme(settings.get('theme'), settings.get('themeAppliesToDocument'));
+applyAppearance(settings.all());
+initChromeTexture();
 applyShowDocNameChip(settings.get('showDocNameChip'));
 applyIconSet(settings.get('iconSet'));
 applyReduceMotion(settings.get('reduceMotion'));
