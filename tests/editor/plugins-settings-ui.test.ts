@@ -172,6 +172,7 @@ describe('uninstall cleans up completely (Shreeram review, 2026-07-24)', () => {
       },
     };
     vi.mocked(confirmDialog).mockResolvedValue(true);
+    localStorage.setItem('cm-plugin-permission-prefs', JSON.stringify({ demo: { askAgain: false, blocked: [] } }));
     window.__registerCardMirrorPlugin = (() => ({ ok: true })) as never;
     const el = document.createElement('div');
     renderPluginsPanel(el);
@@ -183,6 +184,8 @@ describe('uninstall cleans up completely (Shreeram review, 2026-07-24)', () => {
     await settled();
     await settled();
     expect(calls).toContain('uninstall:demo');
+    // Its permission answers go with it: a reinstall starts fresh.
+    expect(JSON.parse(localStorage.getItem('cm-plugin-permission-prefs') ?? '{}')).toEqual({});
     expect(pluginCommandIds()).toEqual([]); // deregistered NOW, not at restart
     expect(settingsState.overrides['demo.hello']).toBeUndefined();
     expect(settingsState.overrides['openSettings']).toBe('Mod-Alt-6'); // static untouched

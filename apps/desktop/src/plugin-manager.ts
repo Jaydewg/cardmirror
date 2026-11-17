@@ -12,7 +12,11 @@ import { randomUUID } from 'node:crypto';
 
 export const MANIFEST_NAME = 'cardmirror-plugin.json';
 export const BUNDLE_NAME = 'plugin.js';
-const PLUGIN_API_VERSION = 1; // keep in sync with src/editor/plugin-registry.ts
+/** Main can't import renderer modules, so this, `PERMISSION_ID_RE`,
+ *  `MAX_PERMISSIONS` and `sanitizePermissionList` are copies of the
+ *  renderer's. tests/editor/plugin-permissions.test.ts ("main/renderer
+ *  parity") fails the moment they drift. */
+export const PLUGIN_API_VERSION = 1;
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 const RESERVED_ID_RE = /^(con|prn|aux|nul|com\d|lpt\d)$/i; // Windows device names
 const MAX_ASSET_BYTES = 5 * 1024 * 1024; // 5 MiB per release asset
@@ -28,6 +32,57 @@ export interface PluginManifest {
   /** Source repo ("owner/repo"), stamped at install time so update
    *  checks know where the plugin came from. */
   repo?: string;
+  /** Permissions the plugin asks for (src/editor/plugin-permissions.ts).
+   *  Shown in the consent dialog. Off-shape entries are dropped. */
+  permissions?: string[];
+  /** What the user consented to — written ONLY by this module, from
+   *  the renderer's consent answer, always ⊆ `permissions`. Stripped
+   *  from downloaded manifests so a release can't pre-grant itself. */
+  grantedPermissions?: string[];
+  /** Why the plugin wants each permission, in its own words (one line
+   *  each, shown in the consent dialogs as the plugin's text). Keys
+   *  outside `permissions` are dropped. */
+  permissionReasons?: Record<string, string>;
+}
+
+// Permission-id shape (parity-tested against src/editor/plugin-permissions.ts).
+// Main only guards SHAPE; which permissions exist is the renderer's catalog.
+export const PERMISSION_ID_RE = /^[a-z]+(\.[a-z][a-zA-Z]*)+$/;
+export const MAX_PERMISSIONS = 32;
+
+export function sanitizePermissionList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out = new Set<string>();
+  for (const p of raw) {
+    if (out.size >= MAX_PERMISSIONS) break;
+    if (typeof p === 'string' && PERMISSION_ID_RE.test(p)) out.add(p);
+  }
+  return [...out].sort();
+}
+
+/** Copy of the renderer's PERMISSION_REASON_MAX / sanitizePermissionReasons
+ *  (parity-tested the same way). */
+export const PERMISSION_REASON_MAX = 200;
+
+export function sanitizePermissionReasons(raw: unknown, declared: readonly string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const p of declared) {
+    if (!Object.prototype.hasOwnProperty.call(raw, p)) continue;
+    const v = (raw as Record<string, unknown>)[p];
+    if (typeof v !== 'string') continue;
+    // eslint-disable-next-line no-control-regex
+    const text = v.replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim().slice(0, PERMISSION_REASON_MAX);
+    if (text) out[p] = text;
+  }
+  return out;
+}
+
+/** `granted ∩ requested`, sanitized — consent can never exceed what the
+ *  manifest asked for. */
+export function intersectGrant(granted: unknown, requested: readonly string[] | undefined): string[] {
+  const ask = new Set(requested ?? []);
+  return sanitizePermissionList(granted).filter((p) => ask.has(p));
 }
 
 export function parseRepoRef(input: string): { owner: string; repo: string } | null {
@@ -85,7 +140,20 @@ export function validateManifest(
   if (m.apiVersion !== PLUGIN_API_VERSION) {
     return { ok: false, error: `plugin needs apiVersion ${String(m.apiVersion)}; this CardMirror supports ${PLUGIN_API_VERSION}` };
   }
-  return { ok: true, manifest: m as PluginManifest };
+  // Permission lists are additive: they sanitize, never reject (a manifest
+  // from a newer plugin must still install on this build).
+  const manifest = { ...m } as PluginManifest;
+  delete manifest.permissions;
+  delete manifest.grantedPermissions;
+  delete manifest.permissionReasons;
+  const permissions = sanitizePermissionList(m.permissions);
+  if (permissions.length > 0) manifest.permissions = permissions;
+  const reasons = sanitizePermissionReasons(m.permissionReasons, permissions);
+  if (Object.keys(reasons).length > 0) manifest.permissionReasons = reasons;
+  if (m.grantedPermissions !== undefined) {
+    manifest.grantedPermissions = intersectGrant(m.grantedPermissions, permissions);
+  }
+  return { ok: true, manifest };
 }
 
 /**
@@ -339,6 +407,8 @@ interface PendingInstall {
   manifest: PluginManifest;
   bundleText: string;
   expiresAt: number;
+  /** Installed grant at inspect time (update path); undefined = fresh. */
+  previousGranted?: string[];
 }
 const pendingInstalls = new Map<string, PendingInstall>();
 /** Consent dialogs are humans reading text; a stale token is a bug or a
@@ -354,7 +424,16 @@ function prunePendingInstalls(now: number): void {
 export async function inspectFromGithub(
   ref: string,
 ): Promise<
-  | { ok: true; pending: string; plugin: PluginManifest; ownerRepo: string }
+  | {
+      ok: true;
+      pending: string;
+      plugin: PluginManifest;
+      ownerRepo: string;
+      /** The current install's consented permissions (update path), or
+       *  undefined for a fresh install — lets the renderer re-prompt
+       *  only for what an update ADDS. */
+      installedGranted?: string[];
+    }
   | { ok: false; error: string }
 > {
   const parsed = parseRepoRef(ref);
@@ -389,38 +468,80 @@ export async function inspectFromGithub(
   if (v.manifest.minAppVersion && compareVersions(app.getVersion(), v.manifest.minAppVersion) < 0) {
     return { ok: false, error: `This plugin needs CardMirror ${v.manifest.minAppVersion} or newer.` };
   }
-  const collision = checkInstallCollision(await readInstalledManifest(v.manifest.id), ownerRepo);
+  const existing = await readInstalledManifest(v.manifest.id);
+  const collision = checkInstallCollision(existing, ownerRepo);
   if (collision) return { ok: false, error: collision };
   // Persist the source repo so checkPluginUpdate (and the settings UI)
   // know where this install came from. Written into the saved manifest,
   // not just returned — the info must survive an app restart.
   v.manifest.repo = ownerRepo;
+  // Consent is the USER's, recorded at commit — a published manifest
+  // claiming a grant is ignored.
+  delete v.manifest.grantedPermissions;
   const now = Date.now();
   prunePendingInstalls(now);
   const token = randomUUID();
-  pendingInstalls.set(token, { manifest: v.manifest, bundleText, expiresAt: now + PENDING_TTL_MS });
-  return { ok: true, pending: token, plugin: v.manifest, ownerRepo };
+  pendingInstalls.set(token, {
+    manifest: v.manifest,
+    bundleText,
+    expiresAt: now + PENDING_TTL_MS,
+    previousGranted: existing ? (existing.grantedPermissions ?? []) : undefined,
+  });
+  return {
+    ok: true,
+    pending: token,
+    plugin: v.manifest,
+    ownerRepo,
+    ...(existing ? { installedGranted: existing.grantedPermissions ?? [] } : {}),
+  };
 }
 
+/** Write one file via tmp + rename (so a crash never leaves it half-written). */
+async function writeAtomic(finalPath: string, text: string): Promise<void> {
+  const tmpPath = `${finalPath}.tmp`;
+  await fs.writeFile(tmpPath, text);
+  await fs.rename(tmpPath, finalPath);
+}
+
+/** Commit a staged install after the user consented. `granted` is the
+ *  permission list the user agreed to (stored ∩ the manifest's request).
+ *  An older renderer omits it: an update then keeps the prior consent
+ *  (∩ the new request) and a fresh install grants nothing. */
 export async function commitPendingInstall(
   token: string,
+  granted?: unknown,
 ): Promise<{ ok: true; plugin: PluginManifest } | { ok: false; error: string }> {
   prunePendingInstalls(Date.now());
   const staged = pendingInstalls.get(String(token));
   if (!staged) return { ok: false, error: 'This install request expired. Try again.' };
   pendingInstalls.delete(String(token));
-  const dir = pluginDir(staged.manifest.id);
+  const manifest: PluginManifest = { ...staged.manifest };
+  const consented = granted === undefined ? (staged.previousGranted ?? []) : granted;
+  const grant = intersectGrant(consented, manifest.permissions);
+  if (manifest.permissions?.length || grant.length) manifest.grantedPermissions = grant;
+  const dir = pluginDir(manifest.id);
   await fs.mkdir(dir, { recursive: true });
-  for (const [name, text] of [
-    [MANIFEST_NAME, JSON.stringify(staged.manifest, null, 2)],
-    [BUNDLE_NAME, staged.bundleText],
-  ] as const) {
-    const finalPath = path.join(dir, name);
-    const tmpPath = `${finalPath}.tmp`;
-    await fs.writeFile(tmpPath, text);
-    await fs.rename(tmpPath, finalPath);
-  }
-  return { ok: true, plugin: staged.manifest };
+  await writeAtomic(path.join(dir, MANIFEST_NAME), JSON.stringify(manifest, null, 2));
+  await writeAtomic(path.join(dir, BUNDLE_NAME), staged.bundleText);
+  return { ok: true, plugin: manifest };
+}
+
+/** Change an installed plugin's consented permissions (Settings →
+ *  Plugins → permissions). Clamped to what its manifest requests, so
+ *  this can revoke freely but will never grant beyond the original request. */
+export async function setGrantedPermissions(
+  id: string,
+  granted: unknown,
+): Promise<{ ok: true; granted: string[] } | { ok: false; error: string }> {
+  if (typeof id !== 'string' || !ID_RE.test(id)) return { ok: false, error: 'bad plugin id' };
+  const manifest = await readInstalledManifest(id);
+  if (!manifest) return { ok: false, error: 'not installed' };
+  const grant = intersectGrant(granted, manifest.permissions);
+  await writeAtomic(
+    path.join(pluginDir(id), MANIFEST_NAME),
+    JSON.stringify({ ...manifest, grantedPermissions: grant }, null, 2),
+  );
+  return { ok: true, granted: grant };
 }
 
 export function discardPendingInstall(token: string): void {

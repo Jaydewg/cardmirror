@@ -8,9 +8,21 @@ import { getElectronHost } from './host/index.js';
 import { setIcon } from './icons';
 import { isLiteBuild } from './lite.js';
 import { isTopOverlay, popOverlay, pushOverlay } from './overlay-stack.js';
-import { pluginSettingsDefs, unregisterPlugin } from './plugin-registry.js';
+import { managePluginPermissionsDialog, permissionConsentDialog } from './plugin-permission-dialog.js';
+import { sanitizePermissionList, splitKnown } from './plugin-permissions.js';
+import {
+  pluginSettingsDefs,
+  regrantPlugin,
+  setPluginConsent,
+  unregisterPlugin,
+} from './plugin-registry.js';
 import { openPluginSettingsModal } from './plugin-settings-modal.js';
 import { isPluginEnabled, setPluginEnabled } from './plugins-store.js';
+import {
+  forgetPluginPermissionPrefs,
+  getPluginPermissionPrefs,
+  setPluginPermissionPrefs,
+} from './plugin-permission-requests.js';
 import { settings } from './settings.js';
 import { captureFocusForDialog, confirmDialog } from './text-prompt.js';
 import { showToast } from './toast.js';
@@ -27,6 +39,12 @@ interface InstalledPlugin {
    *  version). Listed disabled rather than hidden — an invisible
    *  install looks like data loss and can't be uninstalled. */
   incompatible?: string;
+  /** Permissions the manifest requests (sanitized main-side). */
+  permissions?: string[];
+  /** What the user consented to (⊆ permissions). */
+  grantedPermissions?: string[];
+  /** The plugin's reasons, per permission (sanitized main-side). */
+  permissionReasons?: Record<string, string>;
 }
 
 /** Surface an IPC rejection as a toast instead of an unhandled rejection. */
@@ -197,24 +215,81 @@ export function renderPluginsPanel(container: HTMLElement): void {
             showToast(`${p.name} is up to date.`);
             return;
           }
-          if (await confirmDialog(`Update ${p.name} to v${res.latest}?`)) {
+          // A plugin with permissions: remind the user they can review
+          // what it's allowed to use (the shield on its row, right here).
+          const reviewNote =
+            sanitizePermissionList(p.permissions).length > 0
+              ? ' You can review what it’s allowed to use at any time with the shield button next to it.'
+              : '';
+          if (await confirmDialog(`Update ${p.name} to v${res.latest}?${reviewNote}`)) {
             // Same-repo reinstall of an already-consented plugin: the update
-            // confirm above IS the consent, so inspect rolls straight into
-            // commit. Nothing touches the existing install unless commit runs.
+            // confirm above IS the consent for everything already granted, so
+            // inspect rolls straight into commit — UNLESS the new version asks
+            // for permissions its installed version didn't, which get their
+            // own consent dialog. Permissions the user turned off stay off
+            // and aren't asked again (the shield turns them back on). Nothing
+            // touches the existing install unless commit runs; declining
+            // discards the staged release.
             const ins = (await host!.pluginInstallInspect(p.repo ?? '')) as
-              | { ok: true; pending: string }
+              | {
+                  ok: true;
+                  pending: string;
+                  plugin: InstalledPlugin;
+                  ownerRepo: string;
+                  installedGranted?: string[];
+                }
               | { ok: false; error: string }
               | undefined;
             if (!ins?.ok) {
               showError(`Update failed: ${ins && 'error' in ins ? ins.error : 'unavailable'}`);
               return;
             }
-            const r = (await host!.pluginInstallCommit(ins.pending)) as
+            const requested = sanitizePermissionList(ins.plugin?.permissions);
+            const prior = sanitizePermissionList(ins.installedGranted ?? p.grantedPermissions);
+            const kept = prior.filter((x) => requested.includes(x));
+            const { known, unknown } = splitKnown(requested);
+            // What's NEW in this version is asked about, ticked. A
+            // permission the installed version already requested but isn't
+            // granted was turned off by the user: re-asking it ticked would
+            // undo that with one click, so it's listed UNticked, and only
+            // when the user lets this plugin ask again and hasn't blocked it.
+            const priorRequested = sanitizePermissionList(p.permissions);
+            const prefs = getPluginPermissionPrefs(p.id);
+            const added = known.filter((x) => !prior.includes(x) && !priorRequested.includes(x));
+            const turnedOff = prefs.askAgain
+              ? known.filter((x) => !prior.includes(x) && priorRequested.includes(x) && !prefs.blocked.includes(x))
+              : [];
+            const asked = [...added, ...turnedOff];
+            let granted = kept;
+            if (asked.length > 0) {
+              const chosen = await permissionConsentDialog({
+                mode: 'update',
+                name: ins.plugin.name,
+                version: ins.plugin.version,
+                author: ins.plugin.author,
+                ownerRepo: ins.ownerRepo,
+                known: asked,
+                unknown: unknown.filter((x) => !prior.includes(x) && !priorRequested.includes(x)),
+                reasons: ins.plugin.permissionReasons,
+                unchecked: turnedOff,
+              });
+              if (!chosen) {
+                await host!.pluginInstallDiscard(ins.pending);
+                showToast(`${p.name} was not updated.`);
+                return;
+              }
+              // Only what stayed (or was) ticked; the rest stays off.
+              granted = [...kept, ...chosen.filter((x) => asked.includes(x))];
+            }
+            const r = (await host!.pluginInstallCommit(ins.pending, granted)) as
               | { ok: true }
               | { ok: false; error: string }
               | undefined;
-            if (r?.ok) showToast(`${p.name} updated. Restart to apply.`);
-            else showError(`Update failed: ${r && 'error' in r ? r.error : 'unavailable'}`);
+            if (r?.ok) {
+              setPluginConsent(p.id, granted);
+              showToast(`${p.name} updated. Restart to apply.`);
+              guarded(refresh);
+            } else showError(`Update failed: ${r && 'error' in r ? r.error : 'unavailable'}`);
           }
         });
       });
@@ -230,6 +305,7 @@ export function renderPluginsPanel(container: HTMLElement): void {
           setPluginEnabled(p.id, false);
           // Drop the plugin's storage bag so a reinstall starts clean.
           localStorage.removeItem(`plugin:${p.id}`);
+          forgetPluginPermissionPrefs(p.id);
           // Deregister NOW: palette rows, keybinding rows, and hotkeys
           // vanish immediately (the onCommandsChanged hook rebuilds live
           // keymaps) instead of lingering until restart. Already-executed
@@ -281,6 +357,48 @@ export function renderPluginsPanel(container: HTMLElement): void {
         });
         row.append(gear);
       }
+      // Shield → review / change this plugin's permissions. Shown whenever
+      // the manifest requests any (enabled or not — revoking shouldn't
+      // require running the plugin first).
+      const requested = sanitizePermissionList(p.permissions);
+      if (!p.incompatible && requested.length > 0) {
+        const shield = document.createElement('button');
+        shield.type = 'button';
+        shield.className = 'pmd-plugins-gear pmd-plugins-permissions';
+        shield.title = `${p.name} permissions`;
+        setIcon(shield, 'shield', { label: `${p.name} permissions` });
+        shield.addEventListener('click', () => {
+          guardedInline(async () => {
+            clearError();
+            const { known, unknown } = splitKnown(requested);
+            const prefs = getPluginPermissionPrefs(p.id);
+            const next = await managePluginPermissionsDialog({
+              name: p.name,
+              known,
+              unknown,
+              granted: sanitizePermissionList(p.grantedPermissions),
+              askAgain: prefs.askAgain,
+              blocked: prefs.blocked,
+              reasons: p.permissionReasons,
+            });
+            if (!next) return;
+            setPluginPermissionPrefs(p.id, { askAgain: next.askAgain, blocked: next.blocked });
+            const r = (await host!.pluginSetPermissions(p.id, next.granted)) as
+              | { ok: true; granted: string[] }
+              | { ok: false; error: string }
+              | undefined;
+            if (!r?.ok) {
+              showError(`Could not change permissions: ${r && 'error' in r ? r.error : 'unavailable'}`);
+              return;
+            }
+            // Live: the registry re-mints the api the next command run sees.
+            regrantPlugin(p.id, r.granted);
+            showToast(`${p.name} permissions updated.`);
+            guarded(refresh);
+          });
+        });
+        row.append(shield);
+      }
       row.append(update, remove);
       list.append(row);
     }
@@ -306,16 +424,39 @@ export function renderPluginsPanel(container: HTMLElement): void {
       return false;
     }
     const p = res.plugin;
-    const consent = await confirmDialog(
-      `Install ${p.name} v${p.version} by ${p.author ?? 'an unknown author'} ` +
-        `from github.com/${res.ownerRepo}? ` +
-        'This plugin runs with full access to CardMirror and your documents.',
-    );
+    const requested = sanitizePermissionList(p.permissions);
+    const { known, unknown } = splitKnown(requested);
+    // A plugin that asks for nothing keeps the original one-line consent;
+    // one that asks for permissions gets the itemized consent dialog,
+    // where the user can untick any permission before it installs.
+    const consent: string[] | null =
+      requested.length === 0
+        ? (await confirmDialog(
+            `Install ${p.name} v${p.version} by ${p.author ?? 'an unknown author'} ` +
+              `from github.com/${res.ownerRepo}? ` +
+              'This plugin runs with full access to CardMirror and your documents.',
+          ))
+          ? []
+          : null
+        : await permissionConsentDialog({
+            mode: 'install',
+            name: p.name,
+            version: p.version,
+            author: p.author,
+            ownerRepo: res.ownerRepo,
+            known,
+            unknown,
+            reasons: p.permissionReasons,
+          });
     if (!consent) {
       await host!.pluginInstallDiscard(res.pending);
       return false;
     }
-    const committed = (await host!.pluginInstallCommit(res.pending)) as
+    // Consent covers the supported permissions left ticked; unknown ones
+    // were listed as "won't be granted".
+    const granted = consent.filter((x) => known.includes(x));
+    setPluginConsent(p.id, granted);
+    const committed = (await host!.pluginInstallCommit(res.pending, granted)) as
       | { ok: true }
       | { ok: false; error: string }
       | undefined;

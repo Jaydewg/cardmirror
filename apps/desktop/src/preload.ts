@@ -1051,8 +1051,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('host:plugin-install-inspect', ref),
   pluginBrowse: (): Promise<Record<string, unknown>> =>
     ipcRenderer.invoke('host:plugin-browse'),
-  pluginInstallCommit: (token: string): Promise<Record<string, unknown>> =>
-    ipcRenderer.invoke('host:plugin-install-commit', token),
+  pluginInstallCommit: (token: string, granted?: string[]): Promise<Record<string, unknown>> =>
+    granted === undefined
+      ? ipcRenderer.invoke('host:plugin-install-commit', token)
+      : ipcRenderer.invoke('host:plugin-install-commit', token, granted),
+  pluginSetPermissions: (id: string, granted: string[]): Promise<Record<string, unknown>> =>
+    ipcRenderer.invoke('host:plugin-set-permissions', id, granted),
   pluginInstallDiscard: (token: string): Promise<void> =>
     ipcRenderer.invoke('host:plugin-install-discard', token),
   pluginCommunityInstalls: (on: boolean): Promise<void> =>

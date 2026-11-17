@@ -102,6 +102,80 @@ export function gzipAsync(
   });
 }
 
+// ── Gzip header comment (RFC 1952 FCOMMENT) ──────────────────────────
+// A short, NUL-terminated Latin-1 string after the 10-byte header. fflate
+// can't write one, so it's spliced into fflate's output: our gzip never
+// sets FEXTRA / FNAME / FHCRC, so the comment goes straight at offset 10
+// and nothing else needs fixing (the trailer CRC covers the payload, not
+// the header). Every standard reader skips it — fflate's own `gzs`,
+// node:zlib, `gzip -d` — so files stay readable by older builds.
+
+const FLG_FHCRC = 0x02;
+const FLG_FEXTRA = 0x04;
+const FLG_FNAME = 0x08;
+const FLG_FCOMMENT = 0x10;
+/** Hard cap on the comment we write. */
+export const GZIP_COMMENT_MAX = 1000;
+
+/** Printable ASCII, capped — safe as a Latin-1 C string. */
+function commentBytes(comment: string): Uint8Array {
+  const clean = comment.replace(/[^\x20-\x7e]/g, '?').slice(0, GZIP_COMMENT_MAX);
+  const out = new Uint8Array(clean.length + 1); // + NUL
+  for (let i = 0; i < clean.length; i++) out[i] = clean.charCodeAt(i);
+  return out;
+}
+
+/** Return `gz` with `comment` in its header (replacing any existing
+ *  comment). Empty/undefined comment → any existing comment removed.
+ *  Non-gzip input is returned unchanged. */
+export function withGzipComment(gz: Uint8Array, comment: string | undefined): Uint8Array {
+  if (!isGzip(gz) || gz.length < 10) return gz;
+  const flg = gz[3]!;
+  // Only handle the shapes we write (or a comment we added); anything
+  // with FEXTRA/FNAME/FHCRC is left alone rather than risk corrupting it.
+  if (flg & (FLG_FHCRC | FLG_FEXTRA | FLG_FNAME)) return gz;
+  let bodyStart = 10;
+  if (flg & FLG_FCOMMENT) {
+    while (bodyStart < gz.length && gz[bodyStart] !== 0) bodyStart++;
+    bodyStart++; // past the NUL
+  }
+  const header = gz.slice(0, 10);
+  const body = gz.subarray(bodyStart);
+  if (!comment) {
+    header[3] = flg & ~FLG_FCOMMENT;
+    const out = new Uint8Array(10 + body.length);
+    out.set(header, 0);
+    out.set(body, 10);
+    return out;
+  }
+  header[3] = flg | FLG_FCOMMENT;
+  const c = commentBytes(comment);
+  const out = new Uint8Array(10 + c.length + body.length);
+  out.set(header, 0);
+  out.set(c, 10);
+  out.set(body, 10 + c.length);
+  return out;
+}
+
+/** Read the gzip header comment, or null when absent / not gzip. */
+export function readGzipComment(gz: Uint8Array): string | null {
+  if (!isGzip(gz) || gz.length < 10) return null;
+  const flg = gz[3]!;
+  if (!(flg & FLG_FCOMMENT)) return null;
+  let p = 10;
+  if (flg & FLG_FEXTRA) {
+    if (p + 2 > gz.length) return null;
+    p += 2 + (gz[p]! | (gz[p + 1]! << 8));
+  }
+  if (flg & FLG_FNAME) {
+    while (p < gz.length && gz[p] !== 0) p++;
+    p++;
+  }
+  let s = '';
+  while (p < gz.length && gz[p] !== 0) s += String.fromCharCode(gz[p++]!);
+  return p < gz.length ? s : null;
+}
+
 /** Test hook: clear the session latch. */
 export function __resetGzipWorkerStateForTests(): void {
   gzipWorkerBroken = false;

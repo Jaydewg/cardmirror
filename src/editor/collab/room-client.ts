@@ -363,6 +363,90 @@ export class RoomsClient {
     }
   }
 
+  /** Is this room still live? One tiny read — `after` past every seq, so
+   *  the relay sends neither the snapshot nor any updates — that never
+   *  posts presence or touches session state (plugin API `collab.probe`).
+   *  `ended` on 404/410 (the same "room gone" test join uses); `unknown`
+   *  for anything else (offline, auth, timeout, odd answers). Bypasses
+   *  `request()` on purpose: a probe of an ended room is an expected
+   *  answer, not a relay failure for the health stats. */
+  async probeRoom(roomId: string, timeoutMs = 5_000): Promise<'live' | 'ended' | 'unknown'> {
+    const headers = this.headers();
+    if ((headers['Authorization'] ?? '').trim() === 'Bearer') return 'unknown';
+    let res: Response;
+    try {
+      res = await this.fetchImpl(
+        `${this.opts.baseUrl()}/rooms/${roomId}/updates?after=${Number.MAX_SAFE_INTEGER}`,
+        { headers, signal: withDeadline(undefined, timeoutMs) },
+      );
+    } catch {
+      return 'unknown';
+    }
+    // Release the connection; the body itself doesn't matter.
+    await res.text().catch(() => '');
+    if (res.status === 404 || res.status === 410) return 'ended';
+    return res.ok ? 'live' : 'unknown';
+  }
+
+  /** Liveness of a room on ANOTHER server, through this relay's
+   *  federation proxy (a client from `relayClientForHome`). Read-only:
+   *  no join request, no presence. The home relay checks the room pass
+   *  before the room, so a caller without an admission sends a
+   *  well-formed pass that names none: an unknown pass on a live room is
+   *  `pass-invalid` (401), on an ended one 410 / 404. Any admission state
+   *  (approved, pending, denied) also means the room exists.
+   *  `unreachable`: this relay can't reach that server at all (no
+   *  federation here, refused either way, or the home doesn't federate);
+   *  a home that is merely offline is `unknown`. */
+  async probeRemoteRoom(roomId: string, timeoutMs = 5_000): Promise<'live' | 'ended' | 'unknown' | 'unreachable'> {
+    const headers = this.headers();
+    if ((headers['Authorization'] ?? '').trim() === 'Bearer') return 'unknown';
+    let res: Response;
+    try {
+      res = await this.fetchImpl(
+        `${this.opts.baseUrl()}/rooms/${roomId}/updates?after=${Number.MAX_SAFE_INTEGER}`,
+        { headers, signal: withDeadline(undefined, timeoutMs) },
+      );
+    } catch {
+      return 'unknown';
+    }
+    const viaFederation = !!res.headers.get(FEDERATION_RESPONSE_HEADER);
+    if (res.ok) {
+      await res.text().catch(() => '');
+      return 'live';
+    }
+    const { code } = await errorDetail(res);
+    // A 404 without the proxy marker: this relay has no federation routes.
+    if (res.status === 404 && !viaFederation) return 'unreachable';
+    if (res.status === 404 || res.status === 410) return 'ended';
+    if (['pass-invalid', 'join-pending', 'join-denied', 'read-only'].includes(code)) return 'live';
+    if (['home-not-federating', 'peer-refused', 'home-refused'].includes(code)) return 'unreachable';
+    return 'unknown';
+  }
+
+  /** What this relay knows about another server (`GET
+   *  /federation/v1/peer`): whether policy lets it connect, and whether
+   *  that server answered and federates (null = not known yet). */
+  async peerInfo(url: string): Promise<{
+    self: boolean;
+    permitted: boolean;
+    reachable: boolean | null;
+    federates: boolean | null;
+    nickname: string | null;
+  }> {
+    const path = `/federation/v1/peer?url=${encodeURIComponent(url)}`;
+    const res = await this.request(path, { headers: this.headers() });
+    const b = await this.readJson<Record<string, unknown>>(res, path);
+    const tri = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
+    return {
+      self: b['self'] === true,
+      permitted: b['permitted'] === true,
+      reachable: tri(b['reachable']),
+      federates: tri(b['federates']),
+      nickname: typeof b['nickname'] === 'string' ? b['nickname'] : null,
+    };
+  }
+
   /** `keepalive`: let the browser finish the request after the page
    *  unloads (tab close / reload) — the only way a send started from a
    *  hidden or unloading page survives. Browsers cap keepalive bodies

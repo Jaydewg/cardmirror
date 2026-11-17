@@ -48,7 +48,15 @@ import {
 } from './collab-hooks.js';
 import { RoomsError, type RoomsClient } from './room-client.js';
 import { getElectronHost } from '../host/index.js';
-import { ensureBakedRelay, relayBaseUrl, relayClient, relayClientWithGuestPass, relayClientWithViewPass, endRoomOnRelay } from './collab-relay.js';
+import type { SessionRole } from './session-role.js';
+import {
+  ensureBakedRelay,
+  relayBaseUrl,
+  relayClient,
+  relayClientWithGuestPass,
+  relayClientWithViewPass,
+  endRoomOnRelay,
+} from './collab-relay.js';
 import { buildJoinLink, parseJoinLinkHash } from './join-link.js';
 import { relayClient as pairingRelayClient } from '../pairing/relay-client.js';
 import { resolveStarredTarget } from '../pairing/send-to-starred.js';
@@ -79,6 +87,7 @@ import { importRoomKey, decryptBlob, viewCodeFromShareCode } from './collab-cryp
 import { resetSessionCommentIds } from '../comments-plugin.js';
 import { collabEnabled } from './collab-gate.js';
 import { decodeShareCode, encodeShareCode, stripShareCodeHome } from './collab-crypto.js';
+import { canonRelayUrl, parseSessionAddress, relayHost, type ParsedSessionAddress } from './server-address.js';
 import { CollabSession } from './collab-session.js';
 import type { JoinMode } from './room-client.js';
 import {
@@ -89,12 +98,14 @@ import {
   noteRoomPassMode,
   refreshEditable,
   remoteHomeOf,
+  peerReach,
+  probeRemoteRoom,
   remoteRoomClient,
   requestRemoteAdmission,
   storedRoomPass,
   type JoinRequestWatcher,
 } from '../federation/collab-federation.js';
-import { refreshOwnRelayFederation, selfRelayUrl } from '../federation/self.js';
+import { ownRelayFederation, refreshOwnRelayFederation, selfRelayUrl } from '../federation/self.js';
 import {
   markChipEnded,
   renderChipSession,
@@ -230,6 +241,201 @@ export function roomLiveInWindow(roomId: string): boolean {
 function sessionFor(uid: string | null | undefined): ActiveSession | null {
   return uid != null ? sessions.get(uid) ?? null : null;
 }
+
+/** This machine's co-editing server as a canonical URL, or null when
+ *  none resolves: the relay's federation identity when it federates
+ *  (what other servers and f codes call it), else its configured URL.
+ *  Synchronous: before the relay has answered it can lag;
+ *  `currentServer()` waits. */
+function selfServerSync(): string | null {
+  return selfRelayUrl() ?? canonRelayUrl(relayBaseUrl());
+}
+
+/** Is `url` (canonical) this machine's own server, under either name? */
+function isSelfServer(url: string): boolean {
+  return url === selfRelayUrl() || url === canonRelayUrl(relayBaseUrl());
+}
+
+/** Do people on other servers reach sessions homed here? */
+function ownRelayFederatesRooms(): boolean {
+  const fed = ownRelayFederation();
+  return !!fed?.rooms && !!fed.joinRequests;
+}
+
+/** This machine's co-editing server (plugin API, `collab.server`). */
+export async function currentServer(): Promise<{ url: string; host: string; nickname: string | null } | null> {
+  try {
+    await refreshOwnRelayFederation();
+  } catch {
+    /* fall through: a configured URL may still resolve */
+  }
+  const url = selfServerSync();
+  return url ? { url, host: relayHost(url), nickname: ownRelayFederation()?.nickname ?? null } : null;
+}
+
+/** Can this build open sessions on `server`? Your own server is `home`;
+ *  another one is `federated` when this relay and that server federate
+ *  (and policy allows it), `unreachable` when there is no route, and
+ *  `unknown` when it can't tell (offline, not answering). */
+export async function serverReach(server: string): Promise<'home' | 'federated' | 'unreachable' | 'unknown'> {
+  const want = canonRelayUrl(server);
+  if (!want) return 'unknown';
+  const self = (await currentServer())?.url ?? null;
+  if (!self) return 'unknown';
+  if (isSelfServer(want)) return 'home';
+  const reach = await peerReach(want);
+  return reach === 'self' ? 'home' : reach;
+}
+
+/** Resolve a code or session address against this machine's server
+ *  (plugin API, `collab.server`). */
+export async function parseAddressForPlugin(raw: string): Promise<ParsedSessionAddress | null> {
+  const self = (await currentServer())?.url ?? null;
+  return parseSessionAddress(String(raw ?? ''), self);
+}
+
+/** Where a plugin-supplied code or address leads on THIS build:
+ *  - `here`: a session on this server, with the plain code to join it;
+ *  - `remote`: an EDIT session on another server this build can reach
+ *    (or might: an `unknown` reach is tried, and the join flow explains
+ *    a refusal), with the cross-server code (`cmshare2f.…@server`) the
+ *    join flow takes, even when the plugin passed a plain code@server;
+ *  - `unreachable`: no route to that server, or a VIEW address on
+ *    another server (there are no cross-server view codes);
+ *  - `invalid`: not a session code; `unknown`: no server resolves. */
+export async function routeSessionAddress(
+  raw: string,
+): Promise<
+  | { kind: 'here'; code: string; roomId: string }
+  | { kind: 'remote'; code: string; roomId: string; server: string }
+  | { kind: 'unreachable' | 'invalid' | 'unknown' }
+> {
+  const text = String(raw ?? '').trim();
+  const self = (await currentServer())?.url ?? null;
+  const parsed = parseSessionAddress(text, self);
+  if (!parsed) {
+    // A plain code with no server configured still names "here".
+    if (!self && !text.includes('@') && decodeShareCode(text)) return { kind: 'unknown' };
+    return { kind: 'invalid' };
+  }
+  if (!self) return { kind: 'unknown' };
+  const decoded = decodeShareCode(parsed.code);
+  if (!decoded) return { kind: 'invalid' };
+  if (isSelfServer(parsed.server)) return { kind: 'here', code: parsed.code, roomId: parsed.roomId };
+  if (parsed.view) return { kind: 'unreachable' };
+  if ((await serverReach(parsed.server)) === 'unreachable') return { kind: 'unreachable' };
+  return {
+    kind: 'remote',
+    code: encodeShareCode(decoded.roomId, decoded.keyBytes, decoded.minVersion, parsed.server),
+    roomId: parsed.roomId,
+    server: parsed.server,
+  };
+}
+
+/** Public facts about the live session owned by doc `uid` (plugin API,
+ *  `collab.read`; `server` is stripped there without `collab.server`):
+ *  never the key. `server` is the session's HOME (another server for a
+ *  session joined across servers). `crossServer` is `federated` when
+ *  people on other servers can ask to join it: it lives on another
+ *  server, or this relay federates rooms. Null when that doc has no
+ *  session. */
+export function sessionInfoForUid(uid: string): {
+  roomId: string;
+  role: SessionRole;
+  title: string | null;
+  server: string | null;
+  crossServer: 'federated' | 'off' | 'unsupported';
+} | null {
+  const sess = sessionFor(uid);
+  if (!sess) return null;
+  return {
+    roomId: sess.session.roomId,
+    role: sess.session.role,
+    title: docTitleResolver?.(uid) ?? null,
+    server: sess.home ?? selfServerSync(),
+    crossServer: sess.home || ownRelayFederatesRooms() ? 'federated' : 'off',
+  };
+}
+
+/** The EDIT share code of doc `uid`'s live session (plugin API,
+ *  `collab.shareCode`): exactly what "Copy code" hands out
+ *  (`defaultCopyCode`), so plugins and people share one rule. Null for no
+ *  session or a spectator seat. */
+export function editShareCodeForUid(uid: string): string | null {
+  const sess = sessionFor(uid);
+  if (!sess || sess.session.role === 'spectator') return null;
+  const decoded = decodeShareCode(sess.shareCode);
+  return decoded && !decoded.view ? defaultCopyCode(sess) : null;
+}
+
+/** The EDIT session address (`code@server`, plain code) of doc `uid`'s
+ *  session, or null (no session, spectator seat, or no known server). */
+export function editAddressForUid(uid: string): string | null {
+  const sess = sessionFor(uid);
+  if (!sess || sess.session.role === 'spectator') return null;
+  const decoded = decodeShareCode(sess.shareCode);
+  if (!decoded || decoded.view) return null;
+  const server = sess.home ?? selfServerSync();
+  return server ? parseSessionAddress(stripShareCodeHome(sess.shareCode), server)?.address ?? null : null;
+}
+
+/** The VIEW-ONLY code of doc `uid`'s session (plugin API,
+ *  `collab.viewCode`), or null. Spectators hold the view code itself.
+ *  Null for a session on another server: view codes can't name a
+ *  server, so a plain one would point the person at THEIR server. */
+export function viewCodeForUid(uid: string): string | null {
+  const sess = sessionFor(uid);
+  if (!sess || sess.home) return null;
+  const decoded = decodeShareCode(sess.shareCode);
+  if (!decoded) return null;
+  return decoded.view ? sess.shareCode : viewCodeFromShareCode(sess.shareCode);
+}
+
+/** The VIEW-ONLY session address of doc `uid`'s session, or null (no
+ *  session or no known server). For a session on another server it names
+ *  that server: useful to people there. */
+export function viewAddressForUid(uid: string): string | null {
+  const sess = sessionFor(uid);
+  if (!sess) return null;
+  const plain = stripShareCodeHome(sess.shareCode);
+  const decoded = decodeShareCode(plain);
+  if (!decoded) return null;
+  const viewCode = decoded.view ? plain : viewCodeFromShareCode(plain);
+  const server = sess.home ?? selfServerSync();
+  return viewCode && server ? parseSessionAddress(viewCode, server)?.address ?? null : null;
+}
+
+/** Is the session behind a code or address still live? (plugin API
+ *  `collab.probe`.) Read-only: no presence, no session record, no join
+ *  request. A session on another server is checked through this relay's
+ *  federation proxy; `unreachable` when there is no route there (which
+ *  says nothing about liveness); `unknown` when the code doesn't decode,
+ *  there's no relay connection, or nothing answered. */
+export async function probeShareCode(code: string): Promise<'live' | 'ended' | 'unknown' | 'unreachable'> {
+  const route = await routeSessionAddress(code);
+  if (route.kind === 'unreachable') return 'unreachable';
+  if (route.kind === 'remote') return probeRemoteRoom(route.roomId, route.server);
+  if (route.kind !== 'here') return 'unknown';
+  const client = relayClient();
+  if (!client) return 'unknown';
+  return client.probeRoom(route.roomId);
+}
+
+/** How a join attempt ended — the plugin API needs more than the
+ *  boolean `joinSessionWithCode` returns (which is also true for a room
+ *  that turned out to have ended). */
+export type JoinOutcome =
+  | 'joined'
+  | 'ended'
+  | 'invalid'
+  | 'needs-update'
+  | 'cancelled'
+  | 'unavailable'
+  | 'failed'
+  /** No route to the session's server (see routeSessionAddress). */
+  | 'unreachable'
+  /** Someone in the session turned a cross-server join down. */
+  | 'declined';
 
 // Feed the multi-pane shell's per-slot footers: each slot paints the copresence
 // of ITS visible doc's session (or nothing when that doc isn't in a session).
@@ -837,6 +1043,7 @@ function installSeams(
     ],
     ownsUndo: () => true,
     canRedo: () => undoManager.canRedo(),
+    isolateNextStep: () => undoGuard.isolateNextStep(),
     // Read-mode clamp (M4): swallow undo/redo entirely while reading — the Loro
     // undo transactions carry the binding meta (→ sync-origin) and would
     // otherwise sail through the read-mode lock and revert real edits.
@@ -1435,7 +1642,7 @@ const resumesInFlight = new Set<string>();
 export async function joinSessionWithCode(
   deps: CollabUiDeps,
   code: string,
-  opts?: { guestPass?: string | null },
+  opts?: { guestPass?: string | null; report?: (outcome: JoinOutcome) => void },
 ): Promise<boolean> {
   const roomId = decodeShareCode(code.trim())?.roomId ?? null;
   if (roomId && joinsInFlight.has(roomId)) return true; // already joining — consumed
@@ -1450,9 +1657,13 @@ export async function joinSessionWithCode(
 async function joinSessionWithCodeInner(
   deps: CollabUiDeps,
   code: string,
-  opts?: { guestPass?: string | null },
+  opts?: { guestPass?: string | null; report?: (outcome: JoinOutcome) => void },
 ): Promise<boolean> {
-  if (!collabEnabled()) return false;
+  const report = (o: JoinOutcome): void => opts?.report?.(o);
+  if (!collabEnabled()) {
+    report('unavailable');
+    return false;
+  }
   // Don't overwrite the doc you're working in — or bump the session you're
   // already in: unless this window holds the disposable starter, hand the
   // join to a fresh window (which re-enters here with the starter open, so it
@@ -1461,17 +1672,22 @@ async function joinSessionWithCodeInner(
   // refusing, and the session + binding are born in the window that keeps them.
   // (Single-pane desktop only; the multi-pane deps have no spawnJoinWindow.)
   // Counts as consumed: the join continues in the spawned window.
-  if (deps.spawnJoinWindow?.(code.trim())) return true;
+  if (deps.spawnJoinWindow?.(code.trim())) {
+    report('joined');
+    return true;
+  }
   // Don't overwrite a doc that's ITSELF in a session (spawnJoinWindow already
   // redirected windows holding a real doc; this guards the edge case).
   if (sessionFor(deps.getOwnerUid?.())) {
     showToast('This document is in a session — end or leave it before joining here');
+    report('failed');
     return false;
   }
   await ensureBakedRelay();
   const decoded = decodeShareCode(code);
   if (!decoded) {
     showToast('That does not look like a share code. Check that it is correct.');
+    report('invalid');
     return false;
   }
   let client: RoomsClient | null;
@@ -1490,6 +1706,7 @@ async function joinSessionWithCodeInner(
           ? 'Could not get a viewer pass for this session — ask for a fresh view link'
           : `No relay connection — ${RELAY_FIX_PATH}`,
       );
+      report('failed');
       return false;
     }
   } else {
@@ -1499,6 +1716,7 @@ async function joinSessionWithCodeInner(
     client = relayClient() ?? (opts?.guestPass ? relayClientWithGuestPass(opts.guestPass) : null);
     if (!client) {
       showToast(`No relay connection — ${RELAY_FIX_PATH}`);
+      report('failed');
       return false;
     }
   }
@@ -1509,6 +1727,7 @@ async function joinSessionWithCodeInner(
     showToast(
       `This session needs CardMirror ${decoded.minVersion} or newer — update to join.`,
     );
+    report('needs-update');
     return false;
   }
   // A resumable record for this room means WE'VE been in it before — resume
@@ -1523,7 +1742,9 @@ async function joinSessionWithCodeInner(
   // session's own persistence.
   const prior = await loadSessionRecord(decoded.roomId);
   if (prior && (prior.role === 'spectator') === decoded.view) {
-    return resumeSessionFlow(deps, decoded.roomId);
+    const resumed = await resumeSessionFlow(deps, decoded.roomId);
+    report(resumed ? 'joined' : 'failed');
+    return resumed;
   }
   // Federation: a room homed on ANOTHER server is reached through this
   // app's relay, and only once someone there lets us in (Accept, or
@@ -1540,18 +1761,27 @@ async function joinSessionWithCodeInner(
     });
     if (out.kind === 'cancelled') {
       showToast('Join request cancelled');
+      report('cancelled');
       return false;
     }
     if (out.kind === 'ended') {
       showToast('That co-editing session has ended — ask for a fresh invite to start a new one.');
+      report('ended');
       return true; // a dead room's invite is spent
+    }
+    if (out.kind === 'declined') {
+      showToast(out.message);
+      report('declined');
+      return false;
     }
     if (out.kind === 'refused') {
       showToast(out.message);
+      report(out.unreachable ? 'unreachable' : 'failed');
       return false;
     }
     if (out.kind === 'error') {
       showToast(relayFailureMessage(out.err, { initiating: false, verb: 'join' }));
+      report('failed');
       return false;
     }
     joinClient = out.client;
@@ -1618,6 +1848,7 @@ async function joinSessionWithCodeInner(
     if (!(await deps.newSessionDoc())) {
       await session.stop();
       showToast('Join cancelled');
+      report('cancelled');
       return false;
     }
     // The session owner is the doc newSessionDoc() just created — capture its
@@ -1663,6 +1894,7 @@ async function joinSessionWithCodeInner(
               : 'Joined the session',
     );
     deps.getView()?.focus();
+    report('joined');
     return true;
   } catch (err) {
     if (sessRef) void teardownSession(sessRef).catch((e) => surfaceError('collab teardown', e));
@@ -1675,6 +1907,7 @@ async function joinSessionWithCodeInner(
       void deleteRecentRoom(decoded.roomId).catch((e) => surfaceError('collab recent rooms', e));
     }
     showToast(relayFailureMessage(err, { initiating: false, verb: 'join' }));
+    report(ended ? 'ended' : 'failed');
     return ended;
   }
 }
@@ -1779,7 +2012,7 @@ async function resumeSessionFlowInner(
         keyBytes: decoded.keyBytes,
       });
       if (out.kind !== 'admitted') {
-        if (out.kind === 'refused') showToast(out.message);
+        if (out.kind === 'refused' || out.kind === 'declined') showToast(out.message);
         else if (out.kind === 'error') showToast(relayFailureMessage(out.err, { initiating: false, verb: 'resume' }));
         else if (out.kind === 'ended') showToast('That co-editing session has ended.');
         return false;

@@ -176,7 +176,9 @@ describe('undo of a multi-move reorder (one move per undo step)', () => {
       expect(loroOutline(A.ldoc), `round ${round}`).toEqual(outline(before));
     }
     A.destroy();
-  });
+    // 40 rounds against real Loro peers: ~2 s alone, but past the 5 s
+    // default when the full suite saturates the workers.
+  }, 30_000);
 
   it('sections (a block and its cards) reorder and undo as one', async () => {
     const seed = docOf(

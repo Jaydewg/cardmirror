@@ -35,6 +35,8 @@ export interface CollabPluginSource {
   /** Whether `redo` has anything to redo — Mod-Y falls through to
    *  Word-style Repeat (repeat-last-action.ts) only when it does not. */
   canRedo(): boolean;
+  /** Make the next local commit its own undo step (plugin edits). */
+  isolateNextStep?(): void;
 }
 
 let tagger: ((tr: Transaction) => void) | null = null;

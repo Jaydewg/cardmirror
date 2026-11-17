@@ -12,7 +12,7 @@
  */
 
 import { Docx } from './ooxml/docx.js';
-import { gzip, gunzip, isGzip } from './native/codec.js';
+import { gzip, gunzip, isGzip, readGzipComment, withGzipComment } from './native/codec.js';
 
 /** Read a file's existing docId, or null if it has none. Cheap — for
  *  `.docx` it only inspects the custom-properties part. */
@@ -56,5 +56,7 @@ export async function stampDocId(
   const obj = JSON.parse(new TextDecoder().decode(raw)) as Record<string, unknown>;
   obj['docId'] = docId;
   const out = new TextEncoder().encode(JSON.stringify(obj));
-  return wasGzip ? gzip(out) : out;
+  if (!wasGzip) return out;
+  // Keep the header comment (plugin summaries) the original carried.
+  return withGzipComment(gzip(out), readGzipComment(bytes) ?? undefined);
 }

@@ -5,6 +5,61 @@ changes in each release, written for users of the editor. For
 in-depth rationale and implementation context behind each entry,
 see `DETAILED_CHANGELOG.md`.
 
+## 1.17.47-f — 2026-11-16
+
+The federated build of 1.17.47. It includes everything in the 1.17.47 release notes, plus the following.
+
+### Added
+
+- **Plugins can see and join sessions on other servers.** On a relay
+  that connects to other servers, plugins with the co-editing
+  permissions (such as Live Session Link) can now check whether a
+  session on a linked server is still live and join it. As with a
+  cross-server code, someone in that session has to let you in first;
+  if they decline, the plugin is told so. A plugin's share code is
+  exactly what **Copy code** gives you, and sessions it can't reach are
+  reported as out of reach, never as ended.
+
+## 1.17.47 — 2026-11-16
+
+> (the release of) Customizability and Extensibility
+
+Upstream did not release any new versions since v1.17.32 was released (which incorporated changes from upstream/v1.17.2 and upstream/v1.17.1).
+
+### Added
+
+- **Even more customizable appearance! (via palettes, accent colors, and background textures.)** Appearance →
+  Theme & chrome now offers palettes (Sepia, Slate, Forest, Rosé, each with
+  a dark version), an accent color, and an optional faint background texture for the
+  ribbon, navigation pane, and status bar — built-in patterns or perhaps your own
+  image. The accent can be any color you pick; it's adjusted only as far as
+  needed to stay readable (a large priority). Textures are kept faint enough 
+  that every label stays readable, and a dark image can switch the bars (or the 
+  whole interface) to dark — a bright one to light — so it can show more
+  strongly. The document stays paper-white unless "Apply theme and palette
+  to the document area" is on. Nothing changes until you pick something,
+  and exported files are never affected.
+
+### Experimental
+
+- **Plugin permissions.** Plugins can now ask to do more: show dialogs
+  and status-bar notices, add right-click menu items or a side panel,
+  read or add to your documents, keep their own data inside `.cmir`
+  files, and see or join your co-editing sessions. When you install or
+  update a plugin, CardMirror lists what it asks for, each with a
+  checkbox and the plugin's own explanation if it gives one, so you can
+  untick anything before the plugin first runs. A plugin can also ask
+  for a permission at the moment a feature needs it, right after you
+  use it: answer Allow, Not now, or Don't ask again. The shield button
+  in Settings → Plugins changes any of this later, including whether a
+  plugin may ask again for things you turned off. Permissions control
+  which CardMirror features a plugin may use, not what its code can
+  reach, so only install plugins you trust.
+  Plugins that ask for nothing work exactly as before. This is an early
+  version and may still change.
+
+> ***Why do this?*** This is done now in preparation for a possible theoretical v2 sandboxed plugin surface. It's easier for developers to migrate to a v2 sandboxed API if plugins already have a documented surface to access deeper functions, instead of the current approach of direct reaching. In addition, it's also good for user-transparency and making the hooks into some deeper functions consistent.
+
 ## 1.17.32 / 1.17.32-f — 2026-11-01
 There were no independent changes in this patch release.
 

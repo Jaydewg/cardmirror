@@ -26,6 +26,14 @@
  * declares its view, the controller treats it as cross-view.
  */
 
+import { notifyPluginDocChanged, notifyPluginSelectionChanged } from './plugin-caps/events.js';
+import {
+  adoptPluginFileData,
+  collectPluginFileData,
+  forgetPluginFileData,
+  type PluginDocContext,
+} from './plugin-file-data.js';
+import type { PluginFileBag } from '../native/plugin-data.js';
 import { EditorState, Selection, TextSelection } from 'prosemirror-state';
 import { isFileChangedOnDiskError } from './error-surface.js';
 import {
@@ -248,6 +256,11 @@ function scheduleJournalForRecord(record: DocRecord): void {
   }, overdue ? 0 : RECORD_JOURNAL_DELAY_MS);
 }
 
+/** The files.data hook context for a record's working-copy write. */
+function pluginContextFor(record: DocRecord): PluginDocContext {
+  return { docUid: record.uid, docId: record.docId, title: record.filename || 'Untitled' };
+}
+
 /** Actually serialize + write `record`'s current doc as a journal
  *  entry under its uid. Logs failures; returns false so the mode-switch
  *  flow (the one caller that must know) can abort instead of reloading
@@ -257,9 +270,11 @@ async function runJournalForRecord(record: DocRecord): Promise<boolean> {
   if (!host.journalsSupported) return true;
   try {
     const state = record.view.state;
+    const plugins = collectPluginFileData(pluginContextFor(record));
     const bytes = await serializeNativeAsync(state.doc, {
       threads: Array.from(getCommentsState(state).threads.values()),
       ...(record.docId ? { docId: record.docId } : {}),
+      ...(plugins ? { plugins } : {}),
     });
     // A recovered-but-not-yet-saved draft carries its ORIGINAL journal
     // savedAt forward, so the stale-overwrite guard survives relaunches and
@@ -342,6 +357,10 @@ async function runAutosaveForRecord(record: DocRecord): Promise<void> {
         ? await serializeNativeAsync(state.doc, {
             ...(threads.length ? { threads } : {}),
             ...(record.docId ? { docId: record.docId } : {}),
+            ...((): { plugins?: PluginFileBag } => {
+              const plugins = collectPluginFileData(pluginContextFor(record));
+              return plugins ? { plugins } : {};
+            })(),
           })
         : await serializeWorkingCopy('docx', { doc: state.doc, threads }, record.docId);
     // Same as the single-doc autosave: the pre-write version snapshot, and
@@ -1159,6 +1178,7 @@ class Slot {
     // Release the cross-window path claim before destroying the
     // view — re-opening this file in any window should succeed.
     syncDocPathClaim(closing.handle, null);
+    forgetPluginFileData(closing.uid);
     closing.view.destroy();
     closing.dragSurface.detach();
     closing.navPanel.destroy();
@@ -1522,6 +1542,7 @@ class Slot {
     }
     speechResolver.unregisterView(rec.uid);
     syncDocPathClaim(rec.handle, null);
+    forgetPluginFileData(rec.uid);
     rec.view.destroy();
     rec.dragSurface.detach();
     rec.navPanel.destroy();
@@ -2845,7 +2866,12 @@ class MultiPaneShell {
       showToast("Couldn't reload — the file is no longer readable at its location.");
       return;
     }
-    let parsed: { doc: PMNode; threads: import('./comments-plugin.js').Thread[]; docId: string | null };
+    let parsed: {
+      doc: PMNode;
+      threads: import('./comments-plugin.js').Thread[];
+      docId: string | null;
+      plugins?: PluginFileBag;
+    };
     try {
       const bytes = await maybeDecryptForOpen(file.bytes, file.name);
       parsed = file.format === 'docx' ? await openDocxOffThread(bytes) : parseNative(bytes);
@@ -2861,6 +2887,7 @@ class MultiPaneShell {
       format: file.format,
       docId: parsed.docId,
       threads: parsed.threads,
+      plugins: parsed.plugins ?? null,
     });
     slot.push(fresh);
     this.focusSlot(slot);
@@ -2876,6 +2903,7 @@ class MultiPaneShell {
     doc: PMNode;
     threads: import('./comments-plugin.js').Thread[];
     dirty: boolean;
+    plugins?: PluginFileBag | null;
   }): Promise<void> {
     // Pick the first empty slot; otherwise fall back to the
     // currently-focused slot or slot1.
@@ -2896,6 +2924,7 @@ class MultiPaneShell {
       uid: entry.uid,
       docId: entry.docId,
       threads: entry.threads,
+      plugins: entry.plugins ?? null,
     });
     // Crash recovery restores content that wasn't successfully
     // saved, so it arrives dirty (close-X prompts until the user
@@ -3309,6 +3338,7 @@ class MultiPaneShell {
     let doc: PMNode;
     let threads: Thread[];
     let docId: string | null;
+    let plugins: PluginFileBag | null = null;
     // Pick the PARSER by sniffing the bytes, not the filename/format — a
     // recovered .cmir-journal or a mode-switch respawn carries native cmir bytes
     // under a docx name/format. A .docx is a 'PK' zip; cmir never is. (`format`
@@ -3316,7 +3346,7 @@ class MultiPaneShell {
     const isDocxBytes =
       openBytes.length >= 2 && openBytes[0] === 0x50 && openBytes[1] === 0x4b;
     if (!isDocxBytes) {
-      ({ doc, threads, docId } = parseNative(openBytes));
+      ({ doc, threads, docId, plugins } = parseNative(openBytes));
     } else {
       ({ doc, threads, docId } = await openDocxOffThread(openBytes));
     }
@@ -3333,6 +3363,7 @@ class MultiPaneShell {
       format,
       docId,
       threads,
+      plugins,
     });
     slot.push(record);
     this.maybeAutoMarkSpeech(record, target);
@@ -3437,6 +3468,32 @@ class MultiPaneShell {
     // focus audit). The Loro binding replaces the blank content right
     // after; focus survives a state replace. Hidden-pane guard: focus
     // follows visibility.
+    if (!slot.paneEl.hidden) record.view.focus();
+    return record.uid;
+  }
+
+  /** Join-from-file (plugin API `collab.join` with `intoDoc`): swap the
+   *  CLEAN record `uid` for a fresh session doc in the same slot that keeps
+   *  its file (name, handle, format, docId), so saving writes the live copy
+   *  back to the file the user opened. The Loro binding then replaces the
+   *  blank content. A record that's gone or has edits falls back to the
+   *  normal slot-picked session doc — never discard edits silently. */
+  async createSessionDocReplacing(uid: string): Promise<string | null> {
+    const hit = this.findRecordByUid(uid);
+    if (!hit || hit.rec.dirty || collabCopresenceFor(uid) != null) {
+      return this.createSessionDocIntoSlot();
+    }
+    const { slot, rec } = hit;
+    const keep = { filename: rec.filename, handle: rec.handle, format: rec.format, docId: rec.docId };
+    // Same close-then-rebuild order as reload-from-disk.
+    await slot.closeRecord(rec);
+    const record = buildDocRecord(keep.filename, makeBlankDoc(), slot, {
+      handle: keep.handle,
+      format: keep.format,
+      docId: keep.docId,
+    });
+    slot.push(record);
+    this.focusSlot(slot);
     if (!slot.paneEl.hidden) record.view.focus();
     return record.uid;
   }
@@ -3826,6 +3883,8 @@ function buildDocRecord(
      *  over `record`, so a load-threads dispatch earlier in this
      *  function would hit a temporal-dead-zone error. */
     threads?: Thread[];
+    /** Plugin data read from the opened/recovered `.cmir` (files.data). */
+    plugins?: PluginFileBag | null;
   },
 ): DocRecord {
   const editorEl = document.createElement('div');
@@ -3840,6 +3899,9 @@ function buildDocRecord(
   // A session's collab binding attaches ONLY to its owning uid, so a pane opened
   // during someone else's session stays independent (no document fusion).
   const uid = opts.uid ?? newDocUid();
+  // Plugin data travels with the file; keyed by this record's uid (a new
+  // doc / .docx clears anything a reused uid held).
+  adoptPluginFileData({ docUid: uid, docId: opts.docId ?? null, title: filename }, opts.plugins ?? null);
   const state = EditorState.create({
     doc,
     schema,
@@ -3879,6 +3941,9 @@ function buildDocRecord(
       const prevDiverged = transclusionDivergenceKey.getState(prevState)?.diverged;
       const next = view.state.apply(tx);
       view.updateState(next);
+      // Plugins with `doc.events` (debounced there; no-ops with no listener).
+      if (tx.docChanged) notifyPluginDocChanged(record.uid, isSyncOrigin(tx));
+      else if (!prevState.selection.eq(next.selection)) notifyPluginSelectionChanged(record.uid);
       // Re-arm the autosave + journal debounces on doc-changing
       // transactions. Autosave is per-record (each DocRecord owns
       // its own enabled flag + timer), so schedule the record's
@@ -4168,6 +4233,7 @@ export function mountMultiPaneShell(): void {
     getFilenameForUid: (uid) => shell!.filenameForUid(uid),
     getDocIdForUid: (uid) => shell!.docIdForUid(uid),
     createSessionDoc: () => shell!.createSessionDocIntoSlot(),
+    createSessionDocReplacing: (uid) => shell!.createSessionDocReplacing(uid),
     setFilenameForUid: (uid, name) => shell!.setFilenameForUid(uid, name),
     promptSaveAllForQuit: () => shell!.promptSaveAllForQuit(),
     onRecoveredDoc: (entry) => shell!.onRecoveredDoc(entry),

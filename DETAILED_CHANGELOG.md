@@ -5,6 +5,313 @@ behavior, rationale, and (where useful) the implementation context
 behind a change. For a shorter, jargon-free summary of what's new
 in each release, see `CHANGELOG.md`.
 
+## 1.17.47-f — 2026-11-16
+
+Federated build of 1.17.47 (everything in the 1.17.47 section below
+applies), plus the plugin API's federated bridge.
+
+### Added: the plugin API's `collab.*` bridge reaches other servers
+
+**What.** On 1.17.47 (no federation), a session on any other server is
+`unreachable` to plugins. The federated build fills in the parts of the
+`collab.*` surface that were reserved for it, with the same names and
+shapes, so one plugin works on both builds:
+- `reach(url)` is `federated` when this relay and that server connect;
+- `probe` and `join` work for an address on another server;
+- `current().crossServer` is `federated` or `off` (never `unsupported`);
+- `join` can end `declined`.
+
+**Reach** (`peerReach`, collab-federation.ts). Your own server is
+`home` under either name: the relay's federation identity or its
+configured URL. Otherwise the answer is `unreachable` when this relay
+doesn't federate rooms (no `federation.rooms` + `federation.joinRequests`).
+Else it is the relay's `GET /federation/v1/peer` answer: permitted,
+reachable and federating gives `federated`; refused or not federating
+gives `unreachable`; not answering gives `unknown`. Answers are cached
+for a minute, and a failed lookup isn't cached.
+
+**Routing** (`routeSessionAddress`). An EDIT address on another server
+(plain code or `f` code, `@server`) becomes `remote`, carrying the
+cross-server code (`encodeShareCode(…, server)`) that the existing join
+flow takes. The join box still rejects plain-code@server, as before;
+addresses are the plugin-facing form. An `unknown` reach is still
+tried, so the admission flow can explain a refusal. A VIEW address on
+another server is `unreachable`, because there is no cross-server view
+code (`cmview1f`).
+
+**Probe** (`probeRemoteRoom`, `RoomsClient.probeRemoteRoom`). This is
+`GET …/via/{home64}/rooms/{id}/updates?after=MAX` through this relay's
+proxy, read-only, and it creates no join request. The home relay checks
+the room pass before the room. So without an admission for the room,
+the probe sends a fresh, well-formed pass that is never stored. An
+unknown pass on a live room is `401 pass-invalid`, and an ended room is
+410 / 404. Any admission state (approved, pending, denied) also means
+the room exists. Proxy refusals (`home-not-federating`, `peer-refused`,
+`home-refused`, or a relay with no federation routes) give
+`unreachable`. `home-unreachable` gives `unknown`, because the home may
+only be offline.
+
+**Join outcomes.** `requestRemoteAdmission` now separates a decline
+(`declined`) from other refusals, and marks no-route refusals
+`unreachable`. The join flow reports `joined`, `ended`, `declined`,
+`unreachable`, `cancelled` (the user stopped waiting) and `failed` (an
+expired request, other errors). Resume shows the decline message as
+before.
+
+**Codes and addresses.**
+- `shareCode()` returns exactly what **Copy code** gives
+  (`defaultCopyCode`): the plain code by default, the cross-server code
+  when the user opted into cross-server codes, and the session's own
+  code for a session homed elsewhere.
+- Addresses stay plain code + the session's HOME server (`sess.home`,
+  or this relay's identity).
+- `viewCode()` is null for a session homed elsewhere: a plain view code
+  would point the person at their own server.
+
+**One grammar.** `src/editor/collab/server-address.ts` now re-exports
+`canonRelayUrl`, `relayHost`, `CodePrefix`, `parseCodePrefix`,
+`splitRelaySuffix` and `FEDERATION_FLAG` from
+`src/editor/federation/address.ts` instead of keeping verbatim copies.
+
+**Tests.** `tests/federation/plugin-bridge.test.ts` covers reach and
+its cache, routing, every probe answer and the throwaway pass, join
+outcomes, and session facts. It uses the rooms mock's new opt-in
+federation mode. The mock's `/capabilities` now answers 404 like a real
+pre-capabilities relay, so `tests/collab/collab-plugin-bridge.test.ts`
+checks the non-federating case on this build. It expects `crossServer:
+'off'` here, where main's build reports `unsupported`.
+
+## 1.17.47 — 2026-11-16
+
+### Added: lightweight theming (palettes, accent colors, chrome textures)
+
+**What.** Three new Appearance → Theme & chrome settings: `themePalette`
+(default / sepia / slate / forest / rose), `themeAccent` (auto = the
+palette's, blue / teal / violet / rose / amber / green, or custom with
+`themeAccentCustom`), and `chromeTexture` (auto = the palette's, none,
+grain, dots, grid, linen, or a custom image) with `chromeTextureIntensity`,
+`chromeTextureFit`, `chromeTextureMatch` (off / bars / interface) and
+`chromeTextureCustomTones`.
+`themeAppliesToDocument` now also gates whether a palette tints the
+document.
+
+**How.** `src/editor/theme-apply.ts` resolves the settings into
+attributes on `<html>` (`data-palette`, `data-accent`, `data-texture`,
+`data-doc-paper`) for both main windows and the timer popout, replacing
+`applyTheme` in index.ts and the popout's duplicate. `src/editor/themes.css`
+(loaded after style.css) holds the token blocks: each palette has a light
+and a dark block; palettes and accents set only `--pmd-accent` /
+`--pmd-accent-hover`, and one `color-mix` rule derives the accent family —
+skipped under `data-cvd`, so the color-vision preset keeps the accent.
+Inline Color overrides still win over everything. The four "dark chrome,
+paper document" restore selectors in style.css now key off
+`data-doc-paper`, set whenever the chrome is themed (dark and/or a palette)
+and apply-to-document is off. `data-theme-doc` keeps its dark-only meaning.
+
+**Custom accent.** `deriveCustomAccent` (theme-apply.ts) turns the picked
+color into light and dark variants held to the presets' bar — white on it
+≥ 4.5:1 in light and ≥ 3:1 in dark, ≥ 3:1 against every palette background —
+moving it toward black (or, in dark, from a 20%-lighter start toward
+black/white) only as far as needed, judged on the rounded hex. They're
+written inline as `--pmd-accent-custom*`, which the `data-accent="custom"`
+blocks feed into the same derivation rule as the presets.
+
+**Textures.** Bundled tiles are inline SVG data URIs under 1 KB each,
+painted by a `::before` under `#ribbon`, `#status-bar` and `.pmd-nav-panel`.
+Dark mode inverts the bundled tiles. The opacity is a live readability cap,
+not a constant: after `applyAppearance` (in a microtask, so Color overrides
+are already applied), theme-apply.ts reads each bar's background and its
+`--pmd-c-text`, `-secondary`, `-muted` (held to 4.5:1) and `--pmd-c-accent`
+(3:1) from the cascade and finds the strongest opacity at which each still
+passes over the texture's most extreme pixel — black/white × the tile's
+darkest-pixel coverage, or a custom image's measured tones. Intensity scales
+0–100% of that, with ceilings of 0.16 (tiles) and 0.35 (images).
+`chromeTextureUncapped` skips the cap (100% = the ceiling). It has no
+settings row on purpose: it's toggled from a right-click menu on the
+Intensity slider (keyboard: Menu key / Shift+F10), and while on the slider
+shows an amber tick at the readable limit (the guard keeps measuring it
+while uncapped), reads "past readable" beyond it, and carries a warning
+line with a **Turn off** link. The two scales differ (readable range vs.
+the fixed ceiling), so switching converts the stored percentage —
+`rescaleIntensity`, capped % × limit/ceiling — and the texture keeps its
+strength. The menu
+closes on Escape through a window-capture listener, ahead of the Settings
+dialog's own document-capture Escape handler. Muted text
+has the least headroom, which is why the cap is computed rather than fixed:
+a fixed 0.16 left it at ~3.1–3.9:1 over dots/grid, and 0.3 for images at
+~2:1. The pseudo-element is only mounted when a texture can
+resolve, so the stock look adds no layer. A custom image is downscaled
+(long side ≤ 1600 px, stepped down until ≤ 250 KB of WebP) and stored as a
+data URL in IndexedDB via `WebSharedStore` (`chrome-texture-store.ts`), not
+in the settings blob; `chromeTextureCustomRev` changes on replace/remove so
+other windows reload it. On import the image's 1st/99th-percentile tones
+(of a 64 px sample, so a stray pixel doesn't count but a dark region does)
+are stored in settings as `chromeTextureCustomTones`, so the light/dark
+match and the cap resolve synchronously at boot without waiting for
+IndexedDB.
+
+**Light/dark match.** `resolveScheme` picks the scheme whose surface the
+image's far tone strays from least, with a dead band so a full-range image
+switches nothing. *Whole interface* sets `data-theme` as if Theme had
+changed. *Just the bars* sets `data-bar-scheme` instead: every color block
+in style.css and themes.css (stock, dark, color-vision, each palette and
+accent, the derivation rule) has a twin selector
+`:root[data-bar-scheme=X]… :is(#ribbon, #status-bar, .pmd-nav-panel,
+.pmd-multi-nav)` that re-declares the tokens on the bars. To make that
+safe, the stock `:root` block is split so color tokens are separate from
+layout values such as the inline `--nav-width`. Bars re-resolve `color` and
+`color-scheme`, which `<body>` computed in the page's scheme. Inline Color
+overrides would lose to those per-bar declarations, so theme-apply.ts
+mirrors them into an `!important` rule scoped to the bars.
+
+**Guardrails.** `tests/editor/themes-css.test.ts` checks that every dark
+palette block re-sets its light tokens, that the picker previews match the
+CSS, and WCAG contrast: chrome text ≥ 4.5:1 on each palette surface, and
+white on the accent ≥ 4.5:1 in light and ≥ 3:1 in dark (the stock dark
+blue's own level). It also runs the live cap over every palette × mode ×
+tile to confirm all three text colors and the accent pass at 100% while the
+texture stays visible, and checks that every color block has its
+`data-bar-scheme` twin. `theme-apply.test.ts` covers the custom accent over
+awkward picks (white, black, pure yellow, neon green), the match modes, and
+the cap math.
+
+### Experimental: plugin permissions API
+
+**Status.** This is experimental. It ships so plugin authors can build
+against it, but it may still change. Changes will be additive only:
+permission ids, method names and the `.cmir` field below are meant to
+stay put. The Live Session Link plugin (`plugins/live-session-link/`) is
+its first user. It is a separate package that isn't bundled with the app.
+
+**What.** The plugin API grows by **permission**, not by `apiVersion`,
+which stays 1. A plugin lists the permissions it wants in both
+`cardmirror-plugin.json` and its registered definition. The user
+consents at install or update: the dialog lists each supported
+permission with a checkbox, all ticked, and grants only what is left
+ticked. Unticking is how a user refuses a permission before the plugin
+first runs, since install enables and loads it at once. On update, the
+permissions its new version adds start ticked. Ones the user turned off
+are listed unticked, and only while that plugin may "ask again" and the
+permission isn't blocked, so one click on Update never re-grants them.
+The update confirmation reminds the user that the shield button reviews
+them. A dev-loaded plugin gets the same list with "Allow for this
+session". Main keeps the granted set beside the install, and the
+registry mints each plugin's `api` with only the namespaces that are
+requested, granted and supported. A plugin that declares nothing gets
+exactly the old v1 surface, plus `api.permissions`. The shield button
+on each row in Settings → Plugins opens a per-permission checkbox list,
+and a change re-mints the api immediately (`PluginDefinition.activate`
+re-runs on every re-mint). The same dialog has a per-plugin switch "Let
+it ask again for permissions I turned off" (on by default), and it marks
+permissions answered "Don't ask again", each with a **Let it ask**
+button to undo that. These answers are kept per machine
+(`plugin-permission-requests.ts`, localStorage) and forgotten on
+uninstall. Every consent surface says plainly that permissions are a
+consent and supported-API contract, not a sandbox, because bundles run
+in the renderer's main world.
+
+**Just-in-time requests.** `api.permissions.request(p, { reason? })`
+asks for one declared, supported permission the plugin doesn't hold,
+with **Allow** / **Not now** / **Don't ask again**. It resolves
+`{ status, api }`: an api object never gains namespaces, so after a
+grant the plugin carries on with `api`. A prompt appears only within 10
+seconds of a trigger for that plugin:
+- a user action: running its command, clicking its context-menu item
+  or notice button, or a pointer or key event in its panel;
+- a gated event: `files.onOpen`, or `events.onFocusChange`.
+
+Typing, selection changes and saves never count. Only one prompt is
+shown at a time. Outside the window, or for a permission that is
+blocked or whose plugin may not ask again, `request` resolves `denied`
+without a prompt, so plugins can't nag from timers or on load. "Not
+now" to an event-triggered prompt keeps event-triggered prompts for that
+permission quiet until restart; a prompt from the user's own action can
+still appear. Allow goes through the same storage as the shield (main's
+manifest for installed plugins, session-only for bundles loaded from
+file) and re-mints the api.
+
+**Reasons.** A new `permissionReasons` map, `{ "<permission>": "<one
+line>" }`, can appear in `cardmirror-plugin.json` and in the registered
+definition. It allows up to 200 characters per entry, for declared
+permissions only. A separate map rather than objects inside
+`permissions`, because older builds drop non-string `permissions`
+entries and would lose the permission itself. Main and the renderer
+sanitize it the same way, pinned by a parity test. The dialogs show it
+under CardMirror's own description, in italics, as "*Name* says: “…”".
+Install and update use the manifest's text. Prompts and bundles loaded
+from file use the definition's text, and a `reason` passed to `request`
+replaces it for that one prompt. Older builds ignore the field.
+
+**Catalog** (`src/editor/plugin-permissions.ts`; PLUGINS.md's table is
+generated from it by `npm run docs:permissions`): `ui.dialogs`,
+`ui.notices`, `ui.contextMenu`, `ui.panel`, `doc.read`, `doc.edit`,
+`doc.events`, `files.data`, `collab.read`, `collab.server`,
+`collab.probe`, `collab.shareCode`, `collab.viewCode`, `collab.join`.
+Each one has a label, a description and a sensitivity
+(low / medium / high).
+
+**Compatibility.** Unknown permission strings are dropped, never
+rejected, so a plugin built for a newer CardMirror still loads with
+whatever this build supports, and the UI lists the rest as unsupported.
+`api.permissions.has(p)`, `list()` and `status(p)` report each one as
+`granted`, `denied`, `unsupported` or `undeclared`, so a plugin can
+explain a missing feature instead of guessing from the version string.
+Result unions (join outcomes, probe results, server reach, cross-server
+state) may gain values, and each one documents how to read a value a
+plugin doesn't know.
+
+**Call-time checks.** `src/editor/plugin-call-rules.ts` maps every
+namespace method to its permission, and the check runs again on every
+call. An `api` object kept from before a revoke throws (or, for a method
+that returns a promise, rejects) with `name === 'PluginPermissionError'`,
+and the toast names the plugin by its display name. A method missing
+from the table isn't exposed at all. `plugin-api-call-time.test.ts`
+fails on any gap, and a parity test pins main's copy of the id
+sanitizer to the renderer's.
+
+**Plugin data in `.cmir` (`files.data`).** A new top-level `"plugins"`
+field holds `{ "<pluginId>": { name, data, summary? } }`
+(`src/native/plugin-data.ts`). Limits: 64 KB of JSON per entry, 32
+entries, a 100-character name and a 200-character summary. Save hooks
+return new data, `null` (remove my entry) or `undefined` (keep it as
+is). Entries from plugins that aren't installed, enabled or granted are
+carried through every save untouched, so a file passed between machines
+never loses another plugin's data. Older builds ignore the field and
+drop it if they re-save. Open hooks fire once per (doc, plugin). The
+summaries, never the data, are also written into the gzip header comment
+(RFC 1952 FCOMMENT), where `gzip -l`, `exiftool` and `7z l -slt` can show
+them without unpacking. Every standard gzip reader skips the comment.
+
+**Co-editing (`collab.*`) and session addresses.** A session's portable
+name is `<code>@<canonical server URL>`, and it reads the same on
+federated and non-federated builds (`src/editor/collab/server-address.ts`
+copies federation's URL canonicalizer and code-prefix parser verbatim,
+pinned by tests). `current()` returns public facts only (room, role,
+title, server, `crossServer`), never the key. `shareCode` / `viewCode`
+return what a person pastes, and `shareAddress` / `viewAddress` the
+machine form. `probe` checks liveness without joining and caches the
+result for a minute per session. `join` returns an outcome (`joined`,
+`ended`, `unreachable`, `declined`, …) and can join in place of a
+just-opened file (`intoDoc`), keeping that file so Save writes the live
+copy back. On this build every other server is `unreachable`. The
+federated build fills in `federated` reach and cross-server joins. Its
+host can decline those, which is why `declined` exists.
+
+**Other namespaces.** `ui.choose` / `ui.confirm`, `notices.post` (a
+status-bar notice with up to two action buttons), `menu.add`,
+`panel.get`, `doc.read` / `doc.insert`, and `events.onDocChange` /
+`onSelectionChange` / `onFocusChange`.
+
+**Tooling.** `@cardmirror/plugin-api/testing` (`src/plugin-sdk/testing.ts`)
+provides `createFakePluginApi`, which gates methods from the same rule
+table as the host, so a plugin's own tests see the host's rules. Its
+`request` takes a scripted `answer`, records each prompt in `requests`,
+and re-mints `api` on Allow. A manifest-vs-definition drift warning
+flags permissions declared in only one of the two places. `plugins/_template/` is a starter package.
+`npm run check:plugins` tests, typechecks and builds every package
+under `plugins/`, and CI runs it on Ubuntu. A permission-demo fixture
+sits behind the console switch `window.__plugins('perm-demo-on')`.
+
 ## 1.17.2 — 2026-11-01 (part of 1.17.32 & 1.17.32-f)
 
 (The following section has been kept verbatim from upstream.)

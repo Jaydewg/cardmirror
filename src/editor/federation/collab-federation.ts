@@ -25,7 +25,7 @@ import { settings } from '../settings.js';
 import { flaggedVersion } from '../relay-protocol.js';
 import { appVersion } from '../install-info.js';
 import { decryptBlob, encryptBlob, importRoomKey } from '../collab/collab-crypto.js';
-import { relayClientForHome } from '../collab/collab-relay.js';
+import { relayBaseUrl, relayClient, relayClientForHome } from '../collab/collab-relay.js';
 import {
   RoomsError,
   RELAY_NOT_FEDERATING_STATUS,
@@ -36,6 +36,7 @@ import {
 import { refusalWhy, relayLabel } from './address.js';
 export { refusalWhy };
 import { ownRelayFederation, refreshOwnRelayFederation, selfRelayUrl } from './self.js';
+import { relayReachable } from './relay-capabilities.js';
 
 // ── Where a room lives ──
 
@@ -117,16 +118,90 @@ export function remoteRoomClient(roomId: string, home: string): RoomsClient | nu
   return relayClientForHome(home, () => storedRoomPass(roomId, home)?.pass ?? '');
 }
 
+/** Is a room on another server still live? (plugin API `collab.probe`.)
+ *  Uses this machine's admission for the room when it has one, else a
+ *  fresh pass that is NEVER stored: it only gets "no such admission"
+ *  back, which tells a live room from an ended one without asking to
+ *  join (see RoomsClient.probeRemoteRoom). */
+export async function probeRemoteRoom(
+  roomId: string,
+  home: string,
+): Promise<'live' | 'ended' | 'unknown' | 'unreachable'> {
+  const pass = storedRoomPass(roomId, home)?.pass ?? mintPass();
+  const client = relayClientForHome(home, () => pass);
+  if (!client) return 'unknown';
+  return client.probeRemoteRoom(roomId);
+}
+
+// ── Other servers, as this relay sees them ──
+
+export type PeerReach = 'federated' | 'unreachable' | 'unknown' | 'self';
+const PEER_TTL_MS = 60_000;
+const peerCache = new Map<string, { at: number; reach: PeerReach }>();
+
+/** Can this machine open sessions on `url` (canonical) through its
+ *  relay? `self` when it IS this relay; `unreachable` when this relay
+ *  doesn't federate rooms, policy refuses the server, or the server
+ *  doesn't federate; `unknown` when it can't tell (offline, the server
+ *  isn't answering, an older relay). Cached for a minute. */
+export async function peerReach(url: string): Promise<PeerReach> {
+  if (url === selfRelayUrl()) return 'self';
+  await refreshOwnRelayFederation();
+  const fed = ownRelayFederation();
+  if (!fed) {
+    // No federation block: the relay answered without one (it doesn't
+    // federate), or it hasn't answered at all (can't tell).
+    const base = relayBaseUrl();
+    return base && relayReachable(base) === true ? 'unreachable' : 'unknown';
+  }
+  if (!fed.rooms || !fed.joinRequests) return 'unreachable';
+  const hit = peerCache.get(url);
+  if (hit && Date.now() - hit.at < PEER_TTL_MS) return hit.reach;
+  const client = relayClient();
+  if (!client) return 'unknown';
+  let reach: PeerReach;
+  try {
+    const info = await client.peerInfo(url);
+    if (info.self) reach = 'self';
+    else if (!info.permitted || info.federates === false) reach = 'unreachable';
+    else if (info.federates === true && info.reachable === true) reach = 'federated';
+    else reach = 'unknown';
+  } catch {
+    return 'unknown'; // not cached: a blip shouldn't stick for a minute
+  }
+  peerCache.set(url, { at: Date.now(), reach });
+  return reach;
+}
+
+/** Test seam: forget cached peer answers. */
+export function clearPeerReachCache(): void {
+  peerCache.clear();
+}
+
 // ── Joiner: ask, wait, learn the mode ──
 
 export type AdmissionOutcome =
   | { kind: 'admitted'; mode: JoinMode; client: RoomsClient }
   | { kind: 'cancelled' }
-  | { kind: 'refused'; message: string }
+  /** Someone in the session turned the request down. */
+  | { kind: 'declined'; message: string }
+  /** `unreachable`: no route to the session's server (this relay or the
+   *  home doesn't federate, or policy refuses one side), as opposed to a
+   *  refusal of this request (expired, too many requests). */
+  | { kind: 'refused'; message: string; unreachable?: boolean }
   /** Not a federation answer (own-relay credentials, network): the
    *  caller words it like any other relay failure. */
   | { kind: 'error'; err: unknown }
   | { kind: 'ended' };
+
+/** A federation failure that means "no route to that server" (this
+ *  relay or the home doesn't federate, or policy refuses either side). A
+ *  home that is merely offline isn't: it may answer in a minute. */
+function isNoRoute(err: unknown): boolean {
+  if (!(err instanceof RoomsError)) return false;
+  if (err.status === RELAY_NOT_FEDERATING_STATUS || err.code === 'relay-not-federating') return true;
+  return err.code === 'peer-refused' || err.code === 'home-refused' || err.code === 'home-not-federating';
+}
 
 /** What a federation refusal means to a person. */
 export function federationFailureMessage(err: unknown, homeLabel: string): string | null {
@@ -169,6 +244,7 @@ export async function requestRemoteAdmission(opts: {
     return {
       kind: 'refused',
       message: `This session is on another server (${label}), and your relay doesn't connect to other servers.`,
+      unreachable: true,
     };
   }
   let stored = storedRoomPass(roomId, home);
@@ -185,8 +261,12 @@ export async function requestRemoteAdmission(opts: {
       return { kind: 'ended' };
     }
     const msg = federationFailureMessage(err, label);
-    if (err instanceof RoomsError && err.code === 'join-denied') forgetRoomPass(roomId);
-    return msg ? { kind: 'refused', message: msg } : { kind: 'error', err };
+    if (err instanceof RoomsError && err.code === 'join-denied') {
+      forgetRoomPass(roomId);
+      return { kind: 'declined', message: msg ?? 'The session declined your request to join.' };
+    }
+    if (!msg) return { kind: 'error', err };
+    return { kind: 'refused', message: msg, unreachable: isNoRoute(err) };
   };
 
   // One request per pass (idempotent server-side): first try the status
@@ -211,7 +291,7 @@ export async function requestRemoteAdmission(opts: {
     }
     if (s.state === 'denied') {
       forgetRoomPass(roomId);
-      return { kind: 'refused', message: 'The session declined your request to join.' };
+      return { kind: 'declined', message: 'The session declined your request to join.' };
     }
     if (s.state === 'expired' || s.state === 'withdrawn') {
       forgetRoomPass(roomId);

@@ -1,0 +1,18 @@
+{
+  "id": "live-session-link",
+  "name": "Live Session Link",
+  "version": "0.1.0",
+  "description": "Saved .cmir files can carry their live co-editing link; whoever opens one can join the session or keep working locally.",
+  "author": "CardMirror",
+  "apiVersion": 1,
+  "permissions": [
+    "collab.join",
+    "collab.probe",
+    "collab.read",
+    "collab.server",
+    "collab.shareCode",
+    "files.data",
+    "ui.dialogs",
+    "ui.notices"
+  ]
+}

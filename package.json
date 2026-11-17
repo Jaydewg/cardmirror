@@ -1,6 +1,6 @@
 {
   "name": "cardmirror",
-  "version": "1.17.32-f",
+  "version": "1.17.47-f",
   "description": "CardMirror — ProseMirror-based editor that interoperates with Advanced Verbatim",
   "license": "SEE LICENSE IN LICENSE",
   "author": "Anthony Trufanov",
@@ -33,7 +33,9 @@
     "postinstall": "patch-package",
     "build:readtool": "esbuild src/tools/cardmirror-read-cli.ts --bundle --platform=node --format=cjs --outfile=packaging/cardmirror-read/cardmirror-read.cjs --log-level=warning",
     "build:lite": "VITE_LITE=1 VITE_OUT_DIR=dist-lite vite build",
-    "verify:lite": "node scripts/verify-lite-bundle.mjs"
+    "verify:lite": "node scripts/verify-lite-bundle.mjs",
+    "docs:permissions": "node scripts/update-permission-table.mjs",
+    "check:plugins": "node scripts/check-plugins.mjs"
   },
   "dependencies": {
     "fast-xml-parser": "^4.5.0",

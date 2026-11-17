@@ -76,6 +76,10 @@ const SECRET_SETTING_KEYS = new Set<string>([
   'myMemoryEmail',
 ]);
 
+/** Clamp for `pluginPanelWidth` (the panel's resize handle uses it too). */
+export const PLUGIN_PANEL_MIN_WIDTH = 220;
+export const PLUGIN_PANEL_MAX_WIDTH = 640;
+
 /** Reader profile for read-time estimates: name + words-per-minute.
  *  `tagWpm` is the optional SECOND speed most readers actually have —
  *  the rate for tags, analytics, and cites (the structural read), with
@@ -433,6 +437,46 @@ export type DocTypeFormat = 'default' | 'cmir' | 'docx';
  *  every heading, so it keeps live numbering and has no such setting.) */
 export type NumberingExport = 'freeze' | 'remove';
 
+/** Named chrome palettes (themes.css). `'default'` is the stock gray look;
+ *  every other palette has a light and a dark variant. */
+export const THEME_PALETTES = ['default', 'sepia', 'slate', 'forest', 'rose'] as const;
+export type ThemePalette = (typeof THEME_PALETTES)[number];
+/** Accent-color choices. `'auto'` = whatever the active palette pairs with;
+ *  `'custom'` = `themeAccentCustom`, nudged for contrast (theme-apply.ts). */
+export const THEME_ACCENTS = ['auto', 'blue', 'teal', 'violet', 'rose', 'amber', 'green', 'custom'] as const;
+export type ThemeAccent = (typeof THEME_ACCENTS)[number];
+/** Chrome background textures. `'auto'` = the palette's paired texture (none
+ *  for the default palette); `'custom'` = the user's image in
+ *  chrome-texture-store.ts. */
+export const CHROME_TEXTURES = ['auto', 'none', 'grain', 'dots', 'grid', 'linen', 'custom'] as const;
+export type ChromeTexture = (typeof CHROME_TEXTURES)[number];
+export type ChromeTextureFit = 'tile' | 'cover';
+/** What a custom texture image may switch to keep chrome text readable:
+ *  nothing, just the bars it is drawn on, or the whole interface (as if
+ *  Theme were set to the image's light/dark). */
+export const CHROME_TEXTURE_MATCH = ['off', 'bars', 'interface'] as const;
+export type ChromeTextureMatch = (typeof CHROME_TEXTURE_MATCH)[number];
+/** Darkest / lightest tones of the custom texture image, measured once on
+ *  import (chrome-texture-store.ts). Drives the light/dark match and the
+ *  readability cap synchronously at boot, before the image itself loads. */
+export interface ChromeTextureTones {
+  darkest: string;
+  lightest: string;
+}
+
+const HEX6 = /^#[0-9a-f]{6}$/i;
+function sanitizeTones(v: unknown): ChromeTextureTones | null {
+  if (!v || typeof v !== 'object') return null;
+  const { darkest, lightest } = v as Record<string, unknown>;
+  if (typeof darkest !== 'string' || typeof lightest !== 'string') return null;
+  if (!HEX6.test(darkest) || !HEX6.test(lightest)) return null;
+  return { darkest: darkest.toLowerCase(), lightest: lightest.toLowerCase() };
+}
+
+function pickOption<T extends string>(options: readonly T[], v: unknown, fallback: T): T {
+  return typeof v === 'string' && (options as readonly string[]).includes(v) ? (v as T) : fallback;
+}
+
 export interface VoiceCalibrationProfile {
   aliases: Record<string, string[]>;
   updatedAt: number;
@@ -614,8 +658,41 @@ export interface Settings {
    *  follows the theme, but the document itself keeps a light /
    *  paper-like surface — the configuration most people want
    *  when running dark mode. Turn on to make the document area
-   *  follow the chrome theme as well. */
+   *  follow the chrome theme as well. Also gates whether a named
+   *  palette (`themePalette`) tints the document area. */
   themeAppliesToDocument: boolean;
+  /** Named chrome palette (themes.css). Resolves to `data-palette` on
+   *  the document root; absent for `'default'`. */
+  themePalette: ThemePalette;
+  /** Accent color. Resolves to `data-accent`; absent for `'auto'`. The
+   *  color-vision preset pins the accent while it is on. */
+  themeAccent: ThemeAccent;
+  /** The user's own accent (`#rrggbb`), used when `themeAccent` is
+   *  'custom'. Stored as picked; theme-apply.ts derives the light and
+   *  dark variants actually shown, nudged to pass the contrast bar. */
+  themeAccentCustom: string;
+  /** Background texture on the ribbon, nav pane, and status bar.
+   *  Resolves to `data-texture`; absent for `'auto'`. */
+  chromeTexture: ChromeTexture;
+  /** Texture strength, 0–100. 100 = as strong as keeps every chrome
+   *  text color readable (computed live in theme-apply.ts). */
+  chromeTextureIntensity: number;
+  /** How a custom texture image is laid out: repeated, or stretched to
+   *  cover each chrome surface. */
+  chromeTextureFit: ChromeTextureFit;
+  /** Changes whenever the custom texture image is replaced or removed,
+   *  so other windows (which share settings) reload it from storage.
+   *  The image itself lives in IndexedDB, never in this blob. */
+  chromeTextureCustomRev: string;
+  /** Tones of the stored custom image (null when none / unmeasured). */
+  chromeTextureCustomTones: ChromeTextureTones | null;
+  /** Whether a custom image switches light/dark to suit itself. */
+  chromeTextureMatch: ChromeTextureMatch;
+  /** Let Intensity go past the readability cap, up to the fixed ceilings
+   *  (theme-apply.ts). Off by default; deliberately not a settings row —
+   *  toggled from the Intensity slider's right-click menu, and announced
+   *  under the slider while on. */
+  chromeTextureUncapped: boolean;
   /** Icon style for the app chrome (ribbon buttons, banners,
    *  dialog glyphs). `'modern'` (default) uses the Untitled UI
    *  line-icon set, painted in `currentColor` via CSS masks;
@@ -661,6 +738,8 @@ export interface Settings {
    *  240 threads get cramped, above 560 the column eats too much
    *  editor space. Default 320. */
   commentsColumnWidth: number;
+  /** Width (px) of the right-side plugin panel (`ui.panel`). */
+  pluginPanelWidth: number;
   /** UI motion preference. `'auto'` (default) follows the OS
    *  `prefers-reduced-motion` media query and gives the user the
    *  motion-reduction state their system advertises. `'on'` always
@@ -1728,6 +1807,11 @@ export interface Settings {
    *  plugins are full-trust code, so casual discovery is the thing being
    *  prevented. Re-armed into main each boot; enforcement lives there. */
   pluginCommunityInstalls: boolean;
+  /** Plugins: register the built-in Permission Demo plugin (a dev
+   *  fixture exercising the permission consent path). Console-only
+   *  (`window.__plugins('perm-demo-on')`), no settings row, off by
+   *  default — its command stays out of the palette unless set. */
+  pluginPermissionDemo: boolean;
   /** Pairing: master switch for cross-machine card sharing (the send /
    *  receive pills + the delivery channel). Off by default. Desktop +
    *  web (web since the Phase-4 renderer mailbox). */
@@ -1898,12 +1982,23 @@ const DEFAULTS: Settings = {
   markedDocNumbering: 'freeze',
   theme: 'system',
   themeAppliesToDocument: false,
+  themePalette: 'default',
+  themeAccent: 'auto',
+  themeAccentCustom: '#2563eb',
+  chromeTexture: 'auto',
+  chromeTextureIntensity: 70,
+  chromeTextureFit: 'tile',
+  chromeTextureCustomRev: '',
+  chromeTextureCustomTones: null,
+  chromeTextureMatch: 'bars',
+  chromeTextureUncapped: false,
   iconSet: 'modern',
   showDocNameChip: false,
   showUndoRedoButtons: false,
   checkForUpdatesOnLaunch: true,
   updateChecksPausedUntil: 0,
   commentsColumnWidth: 320,
+  pluginPanelWidth: 320,
   reduceMotion: 'auto',
   readerReduceMotion: false,
   colorVisionFriendly: false,
@@ -2138,6 +2233,7 @@ const DEFAULTS: Settings = {
   cardCutterReadTimeSec: 0,
   pluginsEnabled: false,
   pluginCommunityInstalls: false,
+  pluginPermissionDemo: false,
   pairingEnabled: false,
   pairingPollSeconds: 30,
   pairingRelayUrl: '',
@@ -2305,6 +2401,9 @@ export interface SettingMeta {
     | 'colorSlots'
     | 'colorOverrides'
     | 'theme'
+    | 'themePalette'
+    | 'themeAccent'
+    | 'chromeTexture'
     | 'iconSet'
     | 'reduceMotion'
     | 'timerProfile'
@@ -3333,14 +3432,46 @@ export const SETTING_METADATA: SettingMeta[] = [
     aliases: ['light mode', 'dark mode', 'toggle theme', 'system theme', 'color scheme'],
   },
   {
-    key: 'themeAppliesToDocument',
-    label: 'Apply theme to the document area',
+    key: 'themePalette',
+    label: 'Palette',
     description:
-      "Off by default: when the theme is dark (or system-resolved dark), only the chrome — ribbon, nav, status bar — goes dark. The document area stays light, so cards still read like paper. Turn on to make the document itself follow the theme.",
+      'Tints the ribbon, navigation pane, status bar, and dialogs. Each palette has a light and a dark version that follows the Theme above. The document area keeps its paper look unless "Apply theme and palette to the document area" is on. Highlights and exported files are never affected.',
+    kind: 'themePalette',
+    category: 'appearance',
+    section: 'Theme & chrome',
+    mobile: true,
+    aliases: ['palette', 'color theme', 'sepia', 'slate', 'forest', 'rose', 'theme colors'],
+  },
+  {
+    key: 'themeAccent',
+    label: 'Accent color',
+    description:
+      'The color of primary buttons, focus rings, selected toggles, and drag indicators. "Palette" uses the color the palette comes with. "Custom" takes any color; if it is too light or too faint to read against, CardMirror uses the nearest shade that passes, and dark mode gets a lighter shade of it. While the color-vision friendly preset is on, it sets the accent instead.',
+    kind: 'themeAccent',
+    category: 'appearance',
+    section: 'Theme & chrome',
+    mobile: true,
+    aliases: ['accent color', 'highlight color ui', 'button color', 'brand color', 'custom color', 'color picker'],
+  },
+  {
+    key: 'chromeTexture',
+    label: 'Background texture',
+    description:
+      'A faint pattern behind the ribbon, navigation pane, and status bar. "Palette" uses the palette\'s own texture (the default palette has none). Intensity tops out where every label stays readable, so it can\'t make text hard to read. A dark image can switch the bars (or the whole interface) to dark, and a bright one to light, so it can show more strongly. A custom image is shrunk and kept in this app\'s local storage, not in your settings file, so it isn\'t included in settings backups.',
+    kind: 'chromeTexture',
+    category: 'appearance',
+    section: 'Theme & chrome',
+    aliases: ['texture', 'wallpaper', 'background image', 'pattern', 'chrome background', 'match image'],
+  },
+  {
+    key: 'themeAppliesToDocument',
+    label: 'Apply theme and palette to the document area',
+    description:
+      "Off by default: the chrome — ribbon, nav, status bar — follows the dark theme and your palette, while the document area stays paper-white so cards still read like paper. Turn on to make the document itself follow the theme and palette (for example, sepia paper).",
     kind: 'toggle',
     category: 'appearance',
     section: 'Theme & chrome',
-    aliases: ['dark document', 'dark paper', 'dark mode document'],
+    aliases: ['dark document', 'dark paper', 'dark mode document', 'sepia paper', 'tinted paper'],
   },
   {
     key: 'iconSet',
@@ -4988,6 +5119,23 @@ function sanitize(s: Settings): Settings {
     theme:
       s.theme === 'light' || s.theme === 'dark' ? s.theme : 'system',
     themeAppliesToDocument: !!s.themeAppliesToDocument,
+    themePalette: pickOption(THEME_PALETTES, s.themePalette, 'default'),
+    themeAccent: pickOption(THEME_ACCENTS, s.themeAccent, 'auto'),
+    chromeTexture: pickOption(CHROME_TEXTURES, s.chromeTexture, 'auto'),
+    chromeTextureIntensity:
+      typeof s.chromeTextureIntensity === 'number' && Number.isFinite(s.chromeTextureIntensity)
+        ? Math.round(clamp(s.chromeTextureIntensity, 0, 100))
+        : DEFAULTS.chromeTextureIntensity,
+    chromeTextureFit: s.chromeTextureFit === 'cover' ? 'cover' : 'tile',
+    chromeTextureCustomRev:
+      typeof s.chromeTextureCustomRev === 'string' ? s.chromeTextureCustomRev.slice(0, 64) : '',
+    chromeTextureCustomTones: sanitizeTones(s.chromeTextureCustomTones),
+    chromeTextureMatch: pickOption(CHROME_TEXTURE_MATCH, s.chromeTextureMatch, 'bars'),
+    chromeTextureUncapped: s.chromeTextureUncapped === true,
+    themeAccentCustom:
+      typeof s.themeAccentCustom === 'string' && HEX6.test(s.themeAccentCustom)
+        ? s.themeAccentCustom.toLowerCase()
+        : DEFAULTS.themeAccentCustom,
     // Default-on (modern): only an explicit `'classic'` reverts to the
     // original emoji/text glyphs (survives upgrades from before this existed).
     iconSet: s.iconSet === 'classic' ? 'classic' : 'modern',
@@ -5001,6 +5149,10 @@ function sanitize(s: Settings): Settings {
     commentsColumnWidth:
       typeof s.commentsColumnWidth === 'number' && Number.isFinite(s.commentsColumnWidth)
         ? Math.max(240, Math.min(560, s.commentsColumnWidth))
+        : 320,
+    pluginPanelWidth:
+      typeof s.pluginPanelWidth === 'number' && Number.isFinite(s.pluginPanelWidth)
+        ? Math.max(PLUGIN_PANEL_MIN_WIDTH, Math.min(PLUGIN_PANEL_MAX_WIDTH, s.pluginPanelWidth))
         : 320,
     reduceMotion:
       s.reduceMotion === 'on' || s.reduceMotion === 'off' ? s.reduceMotion : 'auto',
@@ -5472,6 +5624,7 @@ function sanitize(s: Settings): Settings {
 
     pluginsEnabled: !isLiteBuild() && s.pluginsEnabled === true,
     pluginCommunityInstalls: s.pluginCommunityInstalls === true,
+    pluginPermissionDemo: s.pluginPermissionDemo === true,
     pairingEnabled: !isLiteBuild() && s.pairingEnabled === true,
     pairingConnectedUntil: Number.isFinite(Number(s.pairingConnectedUntil))
       ? Math.max(0, Number(s.pairingConnectedUntil))

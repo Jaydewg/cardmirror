@@ -24,6 +24,8 @@ import {
   storedRoomPass,
 } from '../../src/editor/federation/collab-federation.js';
 import { refreshOwnRelayFederation } from '../../src/editor/federation/self.js';
+import { clearPeerReachCache } from '../../src/editor/federation/collab-federation.js';
+import * as collabUi from '../../src/editor/collab/collab-ui.js';
 import { settings } from '../../src/editor/settings.js';
 import { relayHome64 } from '../../src/editor/federation/address.js';
 import { mkView, settle, sleep, simpleDoc, docText, typeAfter } from '../collab/_loro-helpers.js';
@@ -234,7 +236,7 @@ describe.skipIf(!CFG)('federated co-editing (real relays)', () => {
     await until(() => text().includes('wants to join from another server'));
     click('Decline');
     const declined = await second;
-    expect(declined).toEqual({ kind: 'refused', message: 'The session declined your request to join.' });
+    expect(declined).toEqual({ kind: 'declined', message: 'The session declined your request to join.' });
     expect(storedRoomPass(room2.roomId, a.url)).toBeNull();
 
     // 3. The joiner cancels while waiting: the request is withdrawn.
@@ -270,6 +272,37 @@ describe.skipIf(!CFG)('federated co-editing (real relays)', () => {
     const ok4 = await fourth;
     expect(ok4.kind === 'admitted' && ok4.mode).toBe('write');
   }, 60_000);
+
+  it('the plugin bridge from B: reach, probe a session on A without asking to join, then ended', async () => {
+    const { a, b, c } = CFG!;
+    (window as unknown as { electronAPI?: unknown }).electronAPI ??= {};
+    localStorage.setItem('pmd-collab', '1');
+    settings.set('pairingRelayUrl', b.url);
+    settings.set('pairingRelayToken', b.token);
+    await refreshOwnRelayFederation(true);
+    clearPeerReachCache();
+    expect(await collabUi.serverReach(b.url)).toBe('home');
+    expect(await collabUi.serverReach(a.url)).toBe('federated');
+    expect(await collabUi.serverReach(c.url)).toBe('unreachable'); // C doesn't federate
+
+    const hostClient = local(a);
+    const { session: host, shareCode } = await CollabSession.host({
+      pmDoc: simpleDoc('probe me'),
+      client: hostClient,
+      ...FAST,
+    });
+    const { roomId } = decodeShareCode(shareCode)!;
+    const address = `${shareCode}@${a.url}`;
+    expect(await collabUi.routeSessionAddress(address)).toMatchObject({ kind: 'remote', roomId, server: a.url });
+    expect(await collabUi.probeShareCode(address)).toBe('live');
+    // A probe is not a join request, and leaves no admission behind.
+    expect(await hostClient.listJoinRequests(roomId)).toHaveLength(0);
+    expect(storedRoomPass(roomId, a.url)).toBeNull();
+    await host.end();
+    expect(await collabUi.probeShareCode(address)).toBe('ended');
+    // A session on C (no federation) is unreachable, never "ended".
+    expect(await collabUi.probeShareCode(`${shareCode}@${c.url}`)).toBe('unreachable');
+  }, 30_000);
 
   it('a relay without federation is never mistaken for an ended room', async () => {
     const { a, c } = CFG!;

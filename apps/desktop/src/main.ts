@@ -78,6 +78,7 @@ import {
   inspectFromGithub,
   fetchPluginDirectory,
   commitPendingInstall,
+  setGrantedPermissions,
   discardPendingInstall,
   setCommunityInstallsUnlocked,
   setAllowlistRelayUrlSupplier,
@@ -999,8 +1000,14 @@ ipcMain.handle('host:plugin-install-inspect', async (_e, ref: string) =>
 );
 // The relay's browsable plugin directory (allowlist-filtered main-side).
 ipcMain.handle('host:plugin-browse', async () => fetchPluginDirectory());
-ipcMain.handle('host:plugin-install-commit', async (_e, token: string) =>
-  commitPendingInstall(String(token)),
+// `granted` = the permissions the user just consented to (absent from an
+// older renderer — commit then keeps the prior consent on an update).
+// Main clamps it to the manifest's own request.
+ipcMain.handle('host:plugin-install-commit', async (_e, token: string, granted?: unknown) =>
+  commitPendingInstall(String(token), granted),
+);
+ipcMain.handle('host:plugin-set-permissions', async (_e, id: string, granted: unknown) =>
+  setGrantedPermissions(String(id), granted),
 );
 ipcMain.handle('host:plugin-install-discard', async (_e, token: string) => {
   discardPendingInstall(String(token));

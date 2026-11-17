@@ -26,7 +26,9 @@ import {
   insertInDocCopy,
   selfRefSelectionPos,
 } from './self-transclusion-commands.js';
-import { registerOpenContextMenu, clearOpenContextMenu } from './context-menu-registry.js';
+import { isContextMenuOpen, showContextMenu, type MenuEntry } from './context-menu-builder.js';
+import { pluginMenuEntries, type PluginMenuTarget } from './plugin-caps/menu.js';
+import { getSpeechDocResolver } from './speech-doc-registry.js';
 import { dragController, type DragItem, type DragSurface } from './drag-controller.js';
 import { alphabetizeSlots, type SectionSlot } from './alphabetize-headings.js';
 import { isTransclusionNode, zoneIdentity } from './transclusion.js';
@@ -381,7 +383,7 @@ export class NavigationPanel {
     // Anything with its own claim on Escape goes first: a dialog, this
     // pane's context menu, a drag in flight, another text field (the find
     // bar). The search box handles its own Escape.
-    if (isAnyOverlayOpen() || openContextMenuEl || dragController.isActive()) return;
+    if (isAnyOverlayOpen() || isContextMenuOpen() || dragController.isActive()) return;
     // Not every dialog registers with the overlay stack (Clean, Bulk
     // convert, the benchmark…), but every one of them is a `pmd-*-overlay`
     // element: stand down while any is showing. This listener is on the
@@ -2758,11 +2760,6 @@ export class NavigationPanel {
   // ---------------------------------------------- Context menu ----
 
   private openContextMenu(x: number, y: number, entry: HeadingEntry): void {
-    closeAnyOpenContextMenu();
-
-    const menu = document.createElement('div');
-    menu.className = 'pmd-nav-context-menu';
-
     // Right-click on a row that's part of the multi-selection → the
     // menu acts on ALL selected rows; on any other row → just that one.
     const n = this.contextTargets(entry).length;
@@ -2841,40 +2838,17 @@ export class NavigationPanel {
       })),
     ];
 
-    for (const item of items) {
-      if (item.kind === 'separator') {
-        const sep = document.createElement('div');
-        sep.className = 'pmd-nav-context-separator';
-        menu.appendChild(sep);
-        continue;
-      }
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'pmd-nav-context-item';
-      if (item.checked) btn.classList.add('pmd-nav-context-item-checked');
-      btn.textContent = item.label;
-      btn.addEventListener('click', () => {
-        item.action();
-        closeAnyOpenContextMenu();
-      });
-      menu.appendChild(btn);
-    }
-
-    document.body.appendChild(menu);
-
-    // Position the menu, clamping to viewport.
-    const rect = menu.getBoundingClientRect();
-    const maxX = window.innerWidth - rect.width - 4;
-    const maxY = window.innerHeight - rect.height - 4;
-    menu.style.left = `${Math.min(x, Math.max(0, maxX))}px`;
-    menu.style.top = `${Math.min(y, Math.max(0, maxY))}px`;
-
-    openContextMenuEl = menu;
-    registerOpenContextMenu(closeAnyOpenContextMenu);
-    setTimeout(() => {
-      window.addEventListener('mousedown', maybeCloseContextMenu, { capture: true });
-      window.addEventListener('keydown', maybeCloseContextMenu, { capture: true });
-    });
+    const view = this.view;
+    showContextMenu(x, y, [
+      ...items,
+      ...pluginMenuEntries(() => ({
+        surface: 'outline',
+        docUid: view ? getSpeechDocResolver().uidForView(view) : null,
+        headingId: entry.windowed ? null : entry.id,
+        headingType: entry.windowed ? null : (entry.type as PluginMenuTarget['headingType']),
+        selectionText: '',
+      })),
+    ]);
   }
 
   /**
@@ -3285,37 +3259,8 @@ function normalizeForSearch(text: string): string {
   return text.toLowerCase().replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"');
 }
 
-interface ContextMenuItemBase {
-  kind: 'item';
-  label: string;
-  action: () => void;
-  checked?: boolean;
-}
-interface ContextMenuSeparator { kind: 'separator' }
-type ContextMenuItem = ContextMenuItemBase | ContextMenuSeparator;
-
-let openContextMenuEl: HTMLElement | null = null;
-
-function closeAnyOpenContextMenu(): void {
-  if (openContextMenuEl) {
-    openContextMenuEl.remove();
-    openContextMenuEl = null;
-    window.removeEventListener('mousedown', maybeCloseContextMenu, { capture: true });
-    window.removeEventListener('keydown', maybeCloseContextMenu, { capture: true });
-  }
-  clearOpenContextMenu(closeAnyOpenContextMenu);
-}
-
-function maybeCloseContextMenu(e: MouseEvent | KeyboardEvent): void {
-  if (e instanceof KeyboardEvent) {
-    if (e.key === 'Escape') closeAnyOpenContextMenu();
-    return;
-  }
-  if (!openContextMenuEl) return;
-  if (!openContextMenuEl.contains(e.target as Node)) {
-    closeAnyOpenContextMenu();
-  }
-}
+/** Nav-row menu entries are the shared builder's. */
+type ContextMenuItem = MenuEntry;
 
 /** Minimal CSS.escape polyfill for jsdom-style environments. */
 
