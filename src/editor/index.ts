@@ -76,7 +76,9 @@ import { installExternalInsertHost } from './external-insert-host.js';
 import {
   installPluginRegistry,
   pluginHasPermission,
+  pluginPermissionReasons,
   regrantPlugin,
+  requestPluginPermission,
   setPluginConsent,
   setPluginManifestPermissions,
 } from './plugin-registry.js';
@@ -85,7 +87,7 @@ import {
   type PluginCollabBridge,
   type PluginJoinOutcome,
 } from './plugin-api.js';
-import { permissionConsentDialog } from './plugin-permission-dialog.js';
+import { permissionConsentDialog, permissionRequestDialog } from './plugin-permission-dialog.js';
 import {
   adoptPluginFileData,
   collectPluginFileData,
@@ -10514,6 +10516,7 @@ async function initPlugins(): Promise<void> {
       // Live grant: a call through an api object minted before a revoke
       // is refused (see CALL_TIME_PERMISSIONS in plugin-api.ts).
       isGranted: pluginHasPermission,
+      requestPermission: requestPluginPermission,
       getView: () => getActiveView(),
       findViewForDocId: (docId) => findViewForDocId(docId),
       getDocIdentity: () => {
@@ -10552,10 +10555,25 @@ async function initPlugins(): Promise<void> {
       // A bundle loaded from file (no install-time consent) that declares
       // supported permissions: ask once; the answer holds for this session.
       onPermissionRequest: (pluginId, name, known, unknown) => {
-        void permissionConsentDialog({ mode: 'dev', name, known, unknown }).then((ok) => {
-          regrantPlugin(pluginId, ok ? known : []);
-          if (ok) showToast(`${name} can use the permissions you allowed until CardMirror restarts.`);
+        const reasons = pluginPermissionReasons(pluginId);
+        void permissionConsentDialog({ mode: 'dev', name, known, unknown, reasons }).then((chosen) => {
+          const granted = (chosen ?? []).filter((x) => known.includes(x));
+          regrantPlugin(pluginId, granted);
+          if (granted.length > 0) showToast(`${name} can use the permissions you allowed until CardMirror restarts.`);
         });
+      },
+      // api.permissions.request: ask now, for one permission.
+      onPermissionPrompt: ({ name, permission, reason }) => permissionRequestDialog({ name, permission, reason }),
+      // A grant from a prompt: installed plugins store it in main's
+      // manifest (as the shield does); a bundle loaded from file keeps it
+      // for this session only.
+      persistConsent: async (pluginId, consented) => {
+        if (!installed?.some((p) => p.id === pluginId)) return consented;
+        const r = (await host.pluginSetPermissions(pluginId, consented)) as
+          | { ok: true; granted: string[] }
+          | { ok: false; error: string }
+          | undefined;
+        return r?.ok ? r.granted : null;
       },
     },
   );
@@ -10596,6 +10614,7 @@ async function initPlugins(): Promise<void> {
         incompatible?: string;
         permissions?: string[];
         grantedPermissions?: string[];
+        permissionReasons?: Record<string, string>;
       }[]
     | undefined;
   try {
@@ -10615,7 +10634,7 @@ async function initPlugins(): Promise<void> {
   // is never mistaken for an unconsented dev load.
   for (const p of installed) {
     setPluginConsent(p.id, p.grantedPermissions ?? []);
-    setPluginManifestPermissions(p.id, p.permissions ?? []);
+    setPluginManifestPermissions(p.id, p.permissions ?? [], p.permissionReasons);
   }
   for (const p of installed) {
     if (!isPluginEnabled(p.id)) continue;

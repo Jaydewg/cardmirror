@@ -155,6 +155,30 @@ export interface PluginPermissionsApi {
    *  user declined or revoked it), `unsupported` → update CardMirror,
    *  `undeclared` → the plugin's own definition never asked for it. */
   status(permission: string): PermissionStatus;
+  /** Ask the user for a permission this plugin declared but doesn't
+   *  hold, at the moment a feature needs it. CardMirror shows a prompt
+   *  (Allow / Not now / Don't ask again) only shortly after the user
+   *  acted on the plugin (ran its command, clicked its menu item or
+   *  notice button, used its panel) or a permission-gated event reached
+   *  it (a file it can read opened, the focused document changed), one
+   *  prompt at a time, and never for a permission the user blocked;
+   *  otherwise it resolves at once without asking. `reason` (one line,
+   *  ≤ 200 chars) is shown as the plugin's own words, in place of its
+   *  `permissionReasons` entry.
+   *
+   *  Resolves the permission's status after the answer and the plugin's
+   *  CURRENT api: an api object never gains namespaces, so on `granted`
+   *  carry on with `result.api` (`activate` also re-runs with it). A
+   *  permission that is already granted, unsupported or undeclared
+   *  resolves right away with that status. */
+  request(permission: string, opts?: { reason?: string }): Promise<PluginPermissionRequestResult>;
+}
+
+/** What `api.permissions.request` resolves. */
+export interface PluginPermissionRequestResult {
+  status: PermissionStatus;
+  /** The plugin's current api — use it after a grant. */
+  api: CardMirrorPluginApi;
 }
 
 /**
@@ -322,12 +346,18 @@ export function createPluginApi(
   const live = (p: string): boolean => grantSet.has(p) && (deps.isGranted?.(pluginId, p) ?? true);
   const liveGrant = (): ReadonlySet<string> => new Set([...grantSet].filter(live));
   const displayName = grant.name || pluginId;
+  let self: CardMirrorPluginApi;
   const permissions: PluginPermissionsApi = Object.freeze({
     has: (p: string) => live(String(p)),
     list: () => [...liveGrant()].sort(),
     status: (p: string) => permissionStatus(String(p), declared, liveGrant()),
+    request: async (p: string, opts?: { reason?: string }): Promise<PluginPermissionRequestResult> => {
+      if (deps.requestPermission) return deps.requestPermission(pluginId, String(p), opts);
+      // No host to ask (tests, legacy callers): report, never prompt.
+      return { status: permissionStatus(String(p), declared, liveGrant()), api: self };
+    },
   });
-  return {
+  self = {
     permissions,
     ...buildNamespaces({ pluginId, name: displayName, granted: grantSet, deps }, live),
     appVersion: deps.appVersion,
@@ -415,4 +445,5 @@ export function createPluginApi(
       },
     },
   };
+  return self;
 }

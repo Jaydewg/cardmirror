@@ -6837,6 +6837,34 @@ label.pmd-plugin-perm-row {
 .pmd-plugin-perm-note {
   margin-top: 0.4rem;
 }
+/* A plugin's own reason: quoted and italic, so it reads as the plugin's
+   words, not CardMirror's description. */
+.pmd-plugin-perm-reason {
+  font-size: 0.82rem;
+  font-style: italic;
+  color: var(--pmd-c-text-secondary);
+  line-height: 1.35;
+}
+.pmd-plugin-perm-blocked {
+  font-size: 0.8rem;
+  color: var(--pmd-c-text-muted);
+}
+.pmd-plugin-perm-unblock {
+  font: inherit;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--pmd-c-accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.pmd-plugin-perm-askagain {
+  margin-top: 0.25rem;
+  font-size: 0.85rem;
+}
+.pmd-plugin-perm-extra {
+  margin-right: auto;
+}
 
 /* Plugin panel (`ui.panel`, plugin-caps/panel.ts): a right-docked column
    the host frames (tabs naming each plugin, hide button, resize handle)

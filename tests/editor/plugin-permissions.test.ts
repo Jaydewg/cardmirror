@@ -7,13 +7,17 @@ import {
   permissionStatus,
   resolveGrant,
   sanitizePermissionList,
+  sanitizePermissionReasons,
   splitKnown,
+  PERMISSION_REASON_MAX,
 } from '../../src/editor/plugin-permissions.js';
 import {
   MAX_PERMISSIONS as MAIN_MAX_PERMISSIONS,
   PERMISSION_ID_RE as MAIN_PERMISSION_ID_RE,
   PLUGIN_API_VERSION as MAIN_PLUGIN_API_VERSION,
   sanitizePermissionList as mainSanitize,
+  sanitizePermissionReasons as mainSanitizeReasons,
+  PERMISSION_REASON_MAX as MAIN_PERMISSION_REASON_MAX,
 } from '../../apps/desktop/src/plugin-manager.js';
 import { PLUGIN_API_VERSION } from '../../src/editor/plugin-registry.js';
 
@@ -58,6 +62,39 @@ describe('main/renderer parity (main keeps copies; they must never drift)', () =
       { 0: 'ui.dialogs' },
     ];
     for (const v of vectors) expect(mainSanitize(v)).toEqual(sanitizePermissionList(v));
+  });
+  it('same reasons sanitizer on every vector', () => {
+    expect(MAIN_PERMISSION_REASON_MAX).toBe(PERMISSION_REASON_MAX);
+    const declared = ['collab.join', 'ui.dialogs'];
+    const vectors: unknown[] = [
+      { 'collab.join': 'So files can carry their link', 'ui.dialogs': '  two\n\tlines  ' },
+      { 'collab.join': 'x'.repeat(500), 'files.data': 'not declared', 'ui.dialogs': 7 },
+      { 'ui.dialogs': '\u0000\u001f' },
+      ['collab.join'],
+      null,
+      'reason',
+      Object.create({ 'collab.join': 'inherited' }),
+    ];
+    for (const v of vectors) expect(mainSanitizeReasons(v, declared)).toEqual(sanitizePermissionReasons(v, declared));
+  });
+});
+
+describe('sanitizePermissionReasons', () => {
+  it('keeps one plain line per DECLARED permission, capped', () => {
+    expect(
+      sanitizePermissionReasons(
+        { 'collab.join': ' Join\n from   a file ', 'files.data': 'undeclared', 'ui.dialogs': '' },
+        ['collab.join', 'ui.dialogs'],
+      ),
+    ).toEqual({ 'collab.join': 'Join from a file' });
+    expect(sanitizePermissionReasons({ 'ui.dialogs': 'y'.repeat(999) }, ['ui.dialogs'])['ui.dialogs']).toHaveLength(
+      PERMISSION_REASON_MAX,
+    );
+  });
+  it('ignores arrays, non-objects and inherited keys', () => {
+    expect(sanitizePermissionReasons(['ui.dialogs'], ['ui.dialogs'])).toEqual({});
+    expect(sanitizePermissionReasons('x', ['ui.dialogs'])).toEqual({});
+    expect(sanitizePermissionReasons(Object.create({ 'ui.dialogs': 'x' }), ['ui.dialogs'])).toEqual({});
   });
 });
 

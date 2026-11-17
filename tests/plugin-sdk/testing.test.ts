@@ -87,6 +87,35 @@ describe('createFakePluginApi', () => {
     expect(fake.toasts).toEqual(['hi']);
   });
 
+  it('permissions.request: scripted answers; Allow re-mints a fresh api with the namespace', async () => {
+    const fake = createFakePluginApi({
+      declared: ['ui.dialogs', 'collab.join'],
+      granted: ['ui.dialogs'],
+      answer: (p) => (p === 'collab.join' ? 'allow' : 'not-now'),
+    });
+    const before = fake.api;
+    expect(before.collab).toBeUndefined();
+    const r = await before.permissions!.request('collab.join', { reason: ' To join ' });
+    expect(r.status).toBe('granted');
+    expect(r.api).toBe(fake.api);
+    expect(r.api.collab?.join).toBeTypeOf('function');
+    expect(fake.requests).toEqual([{ permission: 'collab.join', reason: 'To join' }]);
+    // Granted / undeclared: no prompt.
+    expect((await r.api.permissions!.request('ui.dialogs')).status).toBe('granted');
+    expect((await r.api.permissions!.request('files.data')).status).toBe('undeclared');
+    expect(fake.requests).toHaveLength(1);
+  });
+
+  it('permissions.request: "never" blocks later prompts; default answer is "not now"', async () => {
+    const never = createFakePluginApi({ declared: ['collab.join'], granted: [], answer: 'never' });
+    expect((await never.api.permissions!.request('collab.join')).status).toBe('denied');
+    await never.api.permissions!.request('collab.join');
+    expect(never.requests).toHaveLength(1);
+    const dflt = createFakePluginApi({ declared: ['collab.join'], granted: [] });
+    expect((await dflt.api.permissions!.request('collab.join')).status).toBe('denied');
+    expect(dflt.requests).toHaveLength(1);
+  });
+
   it('carries no app code: its runtime imports are the two dependency-free modules', () => {
     const runtimeImports = (file: string) =>
       [...readFileSync(file, 'utf8').matchAll(/^import\s+(?!type\b)[^;]*?from\s+'([^']+)'/gms)].map((m) => m[1]);

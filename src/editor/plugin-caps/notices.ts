@@ -1,6 +1,7 @@
 /** `ui.notices` → `api.notices`: plugin-labeled status-bar notices,
  *  optionally with buttons. The quiet alternative to a modal: the notice
  *  waits under the ⓘ chip until the user acts on or dismisses it. */
+import { notePluginActivation } from '../plugin-permission-requests.js';
 import { pluginHasPermission } from '../plugin-registry.js';
 import { clearNotice, postNotice } from '../status-notices.js';
 import { clip, type CapabilityContext } from './context.js';
@@ -71,6 +72,7 @@ export function buildNoticesApi(ctx: CapabilityContext): PluginNoticesApi | unde
             // Revoked or unregistered since posting: the button is inert
             // (same call-time check as every hook-style capability).
             if (!pluginHasPermission(ctx.pluginId, PERMISSION)) return;
+            notePluginActivation(ctx.pluginId, 'user');
             try {
               run();
             } catch (err) {

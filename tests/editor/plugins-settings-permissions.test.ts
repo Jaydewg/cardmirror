@@ -32,6 +32,10 @@ import {
   permissionConsentDialog,
 } from '../../src/editor/plugin-permission-dialog.js';
 import type { CardMirrorPluginApi } from '../../src/editor/plugin-api.js';
+import {
+  getPluginPermissionPrefs,
+  setPluginPermissionPrefs,
+} from '../../src/editor/plugin-permission-requests.js';
 
 const settled = async (): Promise<void> => {
   for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
@@ -88,7 +92,7 @@ describe('install with permissions', () => {
       version: '1.0.0',
       permissions: ['ui.dialogs', 'future.thing'],
     });
-    vi.mocked(permissionConsentDialog).mockResolvedValue(true);
+    vi.mocked(permissionConsentDialog).mockResolvedValue(['ui.dialogs']);
     await clickInstall(mountPanel());
     expect(confirmDialog).not.toHaveBeenCalled();
     expect(vi.mocked(permissionConsentDialog).mock.calls[0]![0]).toMatchObject({
@@ -100,9 +104,21 @@ describe('install with permissions', () => {
     expect(calls).toContain('commit:tok:["ui.dialogs"]');
   });
 
+  it('commits only the permissions left ticked', async () => {
+    const calls = recordingHost({
+      id: 'thing',
+      name: 'Thing',
+      version: '1.0.0',
+      permissions: ['ui.dialogs', 'collab.join'],
+    });
+    vi.mocked(permissionConsentDialog).mockResolvedValue(['ui.dialogs']);
+    await clickInstall(mountPanel());
+    expect(calls).toContain('commit:tok:["ui.dialogs"]');
+  });
+
   it('declining the itemized consent discards the staged install', async () => {
     const calls = recordingHost({ id: 'thing', name: 'Thing', version: '1.0.0', permissions: ['ui.dialogs'] });
-    vi.mocked(permissionConsentDialog).mockResolvedValue(false);
+    vi.mocked(permissionConsentDialog).mockResolvedValue(null);
     await clickInstall(mountPanel());
     expect(calls).toEqual(['discard:tok']);
   });
@@ -120,7 +136,9 @@ describe('install with permissions', () => {
 });
 
 describe('update that adds permissions', () => {
-  function updateHost(newPermissions: string[]): string[] {
+  /** Installed v1 requests `ui.dialogs`; `granted` is what the user
+   *  allowed (default: nothing — they turned it off). */
+  function updateHost(newPermissions: string[], granted: string[] = []): string[] {
     const calls: string[] = [];
     hostState.host = {
       pluginList: () =>
@@ -131,7 +149,7 @@ describe('update that adds permissions', () => {
             version: '1.0.0',
             repo: 'owner/thing',
             permissions: ['ui.dialogs'],
-            grantedPermissions: [],
+            grantedPermissions: granted,
           },
         ]),
       pluginCheckUpdate: () => Promise.resolve({ ok: true, latest: '2.0.0', hasUpdate: true }),
@@ -140,7 +158,7 @@ describe('update that adds permissions', () => {
           ok: true,
           pending: 'tok',
           ownerRepo: 'owner/thing',
-          installedGranted: [],
+          installedGranted: granted,
           plugin: { id: 'thing', name: 'Thing', version: '2.0.0', permissions: newPermissions },
         }),
       pluginInstallCommit: (token: string, granted?: string[]) => {
@@ -162,22 +180,69 @@ describe('update that adds permissions', () => {
     await settled();
   }
 
-  it('re-prompts for permissions the user has not granted; declining keeps the old version', async () => {
+  it('reminds the user to review permissions when the plugin has any', async () => {
+    updateHost(['ui.dialogs']);
+    vi.mocked(confirmDialog).mockResolvedValue(false);
+    await clickUpdate();
+    expect(vi.mocked(confirmDialog).mock.calls[0]![0]).toBe(
+      'Update Thing to v2.0.0? You can review what it’s allowed to use at any time with the shield button next to it.',
+    );
+  });
+
+  it('a permission the user turned off is listed UNticked (ask again on), and stays off unless ticked', async () => {
     const calls = updateHost(['ui.dialogs']);
     vi.mocked(confirmDialog).mockResolvedValue(true);
-    vi.mocked(permissionConsentDialog).mockResolvedValue(false);
+    vi.mocked(permissionConsentDialog).mockResolvedValue([]);
     await clickUpdate();
     expect(vi.mocked(permissionConsentDialog).mock.calls[0]![0]).toMatchObject({
       mode: 'update',
       known: ['ui.dialogs'],
+      unchecked: ['ui.dialogs'],
+    });
+    expect(calls).toEqual(['commit:tok:[]']);
+  });
+
+  it('with ask again off, or the permission blocked, a turned-off permission is not asked about', async () => {
+    for (const prefs of [
+      { askAgain: false, blocked: [] },
+      { askAgain: true, blocked: ['ui.dialogs'] },
+    ]) {
+      vi.mocked(permissionConsentDialog).mockReset();
+      const calls = updateHost(['ui.dialogs']);
+      setPluginPermissionPrefs('thing', prefs);
+      vi.mocked(confirmDialog).mockResolvedValue(true);
+      await clickUpdate();
+      expect(permissionConsentDialog).not.toHaveBeenCalled();
+      expect(calls).toEqual(['commit:tok:[]']);
+      document.body.innerHTML = '';
+    }
+  });
+
+  it('new permissions start ticked, turned-off ones unticked; declining keeps the old version', async () => {
+    const calls = updateHost(['ui.dialogs', 'collab.join']);
+    vi.mocked(confirmDialog).mockResolvedValue(true);
+    vi.mocked(permissionConsentDialog).mockResolvedValue(null);
+    await clickUpdate();
+    expect(vi.mocked(permissionConsentDialog).mock.calls[0]![0]).toMatchObject({
+      mode: 'update',
+      known: ['collab.join', 'ui.dialogs'],
+      unchecked: ['ui.dialogs'],
     });
     expect(calls).toEqual(['discard:tok']);
   });
 
-  it('accepting commits the prior grant plus the added permissions', async () => {
-    const calls = updateHost(['ui.dialogs']);
+  it('accepting commits the prior grant plus the new permissions left ticked', async () => {
+    const calls = updateHost(['ui.dialogs', 'collab.join'], ['ui.dialogs']);
     vi.mocked(confirmDialog).mockResolvedValue(true);
-    vi.mocked(permissionConsentDialog).mockResolvedValue(true);
+    vi.mocked(permissionConsentDialog).mockResolvedValue(['collab.join']);
+    await clickUpdate();
+    expect(calls).toEqual(['commit:tok:["ui.dialogs","collab.join"]']);
+  });
+
+  it('a new permission unticked in the update dialog is not granted', async () => {
+    const calls = updateHost(['ui.dialogs', 'collab.join'], ['ui.dialogs']);
+    vi.mocked(confirmDialog).mockResolvedValue(true);
+    vi.mocked(permissionConsentDialog).mockResolvedValue([]);
     await clickUpdate();
     expect(calls).toEqual(['commit:tok:["ui.dialogs"]']);
   });
@@ -220,7 +285,8 @@ describe('shield: manage permissions', () => {
       permissions: ['ui.dialogs'],
       commands: [{ id: 'thing.run', label: 'Run', run: () => {} }],
     });
-    vi.mocked(managePluginPermissionsDialog).mockResolvedValue([]);
+    setPluginPermissionPrefs('thing', { askAgain: true, blocked: ['ui.dialogs'] });
+    vi.mocked(managePluginPermissionsDialog).mockResolvedValue({ granted: [], askAgain: false, blocked: [] });
     const el = mountPanel();
     await settled();
     const shields = el.querySelectorAll('.pmd-plugins-permissions');
@@ -231,8 +297,11 @@ describe('shield: manage permissions', () => {
       name: 'Thing',
       known: ['ui.dialogs'],
       granted: ['ui.dialogs'],
+      askAgain: true,
+      blocked: ['ui.dialogs'],
     });
     expect(setCalls).toEqual(['thing:[]']);
     expect(pluginPermissionInfo('thing')!.granted).toEqual([]);
+    expect(getPluginPermissionPrefs('thing')).toEqual({ askAgain: false, blocked: [] });
   });
 });

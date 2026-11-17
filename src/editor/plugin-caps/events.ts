@@ -7,6 +7,7 @@
  * is a no-op unless some granted plugin is listening, so the editor
  * pays nothing when no plugin uses events.
  */
+import { notePluginActivation } from '../plugin-permission-requests.js';
 import { createPluginHookRegistry, type PluginHookRegistry } from './hook-registry.js';
 import type { CapabilityContext } from './context.js';
 
@@ -84,7 +85,10 @@ export function notifyPluginFocusChanged(focusedUid: () => string | null): void 
     const uid = focusedUid();
     if (uid === lastFocus) return;
     lastFocus = uid;
-    focusHooks.each((_id, cb) => cb({ docUid: uid }), 'onFocusChange');
+    focusHooks.each((id, cb) => {
+      notePluginActivation(id, 'event');
+      cb({ docUid: uid });
+    }, 'onFocusChange');
   });
 }
 

@@ -7,6 +7,7 @@
  * as its hint (attribution). Grants are checked when the menu opens, so
  * a revoked plugin's items simply stop appearing.
  */
+import { notePluginActivation } from '../plugin-permission-requests.js';
 import type { MenuEntry } from '../context-menu-builder.js';
 import { pluginDisplayName } from '../plugin-registry.js';
 import { clip, type CapabilityContext } from './context.js';
@@ -72,6 +73,7 @@ export function pluginMenuEntries(target: () => PluginMenuTarget): MenuEntry[] {
       label: item.label,
       hint: pluginDisplayName(pluginId) ?? pluginId,
       action: () => {
+        notePluginActivation(pluginId, 'user');
         const report = (err: unknown): void =>
           console.error(`[plugins] ${pluginId} menu item "${item.label}" failed:`, err);
         try {

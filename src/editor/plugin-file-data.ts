@@ -16,6 +16,7 @@
  * load asynchronously after boot). Every hook call re-checks the
  * permission, so a revoke or unregister silences hooks immediately.
  */
+import { notePluginActivation } from './plugin-permission-requests.js';
 import {
   sanitizePluginBag,
   sanitizePluginEntry,
@@ -178,6 +179,7 @@ function fireOpenHooks(uid: string): void {
     const key = firedKey(uid, pluginId);
     if (openFired.has(key)) continue;
     openFired.add(key);
+    notePluginActivation(pluginId, 'event');
     const report = (err: unknown): void => console.error(`[plugins] ${pluginId} open hook failed:`, err);
     try {
       const r = hook(getPluginFileData(uid, pluginId), { ...ctx });
