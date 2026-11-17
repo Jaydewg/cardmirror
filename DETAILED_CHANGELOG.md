@@ -5,7 +5,7 @@ behavior, rationale, and (where useful) the implementation context
 behind a change. For a shorter, jargon-free summary of what's new
 in each release, see `CHANGELOG.md`.
 
-## Unreleased
+## 1.17.47 — 2026-11-16
 
 ### Added: lightweight theming (palettes, accent colors, chrome textures)
 
@@ -98,6 +98,143 @@ texture stays visible, and checks that every color block has its
 `data-bar-scheme` twin. `theme-apply.test.ts` covers the custom accent over
 awkward picks (white, black, pure yellow, neon green), the match modes, and
 the cap math.
+
+### Experimental: plugin permissions API
+
+**Status.** This is experimental. It ships so plugin authors can build
+against it, but it may still change. Changes will be additive only:
+permission ids, method names and the `.cmir` field below are meant to
+stay put. The Live Session Link plugin (`plugins/live-session-link/`) is
+its first user. It is a separate package that isn't bundled with the app.
+
+**What.** The plugin API grows by **permission**, not by `apiVersion`,
+which stays 1. A plugin lists the permissions it wants in both
+`cardmirror-plugin.json` and its registered definition. The user
+consents at install or update: the dialog lists each supported
+permission with a checkbox, all ticked, and grants only what is left
+ticked. Unticking is how a user refuses a permission before the plugin
+first runs, since install enables and loads it at once. On update, the
+permissions its new version adds start ticked. Ones the user turned off
+are listed unticked, and only while that plugin may "ask again" and the
+permission isn't blocked, so one click on Update never re-grants them.
+The update confirmation reminds the user that the shield button reviews
+them. A dev-loaded plugin gets the same list with "Allow for this
+session". Main keeps the granted set beside the install, and the
+registry mints each plugin's `api` with only the namespaces that are
+requested, granted and supported. A plugin that declares nothing gets
+exactly the old v1 surface, plus `api.permissions`. The shield button
+on each row in Settings → Plugins opens a per-permission checkbox list,
+and a change re-mints the api immediately (`PluginDefinition.activate`
+re-runs on every re-mint). The same dialog has a per-plugin switch "Let
+it ask again for permissions I turned off" (on by default), and it marks
+permissions answered "Don't ask again", each with a **Let it ask**
+button to undo that. These answers are kept per machine
+(`plugin-permission-requests.ts`, localStorage) and forgotten on
+uninstall. Every consent surface says plainly that permissions are a
+consent and supported-API contract, not a sandbox, because bundles run
+in the renderer's main world.
+
+**Just-in-time requests.** `api.permissions.request(p, { reason? })`
+asks for one declared, supported permission the plugin doesn't hold,
+with **Allow** / **Not now** / **Don't ask again**. It resolves
+`{ status, api }`: an api object never gains namespaces, so after a
+grant the plugin carries on with `api`. A prompt appears only within 10
+seconds of a trigger for that plugin:
+- a user action: running its command, clicking its context-menu item
+  or notice button, or a pointer or key event in its panel;
+- a gated event: `files.onOpen`, or `events.onFocusChange`.
+
+Typing, selection changes and saves never count. Only one prompt is
+shown at a time. Outside the window, or for a permission that is
+blocked or whose plugin may not ask again, `request` resolves `denied`
+without a prompt, so plugins can't nag from timers or on load. "Not
+now" to an event-triggered prompt keeps event-triggered prompts for that
+permission quiet until restart; a prompt from the user's own action can
+still appear. Allow goes through the same storage as the shield (main's
+manifest for installed plugins, session-only for bundles loaded from
+file) and re-mints the api.
+
+**Reasons.** A new `permissionReasons` map, `{ "<permission>": "<one
+line>" }`, can appear in `cardmirror-plugin.json` and in the registered
+definition. It allows up to 200 characters per entry, for declared
+permissions only. A separate map rather than objects inside
+`permissions`, because older builds drop non-string `permissions`
+entries and would lose the permission itself. Main and the renderer
+sanitize it the same way, pinned by a parity test. The dialogs show it
+under CardMirror's own description, in italics, as "*Name* says: “…”".
+Install and update use the manifest's text. Prompts and bundles loaded
+from file use the definition's text, and a `reason` passed to `request`
+replaces it for that one prompt. Older builds ignore the field.
+
+**Catalog** (`src/editor/plugin-permissions.ts`; PLUGINS.md's table is
+generated from it by `npm run docs:permissions`): `ui.dialogs`,
+`ui.notices`, `ui.contextMenu`, `ui.panel`, `doc.read`, `doc.edit`,
+`doc.events`, `files.data`, `collab.read`, `collab.server`,
+`collab.probe`, `collab.shareCode`, `collab.viewCode`, `collab.join`.
+Each one has a label, a description and a sensitivity
+(low / medium / high).
+
+**Compatibility.** Unknown permission strings are dropped, never
+rejected, so a plugin built for a newer CardMirror still loads with
+whatever this build supports, and the UI lists the rest as unsupported.
+`api.permissions.has(p)`, `list()` and `status(p)` report each one as
+`granted`, `denied`, `unsupported` or `undeclared`, so a plugin can
+explain a missing feature instead of guessing from the version string.
+Result unions (join outcomes, probe results, server reach, cross-server
+state) may gain values, and each one documents how to read a value a
+plugin doesn't know.
+
+**Call-time checks.** `src/editor/plugin-call-rules.ts` maps every
+namespace method to its permission, and the check runs again on every
+call. An `api` object kept from before a revoke throws (or, for a method
+that returns a promise, rejects) with `name === 'PluginPermissionError'`,
+and the toast names the plugin by its display name. A method missing
+from the table isn't exposed at all. `plugin-api-call-time.test.ts`
+fails on any gap, and a parity test pins main's copy of the id
+sanitizer to the renderer's.
+
+**Plugin data in `.cmir` (`files.data`).** A new top-level `"plugins"`
+field holds `{ "<pluginId>": { name, data, summary? } }`
+(`src/native/plugin-data.ts`). Limits: 64 KB of JSON per entry, 32
+entries, a 100-character name and a 200-character summary. Save hooks
+return new data, `null` (remove my entry) or `undefined` (keep it as
+is). Entries from plugins that aren't installed, enabled or granted are
+carried through every save untouched, so a file passed between machines
+never loses another plugin's data. Older builds ignore the field and
+drop it if they re-save. Open hooks fire once per (doc, plugin). The
+summaries, never the data, are also written into the gzip header comment
+(RFC 1952 FCOMMENT), where `gzip -l`, `exiftool` and `7z l -slt` can show
+them without unpacking. Every standard gzip reader skips the comment.
+
+**Co-editing (`collab.*`) and session addresses.** A session's portable
+name is `<code>@<canonical server URL>`, and it reads the same on
+federated and non-federated builds (`src/editor/collab/server-address.ts`
+copies federation's URL canonicalizer and code-prefix parser verbatim,
+pinned by tests). `current()` returns public facts only (room, role,
+title, server, `crossServer`), never the key. `shareCode` / `viewCode`
+return what a person pastes, and `shareAddress` / `viewAddress` the
+machine form. `probe` checks liveness without joining and caches the
+result for a minute per session. `join` returns an outcome (`joined`,
+`ended`, `unreachable`, `declined`, …) and can join in place of a
+just-opened file (`intoDoc`), keeping that file so Save writes the live
+copy back. On this build every other server is `unreachable`. The
+federated build fills in `federated` reach and cross-server joins. Its
+host can decline those, which is why `declined` exists.
+
+**Other namespaces.** `ui.choose` / `ui.confirm`, `notices.post` (a
+status-bar notice with up to two action buttons), `menu.add`,
+`panel.get`, `doc.read` / `doc.insert`, and `events.onDocChange` /
+`onSelectionChange` / `onFocusChange`.
+
+**Tooling.** `@cardmirror/plugin-api/testing` (`src/plugin-sdk/testing.ts`)
+provides `createFakePluginApi`, which gates methods from the same rule
+table as the host, so a plugin's own tests see the host's rules. Its
+`request` takes a scripted `answer`, records each prompt in `requests`,
+and re-mints `api` on Allow. A manifest-vs-definition drift warning
+flags permissions declared in only one of the two places. `plugins/_template/` is a starter package.
+`npm run check:plugins` tests, typechecks and builds every package
+under `plugins/`, and CI runs it on Ubuntu. A permission-demo fixture
+sits behind the console switch `window.__plugins('perm-demo-on')`.
 
 ## 1.17.2 — 2026-11-01 (part of 1.17.32)
 

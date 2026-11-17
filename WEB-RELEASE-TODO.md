@@ -25,3 +25,14 @@ was found while building desktop features. It's primarily to blame for limited a
   - **What happens:** mobile settings' Accent row offers the presets only; a custom accent chosen on desktop still applies but shows no selected swatch. With a custom image and **Whole interface**, the phone layout also switches theme even though it doesn't draw the image.
   - **Why:** the mobile Accent row is a plain segment built from `ACCENT_OPTIONS`; `resolveScheme` (`src/editor/theme-apply.ts`) doesn't know which layout is showing.
   - **Fix:** add a color input to the mobile Accent row; skip the match in `resolveScheme` when the mobile shell is active (or once the mobile bars are textured, keep it).
+
+
+## Better Parity
+
+- The issue: web currently has a couple of parity problems. These include:
+  - **Filesystem access.** Google Chrome on desktop implements the File System Access API. Nothing else really 
+  is implemented. Firefox has a limited management policy variable, LocalFileLinks, that allows read-only access to files.
+  Safari and **all mobile browsers on iOS** restrict local filesystem access.
+  - **Plugins.** Plugins currently don't work on Web. Is that permanent?
+  - **Collaboration.**
+  - **The mobile app.** What is it for, and will that influence future design decisions?

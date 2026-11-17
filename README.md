@@ -80,8 +80,8 @@ person. Please go donate to them: there's two ways to help keep it going:
 
 
 **Releases are now built.** There are now releases for the versions here.
-I still need to get to doing releases. Go [here](#run-from-source) for instructions on how to manually build the software.
-Desktop builds now live on the [Releases page](https://github.com/ant981228/cardmirror/releases).
+Go [here](#run-from-source) for instructions on how to manually build the software.
+Desktop builds now live on the [Releases page](https://github.com/Jaydewg/cardmirror/releases).
 Pick the file for your operating system, run the installer, and
 launch CardMirror like any other app.
 
