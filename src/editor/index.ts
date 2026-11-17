@@ -76,6 +76,7 @@ import { installExternalInsertHost } from './external-insert-host.js';
 import {
   installPluginRegistry,
   pluginHasPermission,
+  pluginDeclaredNetworkHosts,
   pluginPermissionReasons,
   regrantPlugin,
   requestPluginPermission,
@@ -214,6 +215,7 @@ import { initChromeTexture } from './chrome-texture-store.js';
 import { openSaveAs } from './save-as-ui.js';
 import { highlightColorLabel, shadingColorLabel } from './color-palette.js';
 import { viewportSpellcheckPlugin } from './viewport-spellcheck.js';
+import { pluginAnnotationsPlugin } from './plugin-annotations.js';
 import { commentsPlugin, commentsKey, loadThreads, getCommentsState, gcOrphanThreads, newCommentId, setCommentIdSessionResolver } from './comments-plugin.js';
 import { commentClipboardPlugin } from './comment-clipboard.js';
 import { commentGuardPlugin } from './comment-guard.js';
@@ -6129,8 +6131,12 @@ export function buildEditorPlugins(targetUid?: string | null): Plugin[] {
   // Editor spellcheck — viewport-scoped custom checker, gated internally
   // on the `editorSpellcheck` setting (does nothing when off).
   plugins.push(viewportSpellcheckPlugin());
+  // Plugin annotations (`api.annotations`): display-only marks from
+  // extensions with `doc.annotate`. After spellcheck, so a misspelling
+  // inside a mark keeps the spelling menu.
+  plugins.push(pluginAnnotationsPlugin());
   // Fallback Cut/Copy/Paste context menu. MUST register after the
-  // image, link, and spellcheck menus — it claims every right-click
+  // image, link, spellcheck and plugin-mark menus — it claims every right-click
   // that reaches it, and handleDOMEvents run in registration order.
   plugins.push(textContextMenuPlugin);
   // Voice control (SPEC-voice.md §12 item 3): plugin state (mode, pen,
@@ -10556,20 +10562,22 @@ async function initPlugins(): Promise<void> {
       // supported permissions: ask once; the answer holds for this session.
       onPermissionRequest: (pluginId, name, known, unknown) => {
         const reasons = pluginPermissionReasons(pluginId);
-        void permissionConsentDialog({ mode: 'dev', name, known, unknown, reasons }).then((chosen) => {
+        const networkHosts = pluginDeclaredNetworkHosts(pluginId);
+        void permissionConsentDialog({ mode: 'dev', name, known, unknown, reasons, networkHosts }).then((chosen) => {
           const granted = (chosen ?? []).filter((x) => known.includes(x));
           regrantPlugin(pluginId, granted);
           if (granted.length > 0) showToast(`${name} can use the permissions you allowed until CardMirror restarts.`);
         });
       },
       // api.permissions.request: ask now, for one permission.
-      onPermissionPrompt: ({ name, permission, reason }) => permissionRequestDialog({ name, permission, reason }),
+      onPermissionPrompt: ({ name, permission, reason, networkHosts }) =>
+        permissionRequestDialog({ name, permission, reason, ...(networkHosts ? { networkHosts } : {}) }),
       // A grant from a prompt: installed plugins store it in main's
       // manifest (as the shield does); a bundle loaded from file keeps it
       // for this session only.
-      persistConsent: async (pluginId, consented) => {
+      persistConsent: async (pluginId, consented, networkHosts) => {
         if (!installed?.some((p) => p.id === pluginId)) return consented;
-        const r = (await host.pluginSetPermissions(pluginId, consented)) as
+        const r = (await host.pluginSetPermissions(pluginId, consented, networkHosts)) as
           | { ok: true; granted: string[] }
           | { ok: false; error: string }
           | undefined;
@@ -10615,6 +10623,8 @@ async function initPlugins(): Promise<void> {
         permissions?: string[];
         grantedPermissions?: string[];
         permissionReasons?: Record<string, string>;
+        networkHosts?: string[];
+        grantedNetworkHosts?: string[];
       }[]
     | undefined;
   try {
@@ -10633,8 +10643,8 @@ async function initPlugins(): Promise<void> {
   // later from Settings registers with its grant, and an installed plugin
   // is never mistaken for an unconsented dev load.
   for (const p of installed) {
-    setPluginConsent(p.id, p.grantedPermissions ?? []);
-    setPluginManifestPermissions(p.id, p.permissions ?? [], p.permissionReasons);
+    setPluginConsent(p.id, p.grantedPermissions ?? [], p.grantedNetworkHosts ?? []);
+    setPluginManifestPermissions(p.id, p.permissions ?? [], p.permissionReasons, p.networkHosts);
   }
   for (const p of installed) {
     if (!isPluginEnabled(p.id)) continue;

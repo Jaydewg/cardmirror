@@ -9,11 +9,12 @@ import { setIcon } from './icons';
 import { isLiteBuild } from './lite.js';
 import { isTopOverlay, popOverlay, pushOverlay } from './overlay-stack.js';
 import { managePluginPermissionsDialog, permissionConsentDialog } from './plugin-permission-dialog.js';
-import { sanitizePermissionList, splitKnown } from './plugin-permissions.js';
+import { intersectHosts, sanitizeNetworkHosts, sanitizePermissionList, splitKnown } from './plugin-permissions.js';
 import {
   pluginSettingsDefs,
   regrantPlugin,
   setPluginConsent,
+  setPluginManifestPermissions,
   unregisterPlugin,
 } from './plugin-registry.js';
 import { openPluginSettingsModal } from './plugin-settings-modal.js';
@@ -45,6 +46,24 @@ interface InstalledPlugin {
   grantedPermissions?: string[];
   /** The plugin's reasons, per permission (sanitized main-side). */
   permissionReasons?: Record<string, string>;
+  /** Where `net.fetch` may connect (sanitized main-side). */
+  networkHosts?: string[];
+  /** The hosts consented to with `net.fetch` (⊆ networkHosts). */
+  grantedNetworkHosts?: string[];
+}
+
+/** The `net.fetch` hosts to record with a consent list: none without
+ *  it; the prior hosts (∩ the request) when it stays granted and was
+ *  NOT just asked; the requested hosts — what the dialog showed — when
+ *  it was just asked. */
+function consentedHosts(
+  granted: readonly string[],
+  requestedHosts: unknown,
+  opts: { asked: boolean; priorHosts?: unknown },
+): string[] {
+  if (!granted.includes('net.fetch')) return [];
+  const requested = sanitizeNetworkHosts(requestedHosts);
+  return opts.asked ? requested : intersectHosts(sanitizeNetworkHosts(opts.priorHosts), requested);
 }
 
 /** Surface an IPC rejection as a toast instead of an unhandled rejection. */
@@ -237,6 +256,7 @@ export function renderPluginsPanel(container: HTMLElement): void {
                   plugin: InstalledPlugin;
                   ownerRepo: string;
                   installedGranted?: string[];
+                  installedGrantedNetworkHosts?: string[];
                 }
               | { ok: false; error: string }
               | undefined;
@@ -246,7 +266,13 @@ export function renderPluginsPanel(container: HTMLElement): void {
             }
             const requested = sanitizePermissionList(ins.plugin?.permissions);
             const prior = sanitizePermissionList(ins.installedGranted ?? p.grantedPermissions);
-            const kept = prior.filter((x) => requested.includes(x));
+            const priorHosts = sanitizeNetworkHosts(ins.installedGrantedNetworkHosts ?? p.grantedNetworkHosts);
+            const newHosts = sanitizeNetworkHosts(ins.plugin?.networkHosts);
+            // An update that adds hosts re-asks `net.fetch` (ticked, with
+            // the new list): its old consent covered only the old sites.
+            const hostsGrew =
+              prior.includes('net.fetch') && intersectHosts(newHosts, priorHosts).length < newHosts.length;
+            const kept = prior.filter((x) => requested.includes(x) && !(hostsGrew && x === 'net.fetch'));
             const { known, unknown } = splitKnown(requested);
             // What's NEW in this version is asked about, ticked. A
             // permission the installed version already requested but isn't
@@ -255,7 +281,9 @@ export function renderPluginsPanel(container: HTMLElement): void {
             // when the user lets this plugin ask again and hasn't blocked it.
             const priorRequested = sanitizePermissionList(p.permissions);
             const prefs = getPluginPermissionPrefs(p.id);
-            const added = known.filter((x) => !prior.includes(x) && !priorRequested.includes(x));
+            const added = known.filter(
+              (x) => (!prior.includes(x) && !priorRequested.includes(x)) || (hostsGrew && x === 'net.fetch'),
+            );
             const turnedOff = prefs.askAgain
               ? known.filter((x) => !prior.includes(x) && priorRequested.includes(x) && !prefs.blocked.includes(x))
               : [];
@@ -272,6 +300,7 @@ export function renderPluginsPanel(container: HTMLElement): void {
                 unknown: unknown.filter((x) => !prior.includes(x) && !priorRequested.includes(x)),
                 reasons: ins.plugin.permissionReasons,
                 unchecked: turnedOff,
+                networkHosts: newHosts,
               });
               if (!chosen) {
                 await host!.pluginInstallDiscard(ins.pending);
@@ -281,12 +310,16 @@ export function renderPluginsPanel(container: HTMLElement): void {
               // Only what stayed (or was) ticked; the rest stays off.
               granted = [...kept, ...chosen.filter((x) => asked.includes(x))];
             }
-            const r = (await host!.pluginInstallCommit(ins.pending, granted)) as
+            const grantedHosts = consentedHosts(granted, newHosts, {
+              asked: asked.includes('net.fetch'),
+              priorHosts,
+            });
+            const r = (await host!.pluginInstallCommit(ins.pending, granted, grantedHosts)) as
               | { ok: true }
               | { ok: false; error: string }
               | undefined;
             if (r?.ok) {
-              setPluginConsent(p.id, granted);
+              setPluginConsent(p.id, granted, grantedHosts);
               showToast(`${p.name} updated. Restart to apply.`);
               guarded(refresh);
             } else showError(`Update failed: ${r && 'error' in r ? r.error : 'unavailable'}`);
@@ -380,11 +413,17 @@ export function renderPluginsPanel(container: HTMLElement): void {
               askAgain: prefs.askAgain,
               blocked: prefs.blocked,
               reasons: p.permissionReasons,
+              networkHosts: sanitizeNetworkHosts(p.networkHosts),
             });
             if (!next) return;
             setPluginPermissionPrefs(p.id, { askAgain: next.askAgain, blocked: next.blocked });
-            const r = (await host!.pluginSetPermissions(p.id, next.granted)) as
-              | { ok: true; granted: string[] }
+            const hadNet = sanitizePermissionList(p.grantedPermissions).includes('net.fetch');
+            const hosts = consentedHosts(next.granted, p.networkHosts, {
+              asked: !hadNet,
+              priorHosts: p.grantedNetworkHosts,
+            });
+            const r = (await host!.pluginSetPermissions(p.id, next.granted, hosts)) as
+              | { ok: true; granted: string[]; networkHosts?: string[] }
               | { ok: false; error: string }
               | undefined;
             if (!r?.ok) {
@@ -392,7 +431,7 @@ export function renderPluginsPanel(container: HTMLElement): void {
               return;
             }
             // Live: the registry re-mints the api the next command run sees.
-            regrantPlugin(p.id, r.granted);
+            regrantPlugin(p.id, r.granted, r.networkHosts ?? hosts);
             showToast(`${p.name} permissions updated.`);
             guarded(refresh);
           });
@@ -447,6 +486,7 @@ export function renderPluginsPanel(container: HTMLElement): void {
             known,
             unknown,
             reasons: p.permissionReasons,
+            networkHosts: sanitizeNetworkHosts(p.networkHosts),
           });
     if (!consent) {
       await host!.pluginInstallDiscard(res.pending);
@@ -455,8 +495,10 @@ export function renderPluginsPanel(container: HTMLElement): void {
     // Consent covers the supported permissions left ticked; unknown ones
     // were listed as "won't be granted".
     const granted = consent.filter((x) => known.includes(x));
-    setPluginConsent(p.id, granted);
-    const committed = (await host!.pluginInstallCommit(res.pending, granted)) as
+    const grantedHosts = consentedHosts(granted, p.networkHosts, { asked: true });
+    setPluginConsent(p.id, granted, grantedHosts);
+    setPluginManifestPermissions(p.id, requested, p.permissionReasons, p.networkHosts);
+    const committed = (await host!.pluginInstallCommit(res.pending, granted, grantedHosts)) as
       | { ok: true }
       | { ok: false; error: string }
       | undefined;

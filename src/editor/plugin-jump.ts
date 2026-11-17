@@ -61,6 +61,47 @@ function select(view: EditorView, pos: number, headingId?: string): void {
   view.focus();
 }
 
+/** `api.doc.jumpTo`: select a heading by its id (`part: 'heading'`), or
+ *  the start of the first cite paragraph of the card / analytic unit it
+ *  heads (`part: 'cite'`; falls back to the heading when the unit has
+ *  no cite). Headings inside live views and linked copies don't count —
+ *  `doc.read` never reports them, so their ids are not the plugin's. */
+export function jumpToHeadingInView(
+  view: EditorView,
+  headingId: string,
+  part: 'heading' | 'cite' = 'heading',
+): boolean {
+  const { doc } = view.state;
+  let headPos = -1;
+  doc.descendants((node, pos) => {
+    if (headPos >= 0) return false;
+    const t = node.type.name;
+    if (t === 'self_ref' || t === 'transclusion_ref') return false;
+    if (node.isTextblock) {
+      if (node.attrs['id'] === headingId) headPos = pos;
+      return false;
+    }
+    return true;
+  });
+  if (headPos < 0) return false;
+  if (part === 'cite') {
+    const $head = doc.resolve(headPos);
+    const unit = $head.parent;
+    if (unit.type.name === 'card' || unit.type.name === 'analytic_unit') {
+      let citePos = -1;
+      unit.forEach((child, offset) => {
+        if (citePos < 0 && child.type.name === 'cite_paragraph') citePos = $head.start() + offset;
+      });
+      if (citePos >= 0) {
+        select(view, citePos + 1);
+        return true;
+      }
+    }
+  }
+  select(view, headPos + 1, headingId);
+  return true;
+}
+
 /** Resolve a token against THIS window's doc. 'not-mine' = valid token
  *  for a different docId (the caller escalates to the main-process
  *  broadcast). */

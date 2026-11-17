@@ -130,6 +130,18 @@ export const PLUGIN_PERMISSIONS: Readonly<Record<string, PluginPermissionInfo>> 
       'Add up to 5 items to the right-click menus of the editor and the outline, each labeled with the plugin’s name.',
     sensitivity: 'low',
   },
+  'doc.annotate': {
+    label: 'Mark text in your documents',
+    description:
+      'Underline or tint text in your open documents, like spellcheck does, with a note labeled with the plugin\u2019s name. Marks are only shown to you: they are never saved, shared or added to your document.',
+    sensitivity: 'low',
+  },
+  'net.fetch': {
+    label: 'Connect to websites',
+    description:
+      'Send requests to the websites listed here and read their replies. What it sends can include text from your documents.',
+    sensitivity: 'high',
+  },
 });
 
 export function isKnownPermission(p: string): boolean {
@@ -147,6 +159,49 @@ export function sanitizePermissionList(raw: unknown): string[] {
     if (typeof p === 'string' && PERMISSION_ID_RE.test(p)) out.add(p);
   }
   return [...out].sort();
+}
+
+/** `networkHosts` (manifest + definition): where `net.fetch` may
+ *  connect. Each entry is an exact hostname (`api.crossref.org`: at
+ *  least one dot, letters in the last label, so no IP literals and no
+ *  `localhost` — loopback is `flowPost`'s job) or `"*"`, any https site.
+ *  Copied into apps/desktop/src/plugin-manager.ts (parity-tested). */
+export const NETWORK_HOST_RE =
+  /^(?=.{4,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+export const ANY_HOST = '*';
+export const MAX_NETWORK_HOSTS = 16;
+
+/** Normalize an untrusted `networkHosts` list: lowercase, trimmed, valid
+ *  shape only, deduplicated, capped, sorted (`"*"` first). Never throws;
+ *  off-shape entries are dropped (never fatal — a newer plugin may use
+ *  a shape this build doesn't know). */
+export function sanitizeNetworkHosts(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out = new Set<string>();
+  for (const h of raw) {
+    if (out.size >= MAX_NETWORK_HOSTS) break;
+    if (typeof h !== 'string') continue;
+    const host = h.trim().toLowerCase();
+    if (host === ANY_HOST || NETWORK_HOST_RE.test(host)) out.add(host);
+  }
+  return [...out].sort((a, b) => (a === ANY_HOST ? -1 : b === ANY_HOST ? 1 : a < b ? -1 : a > b ? 1 : 0));
+}
+
+/** Whether `hostname` is covered by a (sanitized) host list. */
+export function hostAllowed(hosts: readonly string[], hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return hosts.includes(ANY_HOST) || hosts.includes(h);
+}
+
+/** `a ∩ b` for host lists (`"*"` in one side admits all of the other). */
+export function intersectHosts(a: readonly string[], b: readonly string[]): string[] {
+  const left = sanitizeNetworkHosts(a);
+  const right = sanitizeNetworkHosts(b);
+  return sanitizeNetworkHosts(
+    left.filter((h) => (h === ANY_HOST ? right.includes(ANY_HOST) : hostAllowed(right, h))).concat(
+      left.includes(ANY_HOST) ? right : [],
+    ),
+  );
 }
 
 /** Longest reason a plugin may give for one permission. */

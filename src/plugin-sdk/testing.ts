@@ -30,7 +30,10 @@ import type {
   PluginDocContext,
   PluginEventsApi,
   PluginFilesApi,
+  PluginAnnotation,
+  PluginAnnotationsApi,
   PluginMenuApi,
+  PluginNetApi,
   PluginNoticeOptions,
   PluginNoticesApi,
   PluginPanelApi,
@@ -77,6 +80,8 @@ export interface FakePluginApiOptions {
   panel?: Partial<PluginPanelApi>;
   menu?: Partial<PluginMenuApi>;
   notices?: Partial<PluginNoticesApi>;
+  annotations?: Partial<PluginAnnotationsApi>;
+  net?: Partial<PluginNetApi>;
   /** How the fake user answers `api.permissions.request` prompts
    *  (default `'not-now'`). The fake prompts only for a declared,
    *  supported permission that isn't granted, like the host; it has no
@@ -99,6 +104,9 @@ export interface FakePluginApi {
   readonly toasts: string[];
   /** Every notice posted through the default `notices.post`. */
   readonly notices: PluginNoticeOptions[];
+  /** The marks each doc carries through the default `annotations.set` /
+   *  `clear`, keyed by `docUid` ('' = the focused doc, no `docUid`). */
+  readonly annotations: Map<string, PluginAnnotation[]>;
   /** `api.storage`, as a map (values are JSON round-tripped, like the host). */
   readonly storage: Map<string, unknown>;
   /** Callbacks registered through a hook-style method (and not yet
@@ -129,6 +137,8 @@ export function createFakePluginApi(opts: FakePluginApiOptions = {}): FakePlugin
   const omit = new Set(opts.omit ?? []);
   const toasts: string[] = [];
   const notices: PluginNoticeOptions[] = [];
+  const annotations = new Map<string, PluginAnnotation[]>();
+  const docKey = (o?: { docUid?: string }): string => (o?.docUid != null ? String(o.docUid) : '');
   const storage = new Map<string, unknown>();
   const settings = new Map<string, PluginSettingValue>(Object.entries(opts.settings ?? {}));
   const settingListeners = new Set<(key: string, value: PluginSettingValue) => void>();
@@ -167,7 +177,11 @@ export function createFakePluginApi(opts: FakePluginApiOptions = {}): FakePlugin
       viewAddress: () => null,
       join: async () => 'unavailable',
     },
-    doc: { read: () => null, insert: async () => ({ ok: false, error: 'no-doc' }) },
+    doc: {
+      read: () => null,
+      insert: async () => ({ ok: false, error: 'no-doc' }),
+      jumpTo: async () => ({ ok: false, error: 'doc-not-open' }),
+    },
     events: {
       onDocChange: record('events.onDocChange'),
       onSelectionChange: record('events.onSelectionChange'),
@@ -185,6 +199,15 @@ export function createFakePluginApi(opts: FakePluginApiOptions = {}): FakePlugin
         return { clear: () => {} };
       },
     },
+    annotations: {
+      set: (items: PluginAnnotation[], o?: { docUid?: string }) => {
+        if (!Array.isArray(items)) throw new Error('annotations.set needs an array');
+        annotations.set(docKey(o), [...items]);
+        return { ok: true, placed: items.length, unplaced: 0 };
+      },
+      clear: (o?: { docUid?: string }) => void annotations.delete(docKey(o)),
+    },
+    net: { fetch: async () => ({ ok: false, error: 'offline' }) },
   };
 
   const blocked = new Set<string>();
@@ -272,6 +295,7 @@ export function createFakePluginApi(opts: FakePluginApiOptions = {}): FakePlugin
     requests,
     toasts,
     notices,
+    annotations,
     storage,
     hooks: <K extends keyof FakeHookMap>(name: K) => [...((recorded.get(name) ?? []) as FakeHookMap[K][])],
     setGranted(permissions) {

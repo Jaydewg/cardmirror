@@ -26,6 +26,8 @@ import { buildEventsApi, type PluginEventsApi } from './plugin-caps/events.js';
 import { buildPanelApi, type PluginPanelApi } from './plugin-caps/panel.js';
 import { buildMenuApi, type PluginMenuApi } from './plugin-caps/menu.js';
 import { buildNoticesApi, type PluginNoticesApi } from './plugin-caps/notices.js';
+import { buildAnnotationsApi, type PluginAnnotationsApi } from './plugin-caps/annotations.js';
+import { buildNetApi, type PluginNetApi } from './plugin-caps/net.js';
 import { CALL_TIME_PERMISSIONS, PluginPermissionError, type PluginNamespaceKey } from './plugin-call-rules.js';
 
 export type { PluginApiDeps } from './plugin-caps/context.js';
@@ -54,6 +56,7 @@ export type {
   PluginHeadingType,
   PluginInsertRequest,
   PluginInsertRole,
+  PluginJumpTarget,
   PluginOutlineItem,
 } from './plugin-caps/doc.js';
 export type {
@@ -70,6 +73,17 @@ export type {
   PluginNoticeOptions,
   PluginNoticesApi,
 } from './plugin-caps/notices.js';
+export type {
+  PluginAnnotateResult,
+  PluginAnnotation,
+  PluginAnnotationAction,
+  PluginAnnotationColor,
+  PluginAnnotationPart,
+  PluginAnnotationSeverity,
+  PluginAnnotationStyle,
+  PluginAnnotationsApi,
+} from './plugin-caps/annotations.js';
+export type { PluginFetchInit, PluginFetchResult, PluginNetApi } from './plugin-caps/net.js';
 
 export type ExtractedKind =
   | 'pocket'
@@ -229,6 +243,10 @@ export interface CardMirrorPluginApi {
   readonly menu?: PluginMenuApi;
   /** `ui.notices`. */
   readonly notices?: PluginNoticesApi;
+  /** `doc.annotate`. */
+  readonly annotations?: PluginAnnotationsApi;
+  /** `net.fetch` (to the hosts in the plugin's `networkHosts`). */
+  readonly net?: PluginNetApi;
 }
 
 /** What the registry hands `createPluginApi` for one plugin. */
@@ -251,7 +269,7 @@ export { PluginPermissionError };
  *  returns undefined when none of its permissions is granted). */
 type OptionalNamespaces = Pick<
   CardMirrorPluginApi,
-  'ui' | 'files' | 'collab' | 'doc' | 'events' | 'panel' | 'menu' | 'notices'
+  'ui' | 'files' | 'collab' | 'doc' | 'events' | 'panel' | 'menu' | 'notices' | 'annotations' | 'net'
 >;
 const NAMESPACES: {
   [K in keyof OptionalNamespaces]-?: (ctx: CapabilityContext) => OptionalNamespaces[K] | undefined;
@@ -264,6 +282,8 @@ const NAMESPACES: {
   panel: buildPanelApi,
   menu: buildMenuApi,
   notices: buildNoticesApi,
+  annotations: buildAnnotationsApi,
+  net: buildNetApi,
 };
 
 // Which permission each namespace method needs (checked on every call):

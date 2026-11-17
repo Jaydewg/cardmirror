@@ -221,11 +221,14 @@ interface ElectronAPI {
   pluginInstallInspect?(ref: string): Promise<Record<string, unknown>>;
   pluginBrowse?(): Promise<Record<string, unknown>>;
   /** `granted` = the consented permissions (omitted = keep the prior
-   *  consent on an update, none on a fresh install). */
-  pluginInstallCommit?(token: string, granted?: string[]): Promise<Record<string, unknown>>;
+   *  consent on an update, none on a fresh install). `networkHosts` =
+   *  the `net.fetch` hosts consented to (omitted = keep the prior ones
+   *  ∩ the new request). */
+  pluginInstallCommit?(token: string, granted?: string[], networkHosts?: string[]): Promise<Record<string, unknown>>;
   /** Change an installed plugin's consented permissions (clamped
-   *  main-side to its manifest's request). */
-  pluginSetPermissions?(id: string, granted: string[]): Promise<Record<string, unknown>>;
+   *  main-side to its manifest's request), and optionally its consented
+   *  `net.fetch` hosts. */
+  pluginSetPermissions?(id: string, granted: string[], networkHosts?: string[]): Promise<Record<string, unknown>>;
   pluginInstallDiscard?(token: string): Promise<void>;
   pluginCommunityInstalls?(on: boolean): Promise<void>;
   pluginList?(): Promise<unknown[]>;
@@ -572,6 +575,16 @@ interface ElectronAPI {
   pluginJump?(source: string): Promise<Record<string, unknown>>;
   flowApps?(): Promise<unknown[]>;
   flowPost?(appId: string, route: string, body: unknown): Promise<Record<string, unknown>>;
+  /** `api.net.fetch`, run in main (plugin-caps/net.ts). `hosts` = the
+   *  plugin's granted hosts, re-checked on every redirect hop. */
+  pluginFetch?(req: {
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    body?: string;
+    timeoutMs?: number;
+    hosts: string[];
+  }): Promise<Record<string, unknown>>;
   onExternalJumpRequest?(
     handler: (req: { requestId: string; source: string }) => void,
   ): () => void;
@@ -697,11 +710,11 @@ export class ElectronHost implements Host {
       (await api().pluginBrowse?.()) ?? { ok: false, error: 'This build has no plugin directory.' }
     );
   }
-  async pluginInstallCommit(token: string, granted?: string[]): Promise<Record<string, unknown>> {
-    return (await api().pluginInstallCommit?.(token, granted)) ?? { ok: false, error: 'unsupported' };
+  async pluginInstallCommit(token: string, granted?: string[], networkHosts?: string[]): Promise<Record<string, unknown>> {
+    return (await api().pluginInstallCommit?.(token, granted, networkHosts)) ?? { ok: false, error: 'unsupported' };
   }
-  async pluginSetPermissions(id: string, granted: string[]): Promise<Record<string, unknown>> {
-    return (await api().pluginSetPermissions?.(id, granted)) ?? { ok: false, error: 'unsupported' };
+  async pluginSetPermissions(id: string, granted: string[], networkHosts?: string[]): Promise<Record<string, unknown>> {
+    return (await api().pluginSetPermissions?.(id, granted, networkHosts)) ?? { ok: false, error: 'unsupported' };
   }
   async pluginInstallDiscard(token: string): Promise<void> {
     await api().pluginInstallDiscard?.(token);
@@ -745,6 +758,7 @@ export class ElectronHost implements Host {
   readonly pluginJump? = api().pluginJump?.bind(api());
   readonly flowApps? = api().flowApps?.bind(api());
   readonly flowPost? = api().flowPost?.bind(api());
+  readonly pluginFetch? = api().pluginFetch?.bind(api());
 
   async openFile(opts: OpenFileOptions = {}): Promise<OpenedFile | null> {
     const result = await api().openFile({ filters: opts.filters ?? [] });

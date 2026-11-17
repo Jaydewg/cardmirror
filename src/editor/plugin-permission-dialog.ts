@@ -40,13 +40,21 @@ function reasonLine(pluginName: string, reason: string): HTMLElement {
   return el('span', 'pmd-plugin-perm-reason', `${pluginName} says: “${reason}”`);
 }
 
+/** Where `net.fetch` would connect, in words. */
+export function describeNetworkHosts(hosts: readonly string[]): string {
+  if (hosts.includes('*')) return 'Sites: any website';
+  if (hosts.length === 0) return 'Sites: none listed (it won’t be able to connect anywhere)';
+  return `Sites: ${hosts.join(', ')}`;
+}
+
 /** One permission's label + description (+ a "sensitive" badge, + the
- *  plugin's reason). When `control` is given (a checkbox) it leads the
- *  row. */
+ *  plugin's reason, + for `net.fetch` the sites it would reach). When
+ *  `control` is given (a checkbox) it leads the row. */
 function permissionRow(
   permission: string,
   control?: HTMLInputElement,
   reason?: { pluginName: string; text: string | undefined },
+  networkHosts?: readonly string[],
 ): HTMLElement {
   const info = infoFor(permission);
   const row = el(control ? 'label' : 'li', 'pmd-plugin-perm-row');
@@ -58,6 +66,9 @@ function permissionRow(
   }
   text.append(title);
   if (info.description) text.append(el('span', 'pmd-plugin-perm-desc', info.description));
+  if (permission === 'net.fetch') {
+    text.append(el('span', 'pmd-plugin-perm-hosts', describeNetworkHosts(networkHosts ?? [])));
+  }
   if (reason?.text) text.append(reasonLine(reason.pluginName, reason.text));
   row.append(text);
   row.dataset.permission = permission;
@@ -162,6 +173,8 @@ export interface PermissionConsentOptions {
   /** Listed but starting UNticked — on update, permissions the user
    *  turned off before (asked again only with their "ask again" on). */
   unchecked?: readonly string[];
+  /** The plugin's `networkHosts`, shown under `net.fetch`. */
+  networkHosts?: readonly string[];
 }
 
 /** A ticked checkbox per permission, for the consent and manage
@@ -171,6 +184,7 @@ function permissionChecklist(
   checked: (p: string) => boolean,
   boxes: Map<string, HTMLInputElement>,
   why?: { pluginName: string; reasons?: Readonly<Record<string, string>> },
+  networkHosts?: readonly string[],
 ): HTMLElement {
   const list = el('div', 'pmd-plugin-perm-list');
   for (const p of permissions) {
@@ -181,7 +195,7 @@ function permissionChecklist(
     box.setAttribute('aria-label', infoFor(p).label);
     boxes.set(p, box);
     const reason = why ? { pluginName: why.pluginName, text: why.reasons?.[p] } : undefined;
-    list.append(permissionRow(p, box, reason));
+    list.append(permissionRow(p, box, reason, networkHosts));
   }
   return list;
 }
@@ -233,7 +247,13 @@ export function permissionConsentDialog(opts: PermissionConsentOptions): Promise
         );
         const off = new Set(opts.unchecked ?? []);
         body.append(
-          permissionChecklist(opts.known, (p) => !off.has(p), boxes, { pluginName: opts.name, reasons: opts.reasons }),
+          permissionChecklist(
+            opts.known,
+            (p) => !off.has(p),
+            boxes,
+            { pluginName: opts.name, reasons: opts.reasons },
+            opts.networkHosts,
+          ),
         );
         body.append(
           el(
@@ -278,6 +298,8 @@ export function managePluginPermissionsDialog(opts: {
   askAgain?: boolean;
   blocked?: readonly string[];
   reasons?: Readonly<Record<string, string>>;
+  /** The plugin's `networkHosts`, shown under `net.fetch`. */
+  networkHosts?: readonly string[];
 }): Promise<ManagedPermissions | null> {
   const boxes = new Map<string, HTMLInputElement>();
   const blocked = new Set((opts.blocked ?? []).filter((p) => opts.known.includes(p)));
@@ -304,10 +326,13 @@ export function managePluginPermissionsDialog(opts: {
           el('p', 'pmd-text-prompt-detail', 'This plugin asks for no permissions this version supports.'),
         );
       } else {
-        const list = permissionChecklist(opts.known, (p) => opts.granted.includes(p), boxes, {
-          pluginName: opts.name,
-          reasons: opts.reasons,
-        });
+        const list = permissionChecklist(
+          opts.known,
+          (p) => opts.granted.includes(p),
+          boxes,
+          { pluginName: opts.name, reasons: opts.reasons },
+          opts.networkHosts,
+        );
         // "Don't ask again" answers: marked, with a way to undo them.
         for (const p of blocked) {
           const row = [...list.querySelectorAll<HTMLElement>('[data-permission]')].find(
@@ -358,6 +383,8 @@ export function permissionRequestDialog(opts: {
   name: string;
   permission: string;
   reason: string | null;
+  /** For `net.fetch`: the sites it would reach. */
+  networkHosts?: readonly string[];
 }): Promise<'allow' | 'not-now' | 'never'> {
   const info = infoFor(opts.permission);
   return openModal<'allow' | 'not-now' | 'never'>({
@@ -369,7 +396,14 @@ export function permissionRequestDialog(opts: {
     extra: { label: 'Don’t ask again', value: 'never' },
     build: (body) => {
       const ul = el('ul', 'pmd-plugin-perm-list');
-      ul.append(permissionRow(opts.permission, undefined, { pluginName: opts.name, text: opts.reason ?? undefined }));
+      ul.append(
+        permissionRow(
+          opts.permission,
+          undefined,
+          { pluginName: opts.name, text: opts.reason ?? undefined },
+          opts.networkHosts,
+        ),
+      );
       body.append(ul);
       body.append(
         el(

@@ -130,11 +130,12 @@ describe('install / update / revoke on disk', () => {
     const ins = await inspectFromGithub('owner/live-link');
     if (!ins.ok) throw new Error(ins.error);
     await commitPendingInstall(ins.pending, ['ui.dialogs']);
-    expect(await setGrantedPermissions('live-link', [])).toEqual({ ok: true, granted: [] });
+    expect(await setGrantedPermissions('live-link', [])).toEqual({ ok: true, granted: [], networkHosts: [] });
     expect(installedManifest()['grantedPermissions']).toEqual([]);
     expect(await setGrantedPermissions('live-link', ['ui.dialogs', 'collab.shareCode'])).toEqual({
       ok: true,
       granted: ['ui.dialogs'],
+      networkHosts: [],
     });
     expect((await setGrantedPermissions('../evil', [])).ok).toBe(false);
     expect((await setGrantedPermissions('not-installed', [])).ok).toBe(false);
@@ -148,5 +149,72 @@ describe('install / update / revoke on disk', () => {
     const m = installedManifest();
     expect('permissions' in m).toBe(false);
     expect('grantedPermissions' in m).toBe(false);
+    expect('networkHosts' in m).toBe(false);
+    expect('grantedNetworkHosts' in m).toBe(false);
+  });
+
+  describe('networkHosts (net.fetch)', () => {
+    const netRelease = (hosts: unknown, over: Record<string, unknown> = {}) => ({
+      ...base,
+      permissions: ['net.fetch', 'ui.dialogs'],
+      networkHosts: hosts,
+      ...over,
+    });
+
+    it('a release cannot pre-grant hosts; a fresh grant stores the consented hosts ∩ the request', async () => {
+      releaseManifest = netRelease(['api.crossref.org', 'BAD HOST', '10.0.0.1', 'localhost'], {
+        grantedNetworkHosts: ['api.crossref.org'],
+      });
+      const ins = await inspectFromGithub('owner/live-link');
+      if (!ins.ok) throw new Error(ins.error);
+      expect(ins.plugin.networkHosts).toEqual(['api.crossref.org']);
+      expect(ins.plugin.grantedNetworkHosts).toBeUndefined();
+      await commitPendingInstall(ins.pending, ['net.fetch'], ['api.crossref.org', 'evil.example']);
+      expect(installedManifest()['grantedNetworkHosts']).toEqual(['api.crossref.org']);
+    });
+
+    it('no hosts are stored without net.fetch', async () => {
+      releaseManifest = netRelease(['api.crossref.org']);
+      const ins = await inspectFromGithub('owner/live-link');
+      if (!ins.ok) throw new Error(ins.error);
+      await commitPendingInstall(ins.pending, ['ui.dialogs'], ['api.crossref.org']);
+      expect(installedManifest()['grantedNetworkHosts']).toEqual([]);
+    });
+
+    it('an update that adds hosts never grants them unless the renderer says so', async () => {
+      releaseManifest = netRelease(['api.crossref.org']);
+      const first = await inspectFromGithub('owner/live-link');
+      if (!first.ok) throw new Error(first.error);
+      await commitPendingInstall(first.pending, ['net.fetch'], ['api.crossref.org']);
+      releaseManifest = netRelease(['api.crossref.org', 'api.openalex.org'], { version: '1.1.0' });
+      const second = await inspectFromGithub('owner/live-link');
+      if (!second.ok) throw new Error(second.error);
+      expect(second.installedGrantedNetworkHosts).toEqual(['api.crossref.org']);
+      await commitPendingInstall(second.pending, ['net.fetch']); // hosts omitted: prior ∩ new
+      expect(installedManifest()['grantedNetworkHosts']).toEqual(['api.crossref.org']);
+      // An update that DROPS a host drops it from the grant too.
+      releaseManifest = netRelease(['api.openalex.org'], { version: '1.2.0' });
+      const third = await inspectFromGithub('owner/live-link');
+      if (!third.ok) throw new Error(third.error);
+      await commitPendingInstall(third.pending);
+      expect(installedManifest()['grantedNetworkHosts']).toEqual([]);
+    });
+
+    it('setGrantedPermissions keeps stored hosts when none are passed, clamps passed ones, clears them with net.fetch', async () => {
+      releaseManifest = netRelease(['*']);
+      const ins = await inspectFromGithub('owner/live-link');
+      if (!ins.ok) throw new Error(ins.error);
+      await commitPendingInstall(ins.pending, ['net.fetch'], ['*']);
+      expect(await setGrantedPermissions('live-link', ['net.fetch', 'ui.dialogs'])).toEqual({
+        ok: true,
+        granted: ['net.fetch', 'ui.dialogs'],
+        networkHosts: ['*'],
+      });
+      expect(await setGrantedPermissions('live-link', ['net.fetch'], ['a.example', 'b.example'])).toMatchObject({
+        networkHosts: ['a.example', 'b.example'],
+      });
+      expect(await setGrantedPermissions('live-link', [])).toMatchObject({ networkHosts: [] });
+      expect(installedManifest()['grantedNetworkHosts']).toEqual([]);
+    });
   });
 });

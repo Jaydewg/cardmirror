@@ -2,6 +2,8 @@
 import { targetDocUid, targetView, type CapabilityContext } from './context.js';
 import { readDocStructure, type PluginDocStructure } from './doc-read.js';
 import { runPluginInsert, type PluginEditResult, type PluginInsertRequest } from './doc-edit.js';
+import { jumpToHeadingInView } from '../plugin-jump.js';
+import type { JumpResult } from '../plugin-api.js';
 
 export type {
   PluginCard,
@@ -28,6 +30,21 @@ export interface PluginDocApi {
    *  refused (never silently dropped) in read mode, for spectators, in
    *  live views / linked copies, and in AI-locked regions. */
   insert?(req: PluginInsertRequest & { docUid?: string }): Promise<PluginEditResult>;
+  /** Scroll to a heading (an id from `read`: `PluginOutlineItem.id`,
+   *  `PluginCard.headingId`, or a menu target's `headingId`) and put the
+   *  cursor there. `part: 'cite'` lands on the start of the first cite
+   *  paragraph of the card it heads instead (the heading when there is
+   *  none). Targets the focused doc unless `docUid` names another open
+   *  one. `doc.read`. */
+  jumpTo?(target: PluginJumpTarget): Promise<JumpResult>;
+}
+
+/** `doc.jumpTo`'s target. Unknown fields are ignored. */
+export interface PluginJumpTarget {
+  headingId: string;
+  docUid?: string;
+  /** Default `'heading'`. */
+  part?: 'heading' | 'cite';
 }
 
 export function buildDocApi(ctx: CapabilityContext): PluginDocApi | undefined {
@@ -48,6 +65,15 @@ export function buildDocApi(ctx: CapabilityContext): PluginDocApi | undefined {
         title: ident?.docTitle ?? 'Untitled',
         ...readDocStructure(hit.view.state.doc),
       };
+    };
+    api.jumpTo = async (target) => {
+      const t = (target && typeof target === 'object' ? target : {}) as Partial<PluginJumpTarget>;
+      if (typeof t.headingId !== 'string' || !t.headingId) return { ok: false, error: 'bad-request' };
+      const part = t.part === 'cite' ? 'cite' : 'heading';
+      const docUid = t.docUid != null ? String(t.docUid) : undefined;
+      const hit = targetView(deps, docUid);
+      if (!hit) return { ok: false, error: 'doc-not-open' };
+      return jumpToHeadingInView(hit.view, t.headingId, part) ? { ok: true } : { ok: false, error: 'not-found' };
     };
   }
   if (edit) {

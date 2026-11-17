@@ -21,7 +21,17 @@ export interface CallRule {
 const sync = (permission: string): CallRule => ({ permission });
 const async = (permission: string): CallRule => ({ permission, async: true });
 
-export type PluginNamespaceKey = 'ui' | 'files' | 'collab' | 'doc' | 'events' | 'panel' | 'menu' | 'notices';
+export type PluginNamespaceKey =
+  | 'ui'
+  | 'files'
+  | 'collab'
+  | 'doc'
+  | 'events'
+  | 'panel'
+  | 'menu'
+  | 'notices'
+  | 'annotations'
+  | 'net';
 
 export const CALL_TIME_PERMISSIONS: {
   readonly [K in PluginNamespaceKey]: Readonly<Record<string, CallRule>>;
@@ -47,7 +57,7 @@ export const CALL_TIME_PERMISSIONS: {
     viewAddress: sync('collab.viewCode'),
     join: async('collab.join'),
   },
-  doc: { read: sync('doc.read'), insert: async('doc.edit') },
+  doc: { read: sync('doc.read'), insert: async('doc.edit'), jumpTo: async('doc.read') },
   events: {
     onDocChange: sync('doc.events'),
     onSelectionChange: sync('doc.events'),
@@ -56,6 +66,8 @@ export const CALL_TIME_PERMISSIONS: {
   panel: { get: sync('ui.panel') },
   menu: { add: sync('ui.contextMenu') },
   notices: { post: sync('ui.notices') },
+  annotations: { set: sync('doc.annotate'), clear: sync('doc.annotate') },
+  net: { fetch: async('net.fetch') },
 };
 
 /** The error a refused call throws (sync) or rejects with (async). */

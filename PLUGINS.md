@@ -40,6 +40,8 @@ A plugin is one GitHub repository. Each release attaches two assets:
 | `minAppVersion` | string | no | Oldest CardMirror version that the plugin supports. Compared as plain semver — read the note below before setting it. |
 | `repo` | string | never in your release | The installer stamps `owner/repo` into the saved manifest. Update checks read it. Do not set it yourself. |
 | `grantedPermissions` | list | never | The permissions that the client grants.
+| `networkHosts` | list | no | Where `net.fetch` may connect: exact hostnames (`"api.crossref.org"`), or `"*"` for any https site. At most 16. No IP addresses, `localhost`, ports or paths; off-shape entries are dropped. List the same hosts in the registered definition: only hosts in both count. The consent dialogs show them beside `net.fetch`. Older builds ignore it. |
+| `grantedNetworkHosts` | list | never | The hosts the user consented to with `net.fetch`. Written by CardMirror; a release that sets it is ignored. |
 
 Example 1 (permissions-less):
 
@@ -221,6 +223,15 @@ export interface PluginDefinition {
   apiVersion: number;
   commands: PluginCommandDef[];
   settings?: PluginSettingDef[];
+  /** Same list as the manifest's `permissions` (section 3). */
+  permissions?: string[];
+  /** Your reason per permission, for `api.permissions.request` prompts. */
+  permissionReasons?: Record<string, string>;
+  /** Same list as the manifest's `networkHosts` (for `net.fetch`). */
+  networkHosts?: string[];
+  /** Runs at load and again with a fresh api after every permission
+   *  change; return a cleanup. */
+  activate?: (api: CardMirrorPluginApi) => void | (() => void);
 }
 ```
 
@@ -473,16 +484,71 @@ if (r.status === 'granted') await r.api.collab?.join(address);
 | `collab.server` | low | See which co-editing server you use | `collab.server`, `collab.reach`, `collab.parseAddress` |
 | `collab.shareCode` | high | Read your session share codes | `collab.shareCode`, `collab.shareAddress` |
 | `collab.viewCode` | medium | Read your sessions’ view-only links | `collab.viewCode`, `collab.viewAddress` |
+| `doc.annotate` | low | Mark text in your documents | `annotations.set`, `annotations.clear` |
 | `doc.edit` | high | Add content to your documents | `doc.insert` |
 | `doc.events` | low | Notice when you edit or switch documents | `events.onDocChange`, `events.onSelectionChange`, `events.onFocusChange` |
-| `doc.read` | medium | Read your open documents | `doc.read` |
+| `doc.read` | medium | Read your open documents | `doc.read`, `doc.jumpTo` |
 | `files.data` | medium | Store its own data in your documents | `files.onSave`, `files.onOpen`, `files.get`, `files.focusedDoc` |
+| `net.fetch` | high | Connect to websites | `net.fetch` |
 | `ui.contextMenu` | low | Add right-click menu items | `menu.add` |
 | `ui.dialogs` | low | Show dialogs | `ui.choose`, `ui.confirm` |
 | `ui.notices` | low | Post notices in the status bar | `notices.post` |
 | `ui.panel` | low | Show a side panel | `panel.get` |
 
 <!-- permission-table:end -->
+
+#### Jumping to a card (`doc.jumpTo`, with `doc.read`)
+
+```ts
+const r = await api.doc?.jumpTo?.({ headingId: card.headingId!, part: 'cite' });
+// r: JumpResult — { ok: true } | { ok: false, error: 'doc-not-open' | 'not-found' | 'bad-request' }
+```
+
+Takes any heading id the plugin got from `doc.read` (`PluginCard.headingId`, an outline item's `id`) or from a menu target. It puts the cursor there and scrolls to it. `part: 'cite'` lands on the start of the card's first cite paragraph instead (the heading when it has none). `docUid` targets another open document. Headings inside live views and linked copies are never targets.
+
+#### Marking text (`doc.annotate` → `api.annotations`)
+
+Spellcheck-style marks with a note. They are display-only: never saved, never synced to a co-editing session, never in undo. Each `set` **replaces** all of the plugin's marks in that document. Between calls they move with the user's edits, so re-set them from `events.onDocChange`.
+
+```ts
+const r = api.annotations?.set([
+  {
+    headingId: card.headingId!,      // from doc.read
+    part: 'cite',                    // 'heading' | 'cite' | 'body' | 'undertag'
+    index: 0,                        // which paragraph of that part (default 0)
+    match: 'Freelance writer',       // exact substring (default: the whole paragraph)
+    occurrence: 0,                   // which match (default 0)
+    severity: 'warning',             // 'error' | 'warning' | 'info'
+    message: 'Vague quals',          // ≤ 200 chars; hover + right-click
+    style: 'squiggle',               // optional: 'squiggle' | 'underline' | 'dotted' | 'tint' | 'box'
+    color: 'amber',                  // optional: 'red' | 'amber' | 'blue' | 'green' | 'purple' | 'gray'
+    key: 'quals:abc',                // optional, your own id
+    actions: [{ label: 'Ignore for this card', run: () => ignore(card) }], // ≤ 2
+  },
+], { docUid });
+// r: { ok: true, placed, unplaced } | { ok: false, error: 'no-doc' | 'hidden' }
+api.annotations?.clear({ docUid });
+```
+
+- Anchors use ids, never positions. One that doesn't land (heading gone, no such paragraph, match not found) is skipped and counted in `unplaced`. Mirrored content (live views, linked copies) is never marked.
+- `severity` sets the look unless you pass `style` / `color`: errors are red squiggles, warnings amber squiggles, info blue dots. Colors are theme colors picked by name, so they follow dark mode, the color-vision preset and the user's own color choices. There is no raw CSS.
+- Unknown fields and unknown `style` / `color` values are ignored, so a plugin written for a newer CardMirror degrades instead of failing. At most 2,000 marks per document. A non-array throws.
+- Right-clicking a mark shows its message labeled with your plugin's name, your actions, and **Hide markings from <plugin> in this document**. After that, `set` answers `hidden` in that document until CardMirror restarts. A misspelled word inside a mark keeps the spelling menu.
+- Revoking `doc.annotate` removes every mark the plugin made.
+
+#### Connecting to websites (`net.fetch` → `api.net`)
+
+```ts
+const r = await api.net?.fetch('https://api.crossref.org/works/10.1038/nature12373', {
+  headers: { Accept: 'application/json' },
+});
+if (r?.ok && r.status === 200) JSON.parse(r.body);
+```
+
+- Only https, and only the hosts in `networkHosts` (manifest **and** definition) that the user saw when they allowed `net.fetch`. Anything else, including a redirect that leaves those hosts, answers `{ ok: false, error: 'host-not-granted' }`. An update that adds hosts asks for `net.fetch` again.
+- `ok: true` means a reply arrived, whatever its status. Read `status`. Errors are a growing union: `host-not-granted`, `offline` (this build can't make requests), `timeout`, `too-large`, `network`, `bad-request`. Treat an unknown one like `network`.
+- Requests run in CardMirror's desktop process. They carry no cookies or credentials, `Cookie`, `Host`, `Proxy-*` and hop-by-hop headers are dropped, and the User-Agent is `CardMirror-Plugin/1` unless you set one. Methods are `GET`, `HEAD` and `POST`. The request body is a string of at most 1 MB, and replies are capped at 5 MB, decoded as UTF-8. `timeoutMs` defaults to 15000 and is at most 30000.
+- Anything you send can include the user's document text, and the consent copy says so. Send only what the feature needs, and never the user's identity unless they typed it into your settings for that purpose.
 
 ### Extraction rules
 

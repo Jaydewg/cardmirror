@@ -10,7 +10,18 @@ import {
   sanitizePermissionReasons,
   splitKnown,
   PERMISSION_REASON_MAX,
+  MAX_NETWORK_HOSTS,
+  NETWORK_HOST_RE,
+  hostAllowed,
+  intersectHosts,
+  sanitizeNetworkHosts,
 } from '../../src/editor/plugin-permissions.js';
+import {
+  MAX_NETWORK_HOSTS as MAIN_MAX_NETWORK_HOSTS,
+  NETWORK_HOST_RE as MAIN_NETWORK_HOST_RE,
+  intersectHosts as mainIntersectHosts,
+  sanitizeNetworkHosts as mainSanitizeHosts,
+} from '../../apps/desktop/src/plugin-net.js';
 import {
   MAX_PERMISSIONS as MAIN_MAX_PERMISSIONS,
   PERMISSION_ID_RE as MAIN_PERMISSION_ID_RE,
@@ -128,5 +139,64 @@ describe('permissionStatus', () => {
     expect(permissionStatus('ui.dialogs', ['ui.dialogs'], new Set())).toBe('denied');
     expect(permissionStatus('made.up', ['made.up'], granted)).toBe('unsupported');
     expect(permissionStatus('ui.dialogs', [], granted)).toBe('undeclared');
+  });
+});
+
+describe('networkHosts', () => {
+  it('keeps exact hostnames and "*", lowercased, deduplicated, "*" first', () => {
+    expect(sanitizeNetworkHosts([' API.Crossref.org ', 'api.crossref.org', '*', 'a.b.example', 'xn--p1ai.xn--p1ai'])).toEqual([
+      '*',
+      'a.b.example',
+      'api.crossref.org',
+      'xn--p1ai.xn--p1ai',
+    ]);
+  });
+  it('drops IPs, localhost, schemes, paths, ports, wildcards-in-names and non-strings', () => {
+    expect(
+      sanitizeNetworkHosts([
+        '10.0.0.1',
+        'localhost',
+        'https://a.com',
+        'a.com/x',
+        'a.com:443',
+        '*.a.com',
+        '-a.com',
+        'a-.com',
+        'a..com',
+        'a.com.',
+        'a.c',
+        7,
+        null,
+      ]),
+    ).toEqual([]);
+    expect(sanitizeNetworkHosts('a.com')).toEqual([]);
+  });
+  it('caps the list', () => {
+    expect(sanitizeNetworkHosts(Array.from({ length: 40 }, (_, i) => `h${i}.example`))).toHaveLength(MAX_NETWORK_HOSTS);
+  });
+  it('hostAllowed: exact match, or anything under "*"', () => {
+    expect(hostAllowed(['api.crossref.org'], 'API.crossref.org')).toBe(true);
+    expect(hostAllowed(['api.crossref.org'], 'x.api.crossref.org')).toBe(false);
+    expect(hostAllowed(['*'], 'anything.example')).toBe(true);
+    expect(hostAllowed([], 'a.com')).toBe(false);
+  });
+  it('main keeps an identical copy', () => {
+    expect(MAIN_NETWORK_HOST_RE.source).toBe(NETWORK_HOST_RE.source);
+    expect(MAIN_NETWORK_HOST_RE.flags).toBe(NETWORK_HOST_RE.flags);
+    expect(MAIN_MAX_NETWORK_HOSTS).toBe(MAX_NETWORK_HOSTS);
+    const vectors: unknown[] = [
+      ['*', 'B.com', 'a.com', 'b.com', '10.1.1.1', 'localhost', 3],
+      Array.from({ length: 30 }, (_, i) => `h${i}.example`),
+      'a.com',
+      null,
+    ];
+    for (const v of vectors) expect(mainSanitizeHosts(v)).toEqual(sanitizeNetworkHosts(v));
+    const pairs: [string[], string[]][] = [
+      [['*'], ['a.com']],
+      [['a.com', 'b.com'], ['*']],
+      [['a.com'], ['b.com']],
+      [['*'], ['*']],
+    ];
+    for (const [a, b] of pairs) expect(mainIntersectHosts(a, b)).toEqual(intersectHosts(a, b));
   });
 });

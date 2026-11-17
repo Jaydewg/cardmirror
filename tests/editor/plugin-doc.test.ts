@@ -130,7 +130,7 @@ describe('api.doc', () => {
   it('methods exist per permission', () => {
     const h = makeHarness({ d1: mount() });
     h.register('demo', ['doc.read']);
-    expect(Object.keys(h.api().doc!)).toEqual(['read']);
+    expect(Object.keys(h.api().doc!)).toEqual(['read', 'jumpTo']);
     h.register('editor', ['doc.edit']);
     expect(Object.keys(h.api('editor').doc!)).toEqual(['insert']);
     h.register('none', ['doc.read'], []);
@@ -178,5 +178,46 @@ describe('api.doc', () => {
     } finally {
       unregisterCollabPluginSource('d1');
     }
+  });
+});
+
+describe('api.doc.jumpTo', () => {
+  let view: EditorView | null = null;
+  afterEach(() => {
+    view?.destroy();
+    view = null;
+  });
+  function mount(): EditorView {
+    const el = document.createElement('div');
+    document.body.append(el);
+    view = new EditorView(el, { state: EditorState.create({ doc: sampleDoc() }) });
+    return view;
+  }
+
+  it('selects the heading, or the start of its first cite paragraph', async () => {
+    const v = mount();
+    const h = makeHarness({ d1: v });
+    h.register('demo', ['doc.read']);
+    const doc = h.api('demo').doc!;
+    expect(await doc.jumpTo!({ headingId: TAG_ID })).toEqual({ ok: true });
+    expect(v.state.selection.$from.parent.type.name).toBe('tag');
+    expect(await doc.jumpTo!({ headingId: TAG_ID, part: 'cite' })).toEqual({ ok: true });
+    expect(v.state.selection.$from.parent.type.name).toBe('cite_paragraph');
+    expect(v.state.selection.$from.parentOffset).toBe(0);
+    // An analytic unit with no cite falls back to its heading.
+    expect(await doc.jumpTo!({ headingId: 'an-1', part: 'cite' })).toEqual({ ok: true });
+    expect(v.state.selection.$from.parent.type.name).toBe('analytic');
+    // Any heading id works (a block here).
+    expect(await doc.jumpTo!({ headingId: BLOCK_ID })).toEqual({ ok: true });
+    expect(v.state.selection.$from.parent.type.name).toBe('block');
+  });
+
+  it('reports not-found, doc-not-open and bad-request', async () => {
+    const h = makeHarness({ d1: mount() });
+    h.register('demo', ['doc.read']);
+    const doc = h.api('demo').doc!;
+    expect(await doc.jumpTo!({ headingId: 'gone' })).toEqual({ ok: false, error: 'not-found' });
+    expect(await doc.jumpTo!({ headingId: TAG_ID, docUid: 'nope' })).toEqual({ ok: false, error: 'doc-not-open' });
+    expect(await doc.jumpTo!({} as never)).toEqual({ ok: false, error: 'bad-request' });
   });
 });
