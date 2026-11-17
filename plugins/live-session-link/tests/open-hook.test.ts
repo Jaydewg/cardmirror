@@ -70,7 +70,8 @@ describe('open hook', () => {
         expect(f.probe).toHaveBeenCalledWith(address);
         const n = f.notices[0]!;
         expect(n.body).toContain('other.example');
-        expect(n.body).toContain('connected to relay.test');
+        expect(n.body).toContain('your co-editing server (relay.test) can’t reach');
+        expect(n.body).not.toContain('switch your co-editing server');
         expect(n.actions!.map((a) => a.label)).toEqual(['Don’t ask for this file']);
         expect(f.store.get('endedSessions')).toBeUndefined();
         expect(f.hooks.save!(ctx())).toBeUndefined(); // the link stays
@@ -83,7 +84,34 @@ describe('open hook', () => {
         probe: async () => 'unreachable',
       });
       await open(f, linkFor(ELSEWHERE));
-      expect(f.notices[0]!.body).toContain('a different co-editing server');
+      expect(f.notices[0]!.body).toContain('a co-editing server yours can’t reach');
+    });
+
+    it('reachable through federation: offers Join with the address, and says the host may need to let you in', async () => {
+      const f = makeFake({ reach: async (url) => (url === OTHER_SERVER ? 'federated' : 'home') });
+      await open(f, linkFor(ELSEWHERE));
+      expect(f.reach).toHaveBeenCalledWith(OTHER_SERVER);
+      const n = f.notices[0]!;
+      expect(n.body).toContain('It’s on other.example; its host may need to let you in.');
+      expect(n.actions!.map((a) => a.label)).toEqual(['Join', 'Don’t ask for this file']);
+      n.actions![0]!.run();
+      await flush();
+      expect(f.join).toHaveBeenCalledWith(ELSEWHERE, { intoDoc: 'u1' });
+    });
+
+    it('a link on your own server never gets the other-server note', async () => {
+      const f = makeFake({ reach: async () => 'federated' });
+      await open(f);
+      expect(f.notices[0]!.body).not.toContain('let you in');
+      expect(f.reach).not.toHaveBeenCalled();
+    });
+
+    it('reach that is unknown (or a value this plugin does not know) adds no note', async () => {
+      for (const r of ['unknown', 'mesh']) {
+        const f = makeFake({ reach: async () => r as never });
+        await open(f, linkFor(ELSEWHERE));
+        expect(f.notices[0]!.body).not.toContain('let you in');
+      }
     });
 
     it('the same room on two servers is two sessions (each offered)', async () => {
@@ -176,6 +204,16 @@ describe('open hook', () => {
     f.notices[0]!.actions![0]!.run();
     await flush();
     expect(f.toasts.at(-1)).toMatch(/Can’t join.*relay\.test/);
+    expect(f.store.get('endedSessions')).toBeUndefined();
+    expect(f.store.get('embedSessions')).toBeUndefined();
+  });
+
+  it('a Join the session’s host declines says so, and marks nothing', async () => {
+    const f = makeFake({ join: async () => 'declined' });
+    await open(f);
+    f.notices[0]!.actions![0]!.run();
+    await flush();
+    expect(f.toasts.at(-1)).toMatch(/host declined/);
     expect(f.store.get('endedSessions')).toBeUndefined();
     expect(f.store.get('embedSessions')).toBeUndefined();
   });

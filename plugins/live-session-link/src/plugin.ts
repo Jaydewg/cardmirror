@@ -136,13 +136,41 @@ async function probeLink(api: CardMirrorPluginApi, link: LinkData): Promise<Link
   return result === 'live' || result === 'ended' || result === 'unreachable' ? result : 'unknown';
 }
 
-/** "on relay.b.example, but CardMirror is connected to relay.a.example" */
+/** "on relay.b.example, which your co-editing server (relay.a.example)
+ *  can't reach". Worded for every build: without federation no other
+ *  server is reachable; with it, only servers linked to yours are. */
 async function serverMismatchText(api: CardMirrorPluginApi, link: LinkData): Promise<string> {
   const here = await api.collab?.server?.().catch(() => null);
   const there = serverHost(link.server);
   return here
-    ? `on ${there}, but CardMirror is connected to ${here.host}`
-    : `on ${there}, a different co-editing server than yours`;
+    ? `on ${there}, which your co-editing server (${here.host}) can’t reach`
+    : `on ${there}, a co-editing server yours can’t reach`;
+}
+
+/** " It's on relay.b.example; its host may need to let you in." when
+ *  the link's session is on another server this build reaches (a
+ *  cross-server join asks the session's host first); else "". Decided
+ *  from `reach`, never from what kind of build this is. */
+async function otherServerNote(api: CardMirrorPluginApi, link: LinkData): Promise<string> {
+  const collab = api.collab;
+  if (!collab?.reach || !collab.server) return '';
+  const here = await collab.server().catch(() => null);
+  if (!here || here.url === link.server) return '';
+  const reach = await collab.reach(link.server).catch(() => 'unknown');
+  return reach === 'federated' ? ` It’s on ${serverHost(link.server)}; its host may need to let you in.` : '';
+}
+
+/** Who a saved copy's link lets in, by the session's `crossServer`
+ *  state. A value this plugin doesn't know reads as `off` (the API's
+ *  rule: never assume other servers can join). */
+function embedScopeText(info: PluginSessionInfo): string {
+  const host = info.server ? serverHost(info.server) : null;
+  if (info.crossServer === 'federated') {
+    return host
+      ? ` People on servers linked to ${host} can join too, once the session’s host lets them in.`
+      : ' People on linked servers can join too, once the session’s host lets them in.';
+  }
+  return host ? ` Only people on ${host} can join.` : '';
 }
 
 /** The address of a doc's live session, if this build can name it. */
@@ -219,6 +247,8 @@ export function createLiveSessionLinkPlugin(): PluginDefinition {
       }
     } else if (outcome === 'unreachable') {
       current.showToast(`Can’t join: that session is ${await serverMismatchText(current, link)}. The link stays in the file.`);
+    } else if (outcome === 'declined') {
+      current.showToast('The session’s host declined your request to join. The link stays in the file.');
     }
     // Other outcomes: CardMirror already explained them.
   }
@@ -280,7 +310,7 @@ export function createLiveSessionLinkPlugin(): PluginDefinition {
       // link stays in the file for someone (or some build) that can.
       const where = await serverMismatchText(current, link);
       const body =
-        `This file links to ${sessionName} ${where}. To join, switch your co-editing server, ` +
+        `This file links to ${sessionName} ${where}. To join, use a co-editing server that can reach it, ` +
         `then run “${PLUGIN_NAME}: Join live session from this file”. The link stays in the file.`;
       if (!current.notices) {
         current.showToast(body);
@@ -296,9 +326,11 @@ export function createLiveSessionLinkPlugin(): PluginDefinition {
       return;
     }
     if (!current.collab?.join) return; // nothing to offer
+    const elsewhere = await otherServerNote(current, link);
     if (!current.notices) {
       current.showToast(
-        `“${ctx.title}” links to a live session. Run “${PLUGIN_NAME}: Join live session from this file” to join.`,
+        `“${ctx.title}” links to a live session. Run “${PLUGIN_NAME}: Join live session from this file” to join.` +
+          elsewhere,
       );
       return;
     }
@@ -308,6 +340,7 @@ export function createLiveSessionLinkPlugin(): PluginDefinition {
       body:
         `This file links to ${sessionName}. Join replaces this view with the live copy; ` +
         'saving then writes the live copy back to this file. Dismiss to keep working locally.' +
+        elsewhere +
         (status === 'unknown' ? ' (Couldn’t check whether it’s still live.)' : ''),
       toast: toastNow(),
       actions: [{ label: 'Join', run: () => void joinFromLink(link, ctx.docUid) }, quietAction(ctx)],
@@ -356,7 +389,7 @@ export function createLiveSessionLinkPlugin(): PluginDefinition {
       return;
     }
     const ok = await api.ui.confirm(
-      'Anyone who gets a saved copy of this file can join and edit this session, until it ends.',
+      'Anyone who gets a saved copy of this file can join and edit this session, until it ends.' + embedScopeText(info),
       { okLabel: 'Embed link' },
     );
     if (!ok) return;

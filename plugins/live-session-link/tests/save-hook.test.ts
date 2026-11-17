@@ -35,6 +35,13 @@ describe('save hook', () => {
     expect(out.summary).not.toContain('relay.test');
   });
 
+  it('a session joined on another server embeds THAT server’s address and key', () => {
+    const f = makeFake({ sessions: { u1: session('participant', { server: OTHER_SERVER, crossServer: 'federated' }) }, codes: { u1: CODE } });
+    f.store.set('embedSessions', [`${ROOM}@${OTHER_SERVER}`]);
+    const out = f.hooks.save!(ctx()) as { data: Record<string, unknown> };
+    expect(out.data).toMatchObject({ address: `${CODE}@${OTHER_SERVER}`, server: OTHER_SERVER, roomId: ROOM });
+  });
+
   it('opting in is per server: the same room elsewhere is a different session', () => {
     const f = makeFake({ sessions: { u1: host }, codes: { u1: CODE } });
     f.store.set('embedSessions', [`${ROOM}@${OTHER_SERVER}`]);
