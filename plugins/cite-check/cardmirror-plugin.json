@@ -1,0 +1,29 @@
+{
+  "id": "cite-check",
+  "name": "Cite Check",
+  "version": "0.1.0",
+  "description": "Flags problem cites: missing or vague author quals, weak sources, date and author mismatches, dead links, DOIs that point elsewhere.",
+  "author": "CardMirror",
+  "apiVersion": 1,
+  "permissions": [
+    "doc.annotate",
+    "doc.events",
+    "doc.read",
+    "files.data",
+    "net.fetch",
+    "ui.contextMenu",
+    "ui.notices",
+    "ui.panel"
+  ],
+  "permissionReasons": {
+    "doc.read": "To read the cites in your open documents.",
+    "doc.events": "To re-check cites as you edit.",
+    "doc.annotate": "To underline problem cites, like spellcheck.",
+    "ui.panel": "To list every cite problem in one place.",
+    "ui.contextMenu": "To add “Verify this cite” to the right-click menu.",
+    "ui.notices": "To tell you when an online check finishes.",
+    "files.data": "To remember findings you chose to ignore, inside the file.",
+    "net.fetch": "Only when you run “Verify sources”: to look cites up on Crossref and OpenAlex and open the cited pages. It sends titles, author names and links, nothing else."
+  },
+  "networkHosts": ["*", "api.crossref.org", "api.openalex.org"]
+}

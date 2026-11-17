@@ -1,0 +1,30 @@
+{
+  // Standalone: this plugin is its own project. Its ONE link to CardMirror
+  // is the `@cardmirror/plugin-api` mapping below: the type-only contract
+  // in src/plugin-sdk (plus `/testing`, the test helper, for tests only).
+  // Outside this repo, point both at a copy of src/plugin-sdk instead.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    // The contract's types reach into app modules, which use Node types.
+    "types": ["node"],
+    "paths": {
+      "@cardmirror/plugin-api": ["../../src/plugin-sdk/index.ts"],
+      "@cardmirror/plugin-api/testing": ["../../src/plugin-sdk/testing.ts"]
+    }
+  },
+  "include": ["src", "tests", "vitest.config.ts"]
+}
