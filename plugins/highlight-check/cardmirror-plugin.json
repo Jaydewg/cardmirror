@@ -1,0 +1,22 @@
+{
+  "id": "highlight-check",
+  "name": "Highlight Check",
+  "version": "0.1.0",
+  "description": "Flags highlighting that changes what a card says: a dropped \"not\" or \"never\", a dropped \"rarely\" or \"seldom\", half-read words and numbers, and more.",
+  "author": "CardMirror",
+  "apiVersion": 1,
+  "permissions": [
+    "doc.annotate",
+    "doc.events",
+    "doc.read",
+    "files.data",
+    "ui.panel"
+  ],
+  "permissionReasons": {
+    "doc.read": "To read your cards and see which words are highlighted.",
+    "doc.annotate": "To underline suspicious highlighting, like spellcheck.",
+    "ui.panel": "To list every finding in one place.",
+    "doc.events": "To re-check as you edit, when you turn that on.",
+    "files.data": "To remember findings you chose to ignore, inside the file."
+  }
+}

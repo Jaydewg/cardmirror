@@ -1,0 +1,17 @@
+{
+  "name": "cardmirror-plugin-highlight-check",
+  "private": true,
+  "releaseRepo": "Jaydewg/cardmirror-plugin-highlight-check",
+  "type": "module",
+  "description": "CardMirror plugin: flags highlighting that changes what a card says. The plugin's version lives in cardmirror-plugin.json.",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=iife --target=es2022 --outfile=dist/plugin.js --log-level=warning && node -e \"require('fs').copyFileSync('cardmirror-plugin.json','dist/cardmirror-plugin.json')\"",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.0"
+  }
+}
