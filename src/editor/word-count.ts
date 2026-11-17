@@ -158,11 +158,21 @@ function readAloudBucket(node: PMNode, parent: PMNode): 'body' | 'other' | null 
   }
   if (node.marks.some((m) => m.type.name === 'cite_mark')) return 'other';
   if (parentType === 'card_body' || parentType === 'paragraph' || parentType === 'undertag') {
-    const hasHighlight = node.marks.some((m) => m.type.name === 'highlight');
-    const hasShading = node.marks.some((m) => m.type.name === 'shading');
-    return hasHighlight && !hasShading ? 'body' : null;
+    return isHighlightedRead(node) ? 'body' : null;
   }
   return null;
+}
+
+/** A text run the reader delivers as highlighted evidence: it carries
+ *  the `highlight` mark and not the `shading` mark (shaded text is
+ *  reference-style and not read aloud). */
+export function isHighlightedRead(node: PMNode): boolean {
+  let highlight = false;
+  for (const m of node.marks) {
+    if (m.type.name === 'shading') return false;
+    if (m.type.name === 'highlight') highlight = true;
+  }
+  return highlight;
 }
 
 function countWords(s: string): number {

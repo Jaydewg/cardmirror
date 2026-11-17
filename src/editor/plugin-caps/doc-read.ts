@@ -10,7 +10,7 @@
  */
 import type { Node as PMNode } from 'prosemirror-model';
 import { collectCiteText, collectHeadings } from '../headings.js';
-import { countCards, countReadAloudSplit } from '../word-count.js';
+import { countCards, countReadAloudSplit, isHighlightedRead } from '../word-count.js';
 
 export type PluginHeadingType = 'pocket' | 'hat' | 'block' | 'tag' | 'analytic';
 
@@ -37,6 +37,14 @@ export interface PluginCard {
   citeParagraphs: string[];
   /** Body paragraphs, in order (plain text). */
   body: string[];
+  /** What the reader reads aloud in each body paragraph: one list per
+   *  entry of `body`, in the same order, of `[start, end)` character
+   *  offsets into that paragraph's text. A range covers highlighted text
+   *  that isn't shaded (the read-aloud word count's rule); ranges are
+   *  sorted, never overlap, and adjacent runs are merged. `[]` = nothing
+   *  read. Absent on builds before it existed — feature-detect with
+   *  `card.bodyRead !== undefined`. */
+  bodyRead?: [number, number][][];
   undertags: string[];
 }
 
@@ -75,13 +83,17 @@ export function readDocStructure(doc: PMNode): PluginDocStructure {
       cite: collectCiteText(node),
       citeParagraphs: [],
       body: [],
+      bodyRead: [],
       undertags: [],
     };
     node.forEach((child, _offset, index) => {
       if (index === 0) return; // the heading
       const name = child.type.name;
       if (name === 'cite_paragraph') card.citeParagraphs.push(child.textContent);
-      else if (name === 'card_body') card.body.push(child.textContent);
+      else if (name === 'card_body') {
+        card.body.push(child.textContent);
+        card.bodyRead!.push(readRanges(child));
+      }
       else if (name === 'undertag') card.undertags.push(child.textContent);
     });
     cards.push(card);
@@ -94,4 +106,25 @@ export function readDocStructure(doc: PMNode): PluginDocStructure {
     cards,
     stats: { cards: countCards(doc), readAloudWords: { body: words.body, other: words.other } },
   };
+}
+
+/** `[start, end)` offsets (into `block.textContent`) of the read-aloud
+ *  text in one textblock. Offsets count text-node characters only, which
+ *  is exactly what `textContent` concatenates (no inline node in the
+ *  schema has `leafText`). */
+export function readRanges(block: PMNode): [number, number][] {
+  const out: [number, number][] = [];
+  let offset = 0;
+  block.descendants((node) => {
+    if (!node.isText) return true;
+    const len = node.text?.length ?? 0;
+    if (len > 0 && isHighlightedRead(node)) {
+      const last = out[out.length - 1];
+      if (last && last[1] === offset) last[1] = offset + len;
+      else out.push([offset, offset + len]);
+    }
+    offset += len;
+    return false;
+  });
+  return out;
 }

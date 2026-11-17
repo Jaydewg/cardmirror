@@ -59,6 +59,7 @@ describe('doc.read engine', () => {
         cite: 'Smith 24',
         citeParagraphs: ['Smith 24, professor'],
         body: ['Read this not this.'],
+        bodyRead: [[[0, 10]]],
         undertags: [],
       },
       {
@@ -68,12 +69,51 @@ describe('doc.read engine', () => {
         cite: '',
         citeParagraphs: [],
         body: [],
+        bodyRead: [],
         undertags: [],
       },
     ]);
     expect(s.stats.cards).toBe(1);
     expect(s.stats.readAloudWords.body).toBe(2); // "Read this" (highlighted)
     expect(JSON.parse(JSON.stringify(s))).toEqual(s);
+  });
+});
+
+describe('doc.read bodyRead', () => {
+  const hl = (color = 'yellow') => marks['highlight']!.create({ color });
+  const card = (...paras: PMNode[]): PMNode =>
+    nodes['doc']!.createChecked(null, [
+      nodes['card']!.create(null, [nodes['tag']!.create({ id: 't' }, schema.text('Tag')), ...paras]),
+    ]);
+  const body = (...runs: PMNode[]): PMNode => nodes['card_body']!.create(null, runs);
+
+  it('gives read ranges per body paragraph, parallel to body', () => {
+    const doc = card(
+      body(schema.text('The plan does '), schema.text('not', []), schema.text(' solve warming', [hl()])),
+      body(schema.text('Nothing read here.')),
+    );
+    const [c] = readDocStructure(doc).cards;
+    expect(c!.body).toEqual(['The plan does not solve warming', 'Nothing read here.']);
+    expect(c!.bodyRead).toEqual([[[17, 31]], []]);
+  });
+
+  it('merges adjacent highlighted runs and leaves shaded text out', () => {
+    const doc = card(
+      body(
+        schema.text('ab', [hl('yellow')]),
+        schema.text('cd', [hl('green')]), // color change mid-word: one range
+        schema.text('ef', [hl(), marks['shading']!.create()]),
+        schema.text('gh', [hl()]),
+      ),
+    );
+    expect(readDocStructure(doc).cards[0]!.bodyRead).toEqual([[[0, 4], [6, 8]]]);
+  });
+
+  it('offsets match textContent across inline atoms', () => {
+    const doc = card(body(schema.text('one'), nodes['image']!.create(), schema.text('two', [hl()])));
+    const c = readDocStructure(doc).cards[0]!;
+    const [from, to] = c.bodyRead![0]![0]!;
+    expect(c.body[0]!.slice(from, to)).toBe('two');
   });
 });
 

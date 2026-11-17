@@ -548,6 +548,16 @@ if (r.status === 'granted') await r.api.collab?.join(address);
   builds have neither, so feature-detect with
   `api.permissions?.request`.
 
+#### What gets read aloud (`PluginCard.bodyRead`, with `doc.read`)
+
+```ts
+const card = api.doc?.read?.()?.cards[0];
+card?.bodyRead; // e.g. [[[17, 31]], []] — one list per entry of card.body
+const read = card?.bodyRead?.[0]?.map(([from, to]) => card.body[0]!.slice(from, to));
+```
+
+Each card carries `bodyRead` next to `body`: for every body paragraph, the `[start, end)` character ranges of its text that are read aloud. That is highlighted text that isn't shaded, the same rule the read-aloud word count uses. Ranges are sorted, never overlap, and adjacent runs are merged, so a highlight color change mid-word stays one range. An empty list means nothing in that paragraph is read. Builds before it existed leave it out, so check `card.bodyRead !== undefined` and explain that the user needs a newer CardMirror. To mark a range with `annotations.set`, pass the paragraph's index and the exact text as `match`, with `occurrence` counted the way `String.indexOf` finds it (each search starts one character after the last hit).
+
 <!-- permission-table:start -->
 <!-- Generated from src/editor/plugin-permissions.ts and src/editor/plugin-call-rules.ts. Do not edit by hand: run `npm run docs:permissions`. -->
 

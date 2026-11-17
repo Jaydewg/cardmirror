@@ -103,7 +103,7 @@ export const PLUGIN_PERMISSIONS: Readonly<Record<string, PluginPermissionInfo>> 
   'doc.read': {
     label: 'Read your open documents',
     description:
-      'Read the outline, cards (tags, cites, card text) and word counts of documents you have open.',
+      'Read the outline, cards (tags, cites, card text and what is highlighted) and word counts of documents you have open.',
     sensitivity: 'medium',
   },
   'doc.edit': {
