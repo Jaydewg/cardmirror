@@ -38,7 +38,10 @@ export type PluginJoinOutcome =
   | 'failed'
   /** The session's server can't be reached from this build (e.g. a
    *  session on another server, on a build without federation). */
-  | 'unreachable';
+  | 'unreachable'
+  /** The session's host turned down the join. Only cross-server joins
+   *  ask the host first, so only builds with federation return it. */
+  | 'declined';
 
 /** `<share-or-view code>@<canonical server URL>`. */
 export type PluginSessionAddress = string;

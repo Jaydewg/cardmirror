@@ -14,6 +14,19 @@ describe('embed command', () => {
     expect(f.store.get('optOutSessions')).toEqual([]);
   });
 
+  it('the confirm says who the link lets in, by the session’s crossServer state', async () => {
+    const text = async (crossServer: string) => {
+      const f = makeFake({ sessions: { u1: session('host', { crossServer: crossServer as never }) }, codes: { u1: CODE } });
+      await f.run('embed');
+      return f.confirm.mock.calls[0]![0] as string;
+    };
+    expect(await text('federated')).toMatch(/servers linked to relay\.test can join too, once the session’s host lets them in/);
+    expect(await text('off')).toMatch(/Only people on relay\.test can join\./);
+    expect(await text('unsupported')).toMatch(/Only people on relay\.test can join\./);
+    // A value this plugin doesn't know reads as `off`.
+    expect(await text('mesh')).toMatch(/Only people on relay\.test can join\./);
+  });
+
   it('declining the confirm changes nothing', async () => {
     const f = makeFake({ sessions: { u1: host }, codes: { u1: CODE }, confirm: false });
     await f.run('embed');
@@ -86,7 +99,7 @@ describe('join command', () => {
     const f = makeFake({ fileData: { u1: elsewhere }, probe: async () => 'unreachable' });
     await f.run('join');
     expect(f.join).not.toHaveBeenCalled();
-    expect(f.toasts[0]).toMatch(/on other\.example, but CardMirror is connected to relay\.test/);
+    expect(f.toasts[0]).toMatch(/on other\.example, which your co-editing server \(relay\.test\) can’t reach/);
     expect(f.store.get('endedSessions')).toBeUndefined();
   });
 

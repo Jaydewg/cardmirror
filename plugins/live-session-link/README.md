@@ -41,7 +41,9 @@ servers counts as two sessions.
 - **Your server:** the plugin checks whether the session is live and offers
   Join.
 - **Another server, reachable through federation:** the same, with CardMirror
-  routing the request.
+  routing the request. The notice says which server the session is on, because
+  joining from another server waits for the session's host to let you in. If
+  the host declines, a message says so and the link stays in the file.
 - **Another server, not reachable from this build:** a notice says where the
   session is, with no Join, and the link stays in the file.
 - **A CardMirror from before session addresses:** the plugin falls back to the
@@ -52,7 +54,9 @@ servers counts as two sessions.
 
 The embedded link is a **full edit code**. Anyone who gets a saved copy of the
 file can join and edit the session until it ends. That's why embedding is
-opt-in and asks before it starts. Neither the code nor the server appears in
+opt-in and asks before it starts. The question says who that covers: only
+people on your server, or, for a session open to other servers, people on
+linked servers as well, once the session's host lets them in. Neither the code nor the server appears in
 the file's metadata summary (`gzip -l`, `exiftool`); the summary only says
 that a link is present.
 

@@ -10,6 +10,7 @@ import type {
   PluginJoinOutcome,
   PluginLocalSessionRecord,
   PluginProbeResult,
+  PluginServerReach,
   PluginSessionInfo,
 } from '@cardmirror/plugin-api';
 import { createFakePluginApi } from '@cardmirror/plugin-api/testing';
@@ -60,6 +61,9 @@ export interface FakeOptions {
   probe?: (codeOrAddress: string) => Promise<PluginProbeResult>;
   join?: (code: string, opts?: { intoDoc?: string }) => Promise<PluginJoinOutcome>;
   localRecord?: (roomId: string) => Promise<PluginLocalSessionRecord | null>;
+  /** `collab.reach` (default: like a build without federation — your
+   *  server is `home`, every other one `unreachable`). */
+  reach?: (serverUrl: string) => Promise<PluginServerReach>;
   confirm?: boolean;
   settings?: Record<string, boolean | string | number>;
   /** This machine's server (default SERVER; null = none configured). */
@@ -83,6 +87,9 @@ export function makeFake(opts: FakeOptions = {}) {
   const confirm = vi.fn(async (_message: string, _opts?: unknown) => opts.confirm ?? true);
   const choose = vi.fn(async () => null);
   const myServer = opts.myServer === undefined ? SERVER : opts.myServer;
+  const reach = vi.fn(
+    opts.reach ?? (async (url: string): Promise<PluginServerReach> => (url === myServer ? 'home' : 'unreachable')),
+  );
   // Like the host: a session's server is visible only with collab.server.
   const serverVisible = !opts.oldHost && perms.includes('collab.server');
 
@@ -108,6 +115,7 @@ export function makeFake(opts: FakeOptions = {}) {
       },
       localRecord,
       server: async () => (myServer ? { url: myServer, host: new URL(myServer).hostname, nickname: null } : null),
+      reach,
       shareCode: (uid?: string) => codes[focusedUid(uid) ?? ''] ?? null,
       shareAddress: (uid?: string) => {
         const id = focusedUid(uid) ?? '';
@@ -141,6 +149,7 @@ export function makeFake(opts: FakeOptions = {}) {
     },
     probe,
     join,
+    reach,
     localRecord,
     confirm,
     choose,
