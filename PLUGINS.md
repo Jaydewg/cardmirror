@@ -31,7 +31,7 @@ A plugin is one GitHub repository. Each release attaches two assets:
 | --- | --- | --- | --- |
 | `id` | string | yes | Lowercase. Must match `^[a-z0-9][a-z0-9-]*$`. Cannot be a Windows reserved device name (`con`, `prn`, `aux`, `nul`, `comN`, `lptN`). |
 | `name` | string | yes | Display name. |
-| `version` | string | yes | Semver, for example `0.1.0` or `0.2.0-beta.1`. |
+| `version` | string | yes | Semver, for example `0.1.0` or `0.2.0-beta.1`. Bump it for every release: update checks compare it with the installed copy's. Released versions should be plain (`1.2.3`); see [Releasing a plugin](#releasing-a-plugin). |
 | `permissions` | list | No | A list of permissions that the plugin asks for on startup.
 | `permissionReasons` | object | no | Why the plugin wants each permission, in its own words: `{ "collab.join": "…" }`. One line each, at most 200 characters, only for permissions in `permissions`. The install and update dialogs show it under CardMirror's own description, quoted and attributed to the plugin. Older builds ignore it. |
 | `description` | string | no | One line for the Plugins tab. Also shown on your plugin's card in the Browse-plugins picker when it is listed in the public directory. |
@@ -145,6 +145,36 @@ the allowlist.
 A developer path exists: "Load plugin from file..." in the Plugins tab
 loads a local `plugin.js` without an install.
 
+### Updates
+
+An update is a reinstall of the same repo's newer latest release,
+through the same staging and allowlist check as an install. "Newer"
+means the release manifest's `version` sorts above the installed one.
+Two paths lead there; both apply the same permission rules
+(`src/editor/plugin-update.ts`):
+
+- **Check for updates** (the button on the plugin's row). The user
+  confirms the update. Permissions the new version adds are then asked
+  about, ticked; ones the user turned off are listed unticked, only
+  while the plugin may "ask again". Declining discards the staged
+  release.
+- **Auto-update** (the checkbox on the plugin's row, on by default;
+  only shown for plugins installed from a repo). Shortly after launch,
+  and every few hours while the app stays open, CardMirror checks each
+  such plugin, at most once a day per plugin (a failed check counts).
+  - If the new version asks for no permission it didn't already
+    request, it installs without asking. What was granted stays
+    granted, what the user turned off stays off, and permissions this
+    build doesn't know are never granted. A status-bar notice says
+    which plugins were updated.
+  - If it asks for a new permission, nothing is installed. A
+    status-bar notice offers **Review update**, which opens the
+    permission dialog.
+
+Either way the new bundle takes effect on the next launch: code that
+already ran can't be unloaded. Removing a repo from the allowlist also
+stops its updates, since every update re-checks the list.
+
 ### Uninstall
 
 Uninstalling removes the install directory, the plugin's enabled flag
@@ -177,6 +207,51 @@ nothing).
   the namespace or method you need (`api.ui?.…`,
   `api.permissions?.status(p)`) and explain to the user what's
   missing.
+
+### Releasing a plugin
+
+What users' copies pick up is the **latest release** of the plugin's
+repo, as GitHub reports it at `/repos/{owner}/{repo}/releases/latest`.
+So:
+
+1. **One public repo per plugin.** A repo whose releases are the app
+   itself (or another plugin) can't also host a plugin. The repo needs
+   at least one commit (a README is enough) before it can carry a
+   release. The repo name is permanent for existing installs: each
+   install records it and checks it for updates.
+2. **Bump `version` in `cardmirror-plugin.json` for every release.** An
+   equal or lower version is ignored by update checks.
+3. **Release a plain version (`1.2.3`), not a prerelease.** GitHub's
+   "latest release" skips releases marked prerelease and drafts, so
+   users would never see one.
+4. **Attach exactly `cardmirror-plugin.json` and `plugin.js`**, built
+   from the same commit, each 5 MiB or less.
+5. **Get the repo onto the allowlist** (see above) before the first
+   install. It stays there for updates.
+
+First-party plugins keep their source in this repository under
+`plugins/<id>/` and publish with:
+
+```sh
+npm run release:plugin -- <id> [--repo owner/name]          # dry run
+GITHUB_TOKEN=… npm run release:plugin -- <id> --publish
+```
+
+`scripts/release-plugin.mjs` refuses to run when any of these fail:
+
+- the manifest is invalid, or uses a prerelease version;
+- the plugin's own test, typecheck or build fails;
+- the target repo is private or missing;
+- the tag already exists;
+- the version isn't newer than the latest release.
+
+The target repo comes from `--repo` or `"releaseRepo"` in the plugin's
+`package.json` (never the manifest — the installer writes `repo`
+there). Release notes come from the plugin's `CHANGELOG.md` section
+for that version, when there is one. With `--publish`, the script
+creates the release as a draft, uploads both files, and then publishes
+it, so no client ever sees a release without its files. The token
+needs `contents: write` on the target repo.
 
 ## 2. Registration
 

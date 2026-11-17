@@ -204,6 +204,20 @@ export function intersectHosts(a: readonly string[], b: readonly string[]): stri
   );
 }
 
+/** The `net.fetch` hosts to record with a consent list: none without
+ *  it; the prior hosts (∩ the request) when it stays granted and was
+ *  NOT just asked; the requested hosts — what the dialog showed — when
+ *  it was just asked. */
+export function consentedHosts(
+  granted: readonly string[],
+  requestedHosts: unknown,
+  opts: { asked: boolean; priorHosts?: unknown },
+): string[] {
+  if (!granted.includes('net.fetch')) return [];
+  const requested = sanitizeNetworkHosts(requestedHosts);
+  return opts.asked ? requested : intersectHosts(sanitizeNetworkHosts(opts.priorHosts), requested);
+}
+
 /** Longest reason a plugin may give for one permission. */
 export const PERMISSION_REASON_MAX = 200;
 

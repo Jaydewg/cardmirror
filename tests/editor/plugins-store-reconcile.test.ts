@@ -6,8 +6,13 @@
 // to load is still installed and must lose nothing.
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
+  forgetPluginUpdateState,
+  isPluginAutoUpdate,
   isPluginEnabled,
+  pluginLastUpdateCheck,
+  setPluginAutoUpdate,
   setPluginEnabled,
+  setPluginLastUpdateCheck,
   reconcilePluginState,
 } from '../../src/editor/plugins-store.js';
 import { settings } from '../../src/editor/settings.js';
@@ -68,5 +73,27 @@ describe('reconcilePluginState', () => {
       { command: 'toggleReadMode', icon: 'check' },
       { command: 'toggle:paraIntegrity', icon: 'zap' },
     ]);
+  });
+
+  it('prunes auto-update switches and check times of directory-absent plugins only', () => {
+    setPluginAutoUpdate('alive', false);
+    setPluginAutoUpdate('gone', false);
+    setPluginLastUpdateCheck('alive', 5);
+    setPluginLastUpdateCheck('gone', 6);
+    reconcilePluginState(new Set(['alive']));
+    expect(isPluginAutoUpdate('alive')).toBe(false);
+    expect(pluginLastUpdateCheck('alive')).toBe(5);
+    expect(isPluginAutoUpdate('gone')).toBe(true);
+    expect(pluginLastUpdateCheck('gone')).toBe(0);
+  });
+
+  it('reads a blob written before auto-update existed', () => {
+    localStorage.setItem('pmd-plugins', JSON.stringify({ enabled: { old: true } }));
+    expect(isPluginEnabled('old')).toBe(true);
+    expect(isPluginAutoUpdate('old')).toBe(true);
+    setPluginAutoUpdate('old', false);
+    expect(isPluginEnabled('old')).toBe(true);
+    forgetPluginUpdateState('old');
+    expect(isPluginAutoUpdate('old')).toBe(true);
   });
 });

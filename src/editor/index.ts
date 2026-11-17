@@ -103,6 +103,7 @@ import {
 } from './plugin-caps/events.js';
 import { installPluginJumpHost } from './plugin-jump-host.js';
 import { isPluginEnabled, reconcilePluginState } from './plugins-store.js';
+import { schedulePluginAutoUpdates } from './plugin-update.js';
 import { appVersion } from './install-info.js';
 import {
   decodeModeSwitchMarker,
@@ -10666,6 +10667,9 @@ async function initPlugins(): Promise<void> {
   // registered last, so its consent prompt never interleaves with boot.
   if (settings.get('pluginPermissionDemo')) syncPermissionDemo(true);
   markPluginsBooted();
+  // Background updates for installed plugins (per-plugin Auto-update
+  // switch, about once a day; new permissions still ask first).
+  schedulePluginAutoUpdates();
 }
 void initPlugins();
 // Console gate for community (non-allowlisted) plugin installs. Installs

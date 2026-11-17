@@ -6719,6 +6719,19 @@ html.pmd-nav-flat .pmd-nav-type-analytic:hover .pmd-nav-label {
   font-weight: 500;
 }
 
+/* Per-plugin Auto-update switch: a small labelled checkbox before the
+   Check-for-updates button. */
+.pmd-plugins-autoupdate {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+  font-size: 0.85rem;
+  color: var(--pmd-c-text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
 /* An install that needs a newer CardMirror: listed (so it's visible and
    uninstallable) but muted, with its toggle disabled. */
 .pmd-plugins-row-incompatible .pmd-plugins-name {

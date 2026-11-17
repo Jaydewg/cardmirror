@@ -36,6 +36,7 @@ import {
   getPluginPermissionPrefs,
   setPluginPermissionPrefs,
 } from '../../src/editor/plugin-permission-requests.js';
+import { isPluginAutoUpdate } from '../../src/editor/plugins-store.js';
 
 const settled = async (): Promise<void> => {
   for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
@@ -305,3 +306,25 @@ describe('shield: manage permissions', () => {
     expect(getPluginPermissionPrefs('thing')).toEqual({ askAgain: false, blocked: [] });
   });
 });
+
+describe('Auto-update switch', () => {
+  it('shows only for plugins installed from a repo, defaults on, and persists', async () => {
+    hostState.host = {
+      pluginList: () =>
+        Promise.resolve([
+          { id: 'thing', name: 'Thing', version: '1.0.0', repo: 'owner/thing' },
+          { id: 'old', name: 'Old', version: '1.0.0', repo: 'owner/old', incompatible: '9.0.0' },
+          { id: 'local', name: 'Local', version: '1.0.0' },
+        ]),
+    };
+    const el = mountPanel();
+    await settled();
+    const boxes = el.querySelectorAll<HTMLInputElement>('.pmd-plugins-autoupdate input');
+    expect(boxes).toHaveLength(1);
+    expect(boxes[0]!.getAttribute('aria-label')).toBe('Auto-update Thing');
+    expect(boxes[0]!.checked).toBe(true);
+    boxes[0]!.click();
+    expect(isPluginAutoUpdate('thing')).toBe(false);
+  });
+});
+
