@@ -149,6 +149,31 @@ export function sanitizePermissionList(raw: unknown): string[] {
   return [...out].sort();
 }
 
+/** Longest reason a plugin may give for one permission. */
+export const PERMISSION_REASON_MAX = 200;
+
+/** Normalize an untrusted `permissionReasons` map (manifest or
+ *  definition): one plain-text line per permission the plugin declares,
+ *  control characters and runs of whitespace collapsed, capped at
+ *  PERMISSION_REASON_MAX. Keys not in `declared`, non-string values and
+ *  empty strings are dropped; anything that isn't a plain object yields
+ *  {}. A separate map rather than objects inside `permissions` on
+ *  purpose: older builds drop non-string `permissions` entries, which
+ *  would lose the permission itself. */
+export function sanitizePermissionReasons(raw: unknown, declared: readonly string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const p of declared) {
+    if (!Object.prototype.hasOwnProperty.call(raw, p)) continue;
+    const v = (raw as Record<string, unknown>)[p];
+    if (typeof v !== 'string') continue;
+    // eslint-disable-next-line no-control-regex
+    const text = v.replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim().slice(0, PERMISSION_REASON_MAX);
+    if (text) out[p] = text;
+  }
+  return out;
+}
+
 /** Split a (sanitized) list into what this build supports and what it
  *  doesn't, for back/forwards compatibility. */
 export function splitKnown(list: readonly string[]): { known: string[]; unknown: string[] } {

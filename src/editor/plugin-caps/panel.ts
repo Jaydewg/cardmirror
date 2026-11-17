@@ -13,6 +13,7 @@
  *
  * Not modal: no overlay-stack entry, so the editor keeps its keys.
  */
+import { notePluginActivation } from '../plugin-permission-requests.js';
 import { onPluginGrantsChanged, pluginHasPermission } from '../plugin-registry.js';
 import { PLUGIN_PANEL_MAX_WIDTH, PLUGIN_PANEL_MIN_WIDTH, settings } from '../settings.js';
 import { clip, type CapabilityContext } from './context.js';
@@ -218,6 +219,11 @@ function createPanel(ctx: CapabilityContext, title: string): PanelEntry {
   content.setAttribute('role', 'tabpanel');
   content.dataset.plugin = pluginId;
   content.hidden = true;
+  // Using the panel counts as acting on the plugin: it may then ask for
+  // a permission it needs (api.permissions.request).
+  const used = (): void => notePluginActivation(pluginId, 'user');
+  content.addEventListener('pointerdown', used, true);
+  content.addEventListener('keydown', used, true);
   tabStrip!.append(tab);
   body!.append(content);
 

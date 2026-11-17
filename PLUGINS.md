@@ -33,6 +33,7 @@ A plugin is one GitHub repository. Each release attaches two assets:
 | `name` | string | yes | Display name. |
 | `version` | string | yes | Semver, for example `0.1.0` or `0.2.0-beta.1`. |
 | `permissions` | list | No | A list of permissions that the plugin asks for on startup.
+| `permissionReasons` | object | no | Why the plugin wants each permission, in its own words: `{ "collab.join": "…" }`. One line each, at most 200 characters, only for permissions in `permissions`. The install and update dialogs show it under CardMirror's own description, quoted and attributed to the plugin. Older builds ignore it. |
 | `description` | string | no | One line for the Plugins tab. Also shown on your plugin's card in the Browse-plugins picker when it is listed in the public directory. |
 | `author` | string | no | Shown in the consent prompt. |
 | `apiVersion` | number | yes | Must be `1`. |
@@ -126,11 +127,18 @@ the allowlist.
    dialog shows the manifest's name/version/author AND the actual
    `owner/repo` the release came from (which a manifest cannot spoof).
    Nothing touches disk before consent; declining a reinstall leaves
-   the existing installed version untouched.
+   the existing installed version untouched. A plugin that requests
+   permissions lists each one with a checkbox, ticked by default; only
+   the ones left ticked are granted, so the user can refuse any of them
+   before the plugin first runs. An update asks about the permissions
+   its new version adds (ticked). Ones the user turned off are listed
+   unticked only while that plugin may "ask again", and never once
+   blocked, so they stay off unless ticked.
 6. On consent, the app writes both files into `userData/plugins/<id>/`
    with an atomic write (tmp file, then rename).
-7. The user enables the plugin in the Plugins tab. Enabled plugins
-   load from disk at each launch and work offline.
+7. The app enables and loads the plugin right away. Enabled plugins
+   load from disk at each launch and work offline; the Plugins tab
+   turns them off or on.
 
 A developer path exists: "Load plugin from file..." in the Plugins tab
 loads a local `plugin.js` without an install.
@@ -401,6 +409,58 @@ kept from before a revoke throws, or for a method returning a promise
 rejects, with an error whose `name` is `'PluginPermissionError'`.
 Feature-detect with `api.ns?.method` and explain gaps with
 `api.permissions?.status(p)`.
+
+The install dialog lists every supported permission with a ticked
+checkbox. The user can untick any of them before the plugin first runs.
+An update lists permissions its new version adds, ticked. It also lists
+permissions the user turned off, unticked, while that plugin's "ask
+again" switch is on. The shield button in Settings → Plugins changes
+all of this later.
+
+#### Asking when a feature needs it
+
+A plugin can run with only some of its permissions and ask for one at
+the moment a feature needs it:
+
+```ts
+const r = await api.permissions.request('collab.join', {
+  reason: 'To join the session this file links to',
+});
+if (r.status === 'granted') await r.api.collab?.join(address);
+```
+
+- `request` resolves `{ status, api }`. An api object never gains
+  namespaces, so after a grant carry on with `r.api`. `activate` also
+  re-runs with it.
+- The user answers **Allow**, **Not now**, or **Don't ask again**. A
+  permission that is already granted, undeclared or unsupported
+  resolves at once with that status, without a prompt.
+- CardMirror shows a prompt only within 10 seconds of a trigger for
+  your plugin:
+  - the user ran one of its commands, clicked its menu item or a
+    notice button, or used its panel;
+  - a file with its data opened (`files.onOpen`), or the focused
+    document changed (`events.onFocusChange`).
+
+  Typing, selection changes and saves never count. Outside that window,
+  `request` resolves `denied` without asking, so don't call it from
+  timers or on load.
+- One prompt is shown at a time. "Not now" to a prompt that an event
+  triggered keeps event-triggered prompts for that permission quiet
+  until CardMirror restarts. A prompt from the user's own action can
+  still appear.
+- "Don't ask again", or the user turning off "Let it ask again" in the
+  shield dialog, makes `request` resolve `denied` without a prompt.
+  Point the user at Settings → Plugins instead.
+- `reason` (one line, at most 200 characters) replaces the
+  definition's `permissionReasons` entry for that prompt. Like
+  `permissions`, the registered definition can carry
+  `permissionReasons`. The definition's text is used for prompts and
+  for bundles loaded from file. The manifest's text is used for install
+  and update.
+- `request` exists on every build that has `api.permissions`. Older
+  builds have neither, so feature-detect with
+  `api.permissions?.request`.
 
 <!-- permission-table:start -->
 <!-- Generated from src/editor/plugin-permissions.ts and src/editor/plugin-call-rules.ts. Do not edit by hand: run `npm run docs:permissions`. -->

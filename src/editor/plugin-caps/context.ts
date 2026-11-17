@@ -5,6 +5,7 @@
  * runs them from one table, so adding a namespace never touches the
  * others.
  */
+import type { PluginPermissionRequestResult } from '../plugin-api.js';
 import type { EditorView } from 'prosemirror-view';
 import type { PluginCollabBridge } from './collab.js';
 
@@ -34,6 +35,13 @@ export interface PluginApiDeps {
    *  reference kept from before a revoke stops working. Absent (tests,
    *  legacy callers): the minted grant is final. */
   isGranted?(pluginId: string, permission: string): boolean;
+  /** `api.permissions.request` (the registry's requestPluginPermission).
+   *  Absent (tests, legacy callers): requests never prompt. */
+  requestPermission?(
+    pluginId: string,
+    permission: string,
+    opts?: { reason?: string },
+  ): Promise<PluginPermissionRequestResult>;
 }
 
 /** Everything a namespace builder needs about one plugin. */

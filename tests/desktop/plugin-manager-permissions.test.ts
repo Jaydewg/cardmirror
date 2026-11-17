@@ -33,6 +33,16 @@ describe('validateManifest permission fields', () => {
     });
     if (v.ok) expect(v.manifest.grantedPermissions).toEqual(['ui.dialogs']);
   });
+  it('sanitizes permissionReasons to the declared permissions, and drops an empty map', () => {
+    const v = validateManifest({
+      ...base,
+      permissions: ['collab.join'],
+      permissionReasons: { 'collab.join': ' So a file\ncan carry its link ', 'files.data': 'undeclared' },
+    });
+    expect(v.ok && v.manifest.permissionReasons).toEqual({ 'collab.join': 'So a file can carry its link' });
+    const none = validateManifest({ ...base, permissions: ['collab.join'], permissionReasons: ['nope'] });
+    expect(none.ok && 'permissionReasons' in none.manifest).toBe(false);
+  });
   it('intersectGrant never exceeds the request', () => {
     expect(intersectGrant(['a.b', 'c.d'], ['c.d'])).toEqual(['c.d']);
     expect(intersectGrant('a.b', ['a.b'])).toEqual([]);

@@ -77,12 +77,24 @@ export interface FakePluginApiOptions {
   panel?: Partial<PluginPanelApi>;
   menu?: Partial<PluginMenuApi>;
   notices?: Partial<PluginNoticesApi>;
+  /** How the fake user answers `api.permissions.request` prompts
+   *  (default `'not-now'`). The fake prompts only for a declared,
+   *  supported permission that isn't granted, like the host; it has no
+   *  trigger window, so a test can call `request` any time. */
+  answer?:
+    | 'allow'
+    | 'not-now'
+    | 'never'
+    | ((permission: string, reason: string | null) => 'allow' | 'not-now' | 'never');
   /** The always-present v1 members. */
   core?: Partial<Pick<CardMirrorPluginApi, 'extractSelection' | 'jumpToSource' | 'flowApps' | 'flowPost' | 'docInfo'>>;
 }
 
 export interface FakePluginApi {
+  /** The CURRENT api (a granted `request` re-mints it, as the host does). */
   readonly api: CardMirrorPluginApi;
+  /** Every prompt `api.permissions.request` showed, in order. */
+  readonly requests: { permission: string; reason: string | null }[];
   /** Every `api.showToast` message, in order. */
   readonly toasts: string[];
   /** Every notice posted through the default `notices.post`. */
@@ -175,64 +187,89 @@ export function createFakePluginApi(opts: FakePluginApiOptions = {}): FakePlugin
     },
   };
 
-  const namespaces: Record<string, unknown> = {};
-  for (const key of Object.keys(CALL_TIME_PERMISSIONS) as PluginNamespaceKey[]) {
-    const rules = CALL_TIME_PERMISSIONS[key];
-    const impls = (opts[key] ?? {}) as Record<string, AnyFn | undefined>;
-    const ns: Record<string, unknown> = {};
-    for (const [method, rule] of Object.entries(rules)) {
-      if (!minted.has(rule.permission) || omit.has(`${key}.${method}`)) continue;
-      const fn = impls[method] ?? defaults[key][method];
-      if (!fn) continue;
-      ns[method] = (...args: never[]): unknown => {
-        if (!live.has(rule.permission)) {
-          const err = new PluginPermissionError(rule.permission);
-          if (rule.async) return Promise.reject(err);
-          throw err;
-        }
-        return fn(...args);
-      };
+  const blocked = new Set<string>();
+  const requests: { permission: string; reason: string | null }[] = [];
+  let current: CardMirrorPluginApi;
+
+  const mint = (): CardMirrorPluginApi => {
+    const namespaces: Record<string, unknown> = {};
+    for (const key of Object.keys(CALL_TIME_PERMISSIONS) as PluginNamespaceKey[]) {
+      const rules = CALL_TIME_PERMISSIONS[key];
+      const impls = (opts[key] ?? {}) as Record<string, AnyFn | undefined>;
+      const ns: Record<string, unknown> = {};
+      for (const [method, rule] of Object.entries(rules)) {
+        if (!minted.has(rule.permission) || omit.has(`${key}.${method}`)) continue;
+        const fn = impls[method] ?? defaults[key][method];
+        if (!fn) continue;
+        ns[method] = (...args: never[]): unknown => {
+          if (!live.has(rule.permission)) {
+            const err = new PluginPermissionError(rule.permission);
+            if (rule.async) return Promise.reject(err);
+            throw err;
+          }
+          return fn(...args);
+        };
+      }
+      if (Object.keys(ns).length > 0) namespaces[key] = Object.freeze(ns);
     }
-    if (Object.keys(ns).length > 0) namespaces[key] = Object.freeze(ns);
-  }
 
-  const status = (p: string): PermissionStatus => {
-    if (!declared.includes(p)) return 'undeclared';
-    if (!known(p)) return 'unsupported';
-    return minted.has(p) && live.has(p) ? 'granted' : 'denied';
+    const status = (p: string): PermissionStatus => {
+      if (!declared.includes(p)) return 'undeclared';
+      if (!known(p)) return 'unsupported';
+      return minted.has(p) && live.has(p) ? 'granted' : 'denied';
+    };
+
+    const api = {
+      ...namespaces,
+      appVersion: opts.appVersion ?? 'test',
+      extractSelection: opts.core?.extractSelection ?? (() => ({ ok: false, error: 'no-active-doc' })),
+      jumpToSource: opts.core?.jumpToSource ?? (async () => ({ ok: false, error: 'doc-not-open' })),
+      flowApps: opts.core?.flowApps ?? (async () => []),
+      flowPost: opts.core?.flowPost ?? (async () => ({ ok: false, error: 'unsupported' })),
+      docInfo: opts.core?.docInfo ?? (() => null),
+      showToast: (message: string) => void toasts.push(String(message)),
+      storage: {
+        get: (key: string) => storage.get(key),
+        set: (key: string, value: unknown) => {
+          storage.set(key, value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
+        },
+      },
+      settings: {
+        get: (key: string) => settings.get(key),
+        onChanged: (cb: (key: string, value: PluginSettingValue) => void) => {
+          settingListeners.add(cb);
+          return () => void settingListeners.delete(cb);
+        },
+      },
+      permissions: Object.freeze({
+        has: (p: string) => minted.has(p) && live.has(p),
+        list: () => [...minted].filter((p) => live.has(p)).sort(),
+        status: (p: string) => status(String(p)),
+        request: async (p: string, o?: { reason?: string }) => {
+          const perm = String(p);
+          if (status(perm) !== 'denied' || blocked.has(perm)) return { status: status(perm), api: current };
+          const reason = typeof o?.reason === 'string' && o.reason.trim() ? o.reason.trim().slice(0, 200) : null;
+          requests.push({ permission: perm, reason });
+          const a = typeof opts.answer === 'function' ? opts.answer(perm, reason) : opts.answer ?? 'not-now';
+          if (a === 'never') blocked.add(perm);
+          if (a === 'allow') {
+            minted.add(perm);
+            live.add(perm);
+            current = mint();
+          }
+          return { status: status(perm), api: current };
+        },
+      }),
+    } as unknown as CardMirrorPluginApi;
+    return api;
   };
-
-  const api = {
-    ...namespaces,
-    appVersion: opts.appVersion ?? 'test',
-    extractSelection: opts.core?.extractSelection ?? (() => ({ ok: false, error: 'no-active-doc' })),
-    jumpToSource: opts.core?.jumpToSource ?? (async () => ({ ok: false, error: 'doc-not-open' })),
-    flowApps: opts.core?.flowApps ?? (async () => []),
-    flowPost: opts.core?.flowPost ?? (async () => ({ ok: false, error: 'unsupported' })),
-    docInfo: opts.core?.docInfo ?? (() => null),
-    showToast: (message: string) => void toasts.push(String(message)),
-    storage: {
-      get: (key: string) => storage.get(key),
-      set: (key: string, value: unknown) => {
-        storage.set(key, value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
-      },
-    },
-    settings: {
-      get: (key: string) => settings.get(key),
-      onChanged: (cb: (key: string, value: PluginSettingValue) => void) => {
-        settingListeners.add(cb);
-        return () => void settingListeners.delete(cb);
-      },
-    },
-    permissions: Object.freeze({
-      has: (p: string) => minted.has(p) && live.has(p),
-      list: () => [...minted].filter((p) => live.has(p)).sort(),
-      status: (p: string) => status(String(p)),
-    }),
-  } as unknown as CardMirrorPluginApi;
+  current = mint();
 
   return {
-    api,
+    get api() {
+      return current;
+    },
+    requests,
     toasts,
     notices,
     storage,

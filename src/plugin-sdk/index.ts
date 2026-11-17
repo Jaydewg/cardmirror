@@ -44,6 +44,7 @@ export type {
   FlowAppInfo,
   FlowPostResult,
   JumpResult,
+  PluginPermissionRequestResult,
   PluginPermissionsApi,
   PluginSettingsApi,
   PluginStorage,

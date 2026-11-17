@@ -39,6 +39,10 @@ export interface PluginManifest {
    *  the renderer's consent answer, always ⊆ `permissions`. Stripped
    *  from downloaded manifests so a release can't pre-grant itself. */
   grantedPermissions?: string[];
+  /** Why the plugin wants each permission, in its own words (one line
+   *  each, shown in the consent dialogs as the plugin's text). Keys
+   *  outside `permissions` are dropped. */
+  permissionReasons?: Record<string, string>;
 }
 
 // Permission-id shape (parity-tested against src/editor/plugin-permissions.ts).
@@ -54,6 +58,24 @@ export function sanitizePermissionList(raw: unknown): string[] {
     if (typeof p === 'string' && PERMISSION_ID_RE.test(p)) out.add(p);
   }
   return [...out].sort();
+}
+
+/** Copy of the renderer's PERMISSION_REASON_MAX / sanitizePermissionReasons
+ *  (parity-tested the same way). */
+export const PERMISSION_REASON_MAX = 200;
+
+export function sanitizePermissionReasons(raw: unknown, declared: readonly string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const p of declared) {
+    if (!Object.prototype.hasOwnProperty.call(raw, p)) continue;
+    const v = (raw as Record<string, unknown>)[p];
+    if (typeof v !== 'string') continue;
+    // eslint-disable-next-line no-control-regex
+    const text = v.replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim().slice(0, PERMISSION_REASON_MAX);
+    if (text) out[p] = text;
+  }
+  return out;
 }
 
 /** `granted ∩ requested`, sanitized — consent can never exceed what the
@@ -123,8 +145,11 @@ export function validateManifest(
   const manifest = { ...m } as PluginManifest;
   delete manifest.permissions;
   delete manifest.grantedPermissions;
+  delete manifest.permissionReasons;
   const permissions = sanitizePermissionList(m.permissions);
   if (permissions.length > 0) manifest.permissions = permissions;
+  const reasons = sanitizePermissionReasons(m.permissionReasons, permissions);
+  if (Object.keys(reasons).length > 0) manifest.permissionReasons = reasons;
   if (m.grantedPermissions !== undefined) {
     manifest.grantedPermissions = intersectGrant(m.grantedPermissions, permissions);
   }

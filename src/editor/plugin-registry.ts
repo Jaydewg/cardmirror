@@ -7,8 +7,23 @@
  * precedent: if nothing registers, everything stays inert.
  */
 import { showToast } from './toast.js';
-import type { CardMirrorPluginApi, PluginGrantContext } from './plugin-api.js';
-import { resolveGrant, sanitizePermissionList, splitKnown } from './plugin-permissions.js';
+import type { CardMirrorPluginApi, PluginGrantContext, PluginPermissionRequestResult } from './plugin-api.js';
+import {
+  isKnownPermission,
+  permissionStatus,
+  resolveGrant,
+  sanitizePermissionList,
+  sanitizePermissionReasons,
+  splitKnown,
+} from './plugin-permissions.js';
+import {
+  blockPluginPermission,
+  getPluginPermissionPrefs,
+  notePluginActivation,
+  promptGate,
+  quietEventPrompts,
+  withPromptSlot,
+} from './plugin-permission-requests.js';
 
 export const PLUGIN_API_VERSION = 1;
 
@@ -53,6 +68,13 @@ export interface PluginDefinition {
    *  manifest's list, and the grant is the intersection. Unknown
    *  strings are ignored, never rejected. */
   permissions?: string[];
+  /** Why it wants each permission, in its own words: `{ "collab.join":
+   *  "…" }`, one line (≤ 200 chars) each, for permissions it declares.
+   *  Shown, marked as the plugin's text, when CardMirror asks the user.
+   *  The manifest's `permissionReasons` is what install and update
+   *  show; this one is used for `api.permissions.request` prompts and a
+   *  bundle loaded from file. Older CardMirror builds ignore it. */
+  permissionReasons?: Record<string, string>;
   /** Lifecycle hook: called with the plugin's api right after it
    *  registers, and AGAIN every time that api is re-minted (the user
    *  grants or revokes a permission, or the bundle re-registers). Register
@@ -75,6 +97,8 @@ interface RegisteredPlugin {
   settings: PluginSettingDef[];
   /** Sanitized declared permissions (known + unknown). */
   declared: string[];
+  /** Sanitized `permissionReasons` from the definition. */
+  reasons: Record<string, string>;
   granted: ReadonlySet<string>;
   /** The definition's `activate`, read once at registration. */
   activate: PluginDefinition['activate'] | undefined;
@@ -95,6 +119,22 @@ const consent = new Map<string, string[]>();
  *  when a bundle's definition disagrees: the grant is their
  *  intersection, so a mismatch silently withholds permissions. */
 const manifestPermissions = new Map<string, string[]>();
+/** Installed plugins' MANIFEST `permissionReasons` (host-provided). */
+const manifestReasons = new Map<string, Record<string, string>>();
+/** The user's answer to a just-in-time permission prompt. */
+export type PermissionPromptAnswer = 'allow' | 'not-now' | 'never';
+export interface PermissionPromptRequest {
+  pluginId: string;
+  name: string;
+  permission: string;
+  /** The plugin's reason, sanitized; null when it gave none. */
+  reason: string | null;
+}
+let permissionPromptHook: ((req: PermissionPromptRequest) => Promise<PermissionPromptAnswer>) | null = null;
+/** Persist a new consent list (installed plugins: main's manifest).
+ *  Resolves the stored list, or null when it couldn't be stored. Absent:
+ *  session-only, like a bundle loaded from file. */
+let persistConsentHook: ((pluginId: string, consented: string[]) => Promise<string[] | null>) | null = null;
 let permissionRequestHook:
   | ((pluginId: string, name: string, known: string[], unknown: string[]) => void)
   | null = null;
@@ -220,6 +260,7 @@ export function registerPluginDefinition(
   // are dropped, never fatal: permissions are additive, and a bundle
   // built for a newer CardMirror must still load here.
   const declared = sanitizePermissionList(def.permissions);
+  const reasons = sanitizePermissionReasons(def.permissionReasons, declared);
   const activate = def.activate;
   if (activate !== undefined && typeof activate !== 'function') {
     return { ok: false, error: 'activate must be a function' };
@@ -236,6 +277,7 @@ export function registerPluginDefinition(
       const p = plugins.get(def.id)!;
       p.settings = settingsRes.settings;
       p.declared = declared;
+      p.reasons = reasons;
       // A re-run bundle brings fresh closures: activate the new ones.
       p.activate = activate;
       mintApi(p);
@@ -250,6 +292,7 @@ export function registerPluginDefinition(
     api: null as unknown as CardMirrorPluginApi, // minted just below
     settings: settingsRes.settings,
     declared,
+    reasons,
     granted: new Set(),
     activate,
     cleanup: null,
@@ -353,10 +396,92 @@ export function setPluginConsent(pluginId: string, consented: readonly string[])
   consent.set(pluginId, sanitizePermissionList(consented));
 }
 
-/** Record an installed plugin's manifest permission list (the host
- *  calls this with `setPluginConsent`, before loading the bundle). */
-export function setPluginManifestPermissions(pluginId: string, permissions: readonly string[]): void {
-  manifestPermissions.set(pluginId, sanitizePermissionList(permissions));
+/** Record an installed plugin's manifest permission list and reasons
+ *  (the host calls this with `setPluginConsent`, before loading the
+ *  bundle). */
+export function setPluginManifestPermissions(
+  pluginId: string,
+  permissions: readonly string[],
+  reasons?: unknown,
+): void {
+  const list = sanitizePermissionList(permissions);
+  manifestPermissions.set(pluginId, list);
+  manifestReasons.set(pluginId, sanitizePermissionReasons(reasons, list));
+}
+
+/** A plugin's reason for `permission`: the definition's, else the
+ *  manifest's; null when it gave none. */
+export function pluginPermissionReason(pluginId: string, permission: string): string | null {
+  return plugins.get(pluginId)?.reasons[permission] ?? manifestReasons.get(pluginId)?.[permission] ?? null;
+}
+
+/** All of a registered plugin's reasons (definition over manifest). */
+export function pluginPermissionReasons(pluginId: string): Record<string, string> {
+  return { ...(manifestReasons.get(pluginId) ?? {}), ...(plugins.get(pluginId)?.reasons ?? {}) };
+}
+
+/**
+ * `api.permissions.request(permission, { reason })`: ask the user, now,
+ * for one permission the plugin declared but doesn't hold. Prompts only
+ * inside a trigger window (plugin-permission-requests.ts), never for a
+ * blocked permission or when the user turned off "ask again", and one
+ * prompt at a time; otherwise it resolves at once. Resolves the
+ * permission's status after the answer and the plugin's CURRENT api
+ * (re-minted on a grant), so a command can carry on with it.
+ */
+export async function requestPluginPermission(
+  pluginId: string,
+  permission: unknown,
+  opts?: { reason?: unknown },
+): Promise<PluginPermissionRequestResult> {
+  const p = plugins.get(pluginId);
+  if (!p) throw new Error(`plugin "${pluginId}" is not registered`);
+  const perm = String(permission ?? '');
+  const result = (): PluginPermissionRequestResult => ({
+    status: permissionStatus(perm, p.declared, p.granted),
+    api: p.api,
+  });
+  if (result().status !== 'denied' || !isKnownPermission(perm)) return result();
+  const prefs = getPluginPermissionPrefs(pluginId);
+  if (!prefs.askAgain || prefs.blocked.includes(perm) || !permissionPromptHook) return result();
+  const gate = promptGate(pluginId, perm);
+  if (!gate.ok) return result();
+  const own = typeof opts?.reason === 'string' ? sanitizePermissionReasons({ [perm]: opts.reason }, [perm])[perm] : undefined;
+  const reason = own ?? pluginPermissionReason(pluginId, perm);
+  const prompt = permissionPromptHook;
+  let answer: PermissionPromptAnswer;
+  try {
+    answer = await withPromptSlot(() => prompt({ pluginId, name: p.def.name, permission: perm, reason }));
+  } catch (err) {
+    console.error('[plugins] permission prompt failed:', err);
+    return result();
+  }
+  if (answer === 'never') {
+    blockPluginPermission(pluginId, perm);
+    return result();
+  }
+  if (answer !== 'allow') {
+    if (gate.kind === 'event') quietEventPrompts(pluginId, perm);
+    return result();
+  }
+  const next = sanitizePermissionList([...(consent.get(pluginId) ?? []), perm]);
+  let stored: string[] | null = next;
+  if (persistConsentHook) {
+    try {
+      stored = await persistConsentHook(pluginId, next);
+    } catch (err) {
+      console.error('[plugins] storing a permission grant failed:', err);
+      stored = null;
+    }
+  }
+  if (!stored) {
+    showToast(`${p.def.name}: couldn’t save that permission. Try again from Settings → Plugins.`);
+    return result();
+  }
+  // The plugin may have unregistered while the prompt was open.
+  if (plugins.get(pluginId) !== p) return result();
+  regrantPlugin(pluginId, stored);
+  return result();
 }
 
 /** Where a registered plugin's manifest and definition disagree about
@@ -375,6 +500,18 @@ export function pluginManifestDrift(
 }
 
 function warnManifestDrift(p: RegisteredPlugin): void {
+  const manifestWhy = manifestReasons.get(p.def.id);
+  if (manifestWhy) {
+    const a = Object.keys(manifestWhy).sort().join(',');
+    const b = Object.keys(p.reasons).sort().join(',');
+    if (a !== b) {
+      console.warn(
+        `[plugins] ${p.def.id}: cardmirror-plugin.json and the registered definition give reasons for different ` +
+          `permissions (manifest: ${a || 'none'}; definition: ${b || 'none'}). Install and update show the ` +
+          `manifest's; permission requests show the definition's.`,
+      );
+    }
+  }
   const drift = pluginManifestDrift(p.def.id);
   if (!drift) return;
   const list = (xs: string[]): string => (xs.length ? xs.join(', ') : 'none');
@@ -419,11 +556,17 @@ export function pluginDisplayName(pluginId: string): string | null {
  *  falls back to the manifest's lists. */
 export function pluginPermissionInfo(
   pluginId: string,
-): { declared: string[]; known: string[]; unknown: string[]; granted: string[] } | null {
+): { declared: string[]; known: string[]; unknown: string[]; granted: string[]; reasons: Record<string, string> } | null {
   const p = plugins.get(pluginId);
   if (!p) return null;
   const { known, unknown } = splitKnown(p.declared);
-  return { declared: [...p.declared], known, unknown, granted: [...p.granted].sort() };
+  return {
+    declared: [...p.declared],
+    known,
+    unknown,
+    granted: [...p.granted].sort(),
+    reasons: pluginPermissionReasons(pluginId),
+  };
 }
 
 /** Declared settings of a registered plugin — [] when it declared none
@@ -487,11 +630,18 @@ export function installPluginRegistry(
   opts: {
     onCommandsChanged?: (pluginId: string) => void;
     onPermissionRequest?: (pluginId: string, name: string, known: string[], unknown: string[]) => void;
+    /** Show a just-in-time prompt (`api.permissions.request`). Absent:
+     *  requests never prompt. */
+    onPermissionPrompt?: (req: PermissionPromptRequest) => Promise<PermissionPromptAnswer>;
+    /** Store a consent list a prompt changed (see persistConsentHook). */
+    persistConsent?: (pluginId: string, consented: string[]) => Promise<string[] | null>;
   } = {},
 ): void {
   makeApi = createApi;
   commandsChangedHook = opts.onCommandsChanged ?? null;
   permissionRequestHook = opts.onPermissionRequest ?? null;
+  permissionPromptHook = opts.onPermissionPrompt ?? null;
+  persistConsentHook = opts.persistConsent ?? null;
   window.__registerCardMirrorPlugin = (def) => {
     const res = registerPluginDefinition(def);
     if (res.ok) {
@@ -528,6 +678,8 @@ export function runPluginCommand(id: string): boolean {
   if (!entry) return false;
   const plugin = plugins.get(entry.pluginId);
   if (!plugin) return false;
+  // The user ran it: the plugin may ask for a permission it needs.
+  notePluginActivation(entry.pluginId, 'user');
   const report = (err: unknown): void => {
     console.error(`[plugins] ${id} failed:`, err);
     const message = err instanceof Error ? err.message : String(err);
@@ -553,6 +705,9 @@ export function resetPluginRegistryForTests(): void {
   commands.clear();
   consent.clear();
   manifestPermissions.clear();
+  manifestReasons.clear();
+  permissionPromptHook = null;
+  persistConsentHook = null;
   grantListeners.clear();
   makeApi = null;
   commandsChangedHook = null;
