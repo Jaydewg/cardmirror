@@ -21,6 +21,7 @@
  */
 
 import { settings } from './settings.js';
+import { applyAppearance } from './theme-apply.js';
 import { initTimerAudio } from './timer-audio.js';
 import { mountTimerUI } from './timer-ui.js';
 import { setTimerPoppedOut, setTimerVisible } from './timer-state.js';
@@ -35,17 +36,13 @@ declare global {
   }
 }
 
-/** Mirror the app's UI theme (`data-theme="dark"` on the root — the
- *  same attribute index.ts's applyTheme sets). Settings share the
- *  origin's localStorage, so reads and change events line up with
- *  the main windows for free. */
+/** Mirror the app's appearance (theme, palette, accent — the same
+ *  attributes the main windows set via theme-apply.ts). Settings share
+ *  the origin's localStorage, so reads and change events line up with
+ *  the main windows for free. No chrome texture here: this window has no
+ *  ribbon / nav / status bar to paint. */
 function applyPopoutTheme(): void {
-  const pref = settings.get('theme');
-  const dark =
-    pref === 'dark' ||
-    (pref === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-  if (dark) document.documentElement.setAttribute('data-theme', 'dark');
-  else document.documentElement.removeAttribute('data-theme');
+  applyAppearance(settings.all());
 }
 applyPopoutTheme();
 settings.subscribe(applyPopoutTheme);

@@ -36,6 +36,10 @@ export interface RoomsMock {
    *  every write is 403, viewers count against their own cap and are
    *  broadcast as `w` frames, and an editor's 409 carries the pass. */
   setViewPass(value: string | null): void;
+  /** Our relay's spectator presence (`rooms.spectatorPresence`): a view
+   *  pass may post presence, fanned out stamped `"v":1`. Off = upstream's
+   *  403. */
+  setSpectatorPresence(on: boolean): void;
   viewerCount(roomId: string): number;
   close(): Promise<void>;
   streamCount(roomId: string): number;
@@ -72,6 +76,29 @@ export interface RoomsMock {
   /** Silent-dead-socket simulation: streams stay open but stop
    *  receiving heartbeats and frames. */
   freezeStreams(on: boolean): void;
+  /** Federation, opt-in. Null (the default) is a relay from before
+   *  capabilities: `GET /capabilities` is 404, like a real one, and
+   *  there are no federation routes. Set, it serves a federation block,
+   *  `GET /federation/v1/peer`, and the via proxy's `GET …/updates`
+   *  answer per room (the home relay's verdict, with the proxy marker). */
+  setFederation(f: MockFederation | null): void;
+  /** Peer URLs asked about, and via-proxy room probes (`roomId|pass`). */
+  federationCalls(): { peers: string[]; via: string[] };
+}
+
+export interface MockFederation {
+  /** This relay's federation identity URL. */
+  url: string;
+  nickname?: string;
+  /** Answers for `GET /federation/v1/peer?url=` (default: not permitted). */
+  peers?: Record<string, { permitted: boolean; reachable: boolean | null; federates: boolean | null }>;
+  /** The home relay's answer to a probe of each room through the proxy
+   *  (default: 404 `no such room`). */
+  viaRooms?: Record<string, { status: number; error?: string }>;
+  /** The home relay's verdict on a join request for each room, through
+   *  the proxy (`GET/POST …/join-requests[/self]`): a request state, or
+   *  an error status (default 404 `no such room`). */
+  joinAnswers?: Record<string, { state: 'pending' | 'approved' | 'denied' | 'expired' } | { status: number; error?: string }>;
 }
 
 const MAX_STREAMS_PER_ROOM = 10;
@@ -87,6 +114,7 @@ export function startRoomsMock(): Promise<RoomsMock> {
   let helloDelayMs = 0;
   let guestPassValue: string | null = null;
   let viewPassValue: string | null = null;
+  let spectatorPresence = false;
   let streamAttempts = 0;
   let pushMuted = false;
   let portalMode = false;
@@ -99,6 +127,8 @@ export function startRoomsMock(): Promise<RoomsMock> {
   let heartbeatMs = 0;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let frozen = false;
+  let federation: MockFederation | null = null;
+  const fedCalls = { peers: [] as string[], via: [] as string[] };
   const restartHeartbeat = (): void => {
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     heartbeatTimer = null;
@@ -145,18 +175,58 @@ export function startRoomsMock(): Promise<RoomsMock> {
       res.end('<html><body>Please sign in to campus wifi</body></html>');
       return;
     }
+    // Unauthenticated, like the real relay's capabilities document.
+    if (path === '/relay/capabilities') {
+      if (!federation) return json(res, 404, { error: 'not found' });
+      return json(res, 200, {
+        features: { 'client.versionFlags': true, 'federation.rooms': true, 'federation.joinRequests': true },
+        federation: { url: federation.url, protocol: 1, nickname: federation.nickname ?? null },
+      });
+    }
     // A view-pass bearer is a SPECTATOR: room-data reads only.
     const isViewer =
       viewPassValue !== null && req.headers.authorization === `Bearer ${viewPassValue}`;
     if (!isViewer && req.headers.authorization !== `Bearer ${token}`) {
       return json(res, 401, { error: 'unauthorized' });
     }
+    if (federation && path === '/relay/federation/v1/peer') {
+      const peer = url.searchParams.get('url') ?? '';
+      fedCalls.peers.push(peer);
+      const info = federation.peers?.[peer] ?? { permitted: false, reachable: null, federates: null };
+      return json(res, 200, { url: peer, self: false, ...info, nickname: null });
+    }
+    const viaJoin = /^\/relay\/federation\/v1\/via\/[^/]+\/rooms\/([^/]+)\/join-requests(\/self)?$/.exec(path);
+    if (federation && viaJoin) {
+      const a = federation.joinAnswers?.[viaJoin[1]!] ?? { status: 404, error: 'no such room' };
+      if (req.method === 'DELETE') {
+        res.writeHead(204, { 'X-CardMirror-Federation': '1' });
+        res.end();
+        return;
+      }
+      if ('state' in a) {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'X-CardMirror-Federation': '1' });
+        res.end(JSON.stringify({ requestId: 'req-1', state: a.state, mode: a.state === 'approved' ? 'write' : null }));
+        return;
+      }
+      res.writeHead(a.status, { 'Content-Type': 'application/json', 'X-CardMirror-Federation': '1' });
+      res.end(JSON.stringify({ error: a.error ?? 'error', detail: a.error }));
+      return;
+    }
+    const via = /^\/relay\/federation\/v1\/via\/[^/]+\/rooms\/([^/]+)\/updates$/.exec(path);
+    if (federation && via) {
+      fedCalls.via.push(`${via[1]}|${String(req.headers['x-cardmirror-room-pass'] ?? '')}`);
+      const answer = federation.viaRooms?.[via[1]!] ?? { status: 404, error: 'no such room' };
+      res.writeHead(answer.status, { 'Content-Type': 'application/json', 'X-CardMirror-Federation': '1' });
+      res.end(JSON.stringify(answer.status < 300 ? { updates: [] } : { error: answer.error ?? 'error', detail: answer.error }));
+      return;
+    }
     const m = /^\/relay\/rooms(?:\/([^/]+)(?:\/([a-z-]+))?)?$/.exec(path);
     if (!m) return json(res, 404, { error: 'not found' });
     const [, roomId, sub] = m;
     if (isViewer) {
       const readOnlyOk =
-        (req.method === 'GET' && (sub === 'stream' || sub === 'updates' || sub === 'view-pass'));
+        (req.method === 'GET' && (sub === 'stream' || sub === 'updates' || sub === 'view-pass')) ||
+        (spectatorPresence && req.method === 'POST' && sub === 'presence');
       if (!readOnlyOk) return json(res, 403, { detail: 'view-only session: this pass cannot write' });
     }
     const pushWatchers = (room: Room): void => {
@@ -274,7 +344,7 @@ export function startRoomsMock(): Promise<RoomsMock> {
       const from = url.searchParams.get('from');
       const room = rooms.get(roomId);
       if (room && !room.tombstoned) {
-        const frame = `data: ${JSON.stringify({ t: 'p', blob: raw.toString('base64') })}\n\n`;
+        const frame = `data: ${JSON.stringify({ t: 'p', blob: raw.toString('base64'), ...(isViewer ? { v: 1 } : {}) })}\n\n`;
         for (const s of room.streams) {
           if (from !== null && streamSids.get(s) === from) continue; // no self-echo
           s.write(frame);
@@ -342,6 +412,9 @@ export function startRoomsMock(): Promise<RoomsMock> {
         setViewPass: (value) => {
           viewPassValue = value;
         },
+        setSpectatorPresence: (on) => {
+          spectatorPresence = on;
+        },
         viewerCount: (roomId) => rooms.get(roomId)?.viewers.size ?? 0,
         mutePush: (on) => {
           pushMuted = on;
@@ -369,6 +442,10 @@ export function startRoomsMock(): Promise<RoomsMock> {
         freezeStreams: (on) => {
           frozen = on;
         },
+        setFederation: (f) => {
+          federation = f;
+        },
+        federationCalls: () => ({ peers: [...fedCalls.peers], via: [...fedCalls.via] }),
         close: () =>
           new Promise<void>((r) => {
             if (heartbeatTimer) clearInterval(heartbeatTimer);

@@ -69,14 +69,17 @@ describe('CardMirror Lite', () => {
 
   it('stamps the edition on the About-this-install Version row', async () => {
     await withLite(async () => {
-      const { getInstallInfo, appVersion } = await import('../../src/editor/install-info.js');
+      const { getInstallInfo, displayVersion } = await import('../../src/editor/install-info.js');
       const version = getInstallInfo().find((e) => e.label === 'Version');
-      expect(version?.value).toBe(`${appVersion} (CardMirror Lite)`);
+      expect(version?.value).toBe(`${displayVersion} (CardMirror Lite)`);
+      // No relay in Lite, so no federation either.
+      expect(getInstallInfo().find((e) => e.label === 'Federation')?.value).toBe('N/A');
     });
     // Standard builds keep the bare version — no edition suffix.
     vi.resetModules();
-    const { getInstallInfo, appVersion } = await import('../../src/editor/install-info.js');
-    expect(getInstallInfo().find((e) => e.label === 'Version')?.value).toBe(appVersion);
+    const { getInstallInfo, displayVersion } = await import('../../src/editor/install-info.js');
+    expect(getInstallInfo().find((e) => e.label === 'Version')?.value).toBe(displayVersion);
+    expect(getInstallInfo().find((e) => e.label === 'Federation')?.value).toBe('On');
   });
 
   it('hides AI + pairing rows and force-sanitizes the masters off', async () => {

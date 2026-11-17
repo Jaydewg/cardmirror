@@ -253,51 +253,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm --prefix apps/desktop run release
 
-      - name: Build and upload CardMirror Lite installer
-        # The no-AI / no-internet build variant (src/editor/lite.ts),
-        # built from the same checkout AFTER the main publish. The
-        # deliberate differences:
-        #   - the relay token is BLANKED first — a no-internet build
-        #     must not carry the credential string in its binary;
-        #   - electron-builder runs --publish never: its GitHub
-        #     provider would upload Lite's latest*.yml OVER the main
-        #     app's auto-update manifests. Installers are uploaded by
-        #     name instead (no blockmaps/ymls — Lite has no updater);
-        #   - its own appId/productName, so Lite installs side by
-        #     side with its own settings profile instead of replacing
-        #     a standard install.
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          node apps/desktop/scripts/inject-lite-build.cjs 1
-          PAIRING_TOKEN= node apps/desktop/scripts/inject-relay-token.cjs
-          VITE_LITE=1 npm --prefix apps/desktop run build:renderer
-          npm --prefix apps/desktop run build:main
-          npm --prefix apps/desktop run build:service
-          # Per-platform artifact names: each mirrors the main app's
-          # pattern with "Lite" inserted, so nothing else (Setup,
-          # -universal, the lowercase linux stem) gets displaced.
-          # Per-target names must be set per-target — the build
-          # config's linux entry outranks a global -c.artifactName,
-          # which shipped the first Lite run with main-app names on
-          # Linux and an empty upload glob.
-          (cd apps/desktop && npx electron-builder --publish never \
-            -c.appId=com.cardmirror.lite \
-            -c.productName="CardMirror Lite" \
-            -c.mac.artifactName='CardMirror-Lite-${version}-${arch}.${ext}' \
-            -c.win.artifactName='CardMirror-Lite-Setup-${version}.${ext}' \
-            -c.linux.artifactName='cardmirror-lite-${version}.${ext}' \
-            -c.executableName='CardMirror Lite' \
-            -c.linux.executableName=cardmirror-lite)
-          shopt -s nullglob
-          files=(apps/desktop/release/CardMirror-Lite-*.dmg \
-                 apps/desktop/release/CardMirror-Lite-*.exe \
-                 apps/desktop/release/cardmirror-lite-*.AppImage \
-                 apps/desktop/release/cardmirror-lite-*.pacman)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No Lite artifacts found — naming regression?" >&2
-            exit 1
-          fi
-          echo "uploading: ${files[@]}"
-          gh release upload "${GITHUB_REF_NAME}" "${files[@]}" --clobber
+      # No CardMirror Lite step on this branch. Lite is the no-internet
+      # build (src/editor/lite.ts strips collaboration, sharing and the
+      # relay), and everything server-federation adds runs through the
+      # relay, so a federation Lite would be the plain Lite with a
+      # federation version number. Lite installers come from main's
+      # stable releases.

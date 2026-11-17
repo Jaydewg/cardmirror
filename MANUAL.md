@@ -111,6 +111,10 @@ version ("CardMirror Lite" installers on the releases page) blocks
 network requests at the application level and installs alongside a
 standard copy without touching it.
 
+Federation pre-releases (versions ending in `-f`) have **no Lite
+edition**: everything they add runs through a relay server, which Lite
+removes. Lite installers come with the stable releases.
+
 Everything in this manual applies to Lite **except** the sections on
 AI features, collaboration, plugins, and updates. Documents move
 freely between Lite and the standard edition — if your school uses
@@ -1747,6 +1751,29 @@ view invite can never turn into an editing seat by accident. View-only
 is a courtesy gate for trusted viewers, not a secrecy boundary — a
 spectator holds the same document key as everyone in the room.
 
+**Who's watching.** Where the session's server allows it (the
+self-hosted relay in federation builds does; CardMirror's official relay
+doesn't), spectators announce that they're there — never their cursor.
+The session panel then lists them among the people, each dot with a
+small purple diamond pip and a *spectating* tag, and the header reads
+*In this session · 3 · 2 spectating*. The spectating count is the
+server's, so spectators who can't announce themselves (older builds,
+or a server that doesn't pass it along) still count, and show as an
+italic line under the list: *1 more person is spectating without being
+listed*. A spectator who is listed sees the same chip and panel as
+everyone else, except that it can never **End for everyone**. A
+spectator whose server won't pass its presence along gets a pared-down
+chip instead: a thin light-gray line broken by the basics (people,
+spectators, online or not), and a panel with just those and **Stop
+watching**.
+
+**Leaving a session you started.** In the session panel, the host's
+**End session** ends it for everyone. Its **▾** holds **Leave session**,
+which leaves without ending: the session keeps going for everyone else,
+and you can rejoin it from the Sessions list on the Home screen — still
+as the host, so you can end it later. (Closing the document does the
+same.)
+
 **Interruptions:** joiners past the 30-seat cap get a "session is full"
 message and an offer to **watch instead** (join as a spectator); a seat
 opens when someone leaves. Offline edits queue and sync on reconnect
@@ -1834,9 +1861,63 @@ idle session rooms after about a week. Sender codes are self-declared, so
 To run your own relay: the `relay/` folder of the repo deploys standalone
 (one `docker compose up`; see its README). Set **Custom relay URL** (e.g.
 `https://relay.example.com/relay`) and **Custom relay token** (the
-`RELAY_TOKEN` you configured on it) in Settings → Collaboration. Everyone
-collaborating must point at the same relay; leave both fields empty to use
-the official relay.
+`RELAY_TOKEN` you configured on it) in Settings → Collaboration. Leave both
+fields empty to use the official relay. People on the same relay can always
+collaborate; people on *different* relays can too when both relays connect
+to other servers — see below.
+
+### Working across servers
+
+A self-hosted relay can be set up to **connect to other servers**
+(federation). When yours is, Settings → Collaboration shows **Your server:**
+under your pairing code, and you can share cards and co-edit with people
+whose CardMirror uses a different relay. If either relay doesn't connect to
+other servers, nothing changes: you work with people on your own relay
+exactly as before.
+
+**Your cross-server code.** Next to **Copy** under your pairing code,
+**Copy cross-server code** gives your code with your server's address on the
+end (`cmk1f.…@https://…`). Give that to someone on another server; people on
+your own server can keep using the plain code. A cross-server code is tied
+to its server: if someone moves to a different server, their old code stops
+reaching them and they need to send you their new one. Contacts on another
+server show that server next to their name in the Send pill.
+
+**Sharing cards** works the same as on one server. If their server can't be
+reached right now, the card is queued and delivered if it comes back within
+a few hours; if your relay doesn't connect to theirs, the Send pill says so.
+
+**Co-editing across servers.** The classic share code only works for people
+on the session's own server. For someone elsewhere, click **Cross-server
+code** in the Send pill (next to **Copy code**, on any document that's in a
+session), or run **Copy Cross-Server Session Code** — the code ends in `@`
+and the session's server address. Or invite a
+contact on another server from the Send pill, which picks the right code
+automatically. To make every copied code cross-server, turn on **Share
+cross-server session codes** in Settings → Collaboration.
+
+People on the session's own server join as usual. Someone from **another
+server has to be let in**: when they paste the code, they see *Waiting to be
+let in*, and everyone in the session on its own server gets a prompt with
+their name and their server:
+
+- **Accept** — they join and can edit.
+- **Accept (read-only)** — they can follow along and their cursor shows,
+  but they can't change the document.
+- **Decline** — they're told the session declined.
+- **Decide later** — closes the prompt; run **Review Session Join Requests**
+  to see it again. Unanswered requests expire after a day.
+
+**Review Session Join Requests** also goes through everyone already let in
+from other servers, so you can switch them between read-only and editing, or
+**Remove from session** (they keep their copy; the session goes on without
+them). Changes reach them immediately.
+
+A server's display name is its own claim, so CardMirror always shows it with
+the server's address, e.g. *Debate Club (relay.example.org)*. Once you've
+been let in, rejoining later (from the Sessions list or the same code)
+doesn't need another approval. Only the person who started a session can end
+it; people from other servers leave rather than end.
 
 ---
 
@@ -2668,6 +2749,11 @@ automatically** toggle in Settings → General → About this install;
 **Help → Check for Updates…** always works either way. Linux users who
 installed via the AUR update with `yay -Syu`.
 
+**Federation builds** (versions ending in `-f`) update only to newer
+federation builds, never to a release without federation. 1.16.26-f
+doesn't update itself at all; install the next `-f` build by hand once,
+and updates work as above from then on.
+
 **Going to a tournament?** The **Pause update checks for 1 week**
 button (next to the auto-check toggle in Settings → General → About
 this install) stops all automatic checks and downloads until the shown
@@ -2965,9 +3051,38 @@ How things look. None of these change the file — only your view (see
 **Theme & chrome**
 
 - **Theme** — light, dark, or follow the system.
-- **Apply theme to the document area** — off by default, so dark mode
-  darkens only the interface and the document stays paper-like; on darkens
-  the document too.
+- **Palette** — tint the interface: Default, Sepia, Slate, Forest, or
+  Rosé. Each has a light and a dark version that follows **Theme**.
+- **Accent color** — the color of primary buttons, focus rings, selected
+  toggles, and drag indicators. **Palette** uses the palette's own accent.
+  **+** picks any color: if it's too light for white text on it (or too
+  faint to see), CardMirror uses the nearest darker shade that passes and
+  says so, and dark mode gets a lighter shade of it. While the color-vision
+  friendly preset (Accessibility) is on, it sets the accent instead.
+- **Background texture** — a faint pattern behind the ribbon, navigation
+  pane, and status bar: Grain, Dots, Grid, Linen, or your own image.
+  **Palette** uses the palette's paired texture (Default has none).
+  **Intensity** sets how strong it is; 100% is as strong as it can be while
+  every label stays readable, worked out from the colors actually on
+  screen. To go past that, right-click the slider and choose **Allow
+  textures that make text harder to read**. The slider then runs to a
+  fixed maximum instead, with an amber tick where the readable range ends
+  (the texture keeps its strength when you switch — only the percentage
+  changes); past the tick it says "past readable", and a **Turn off** link
+  sits under it. A custom image is shrunk (longest side 1600 px, at most 250 KB)
+  and kept in CardMirror's local storage, not your settings, so it isn't
+  part of settings backups. **Repeat** tiles it; **Fill** stretches it
+  across each bar. **Match light/dark to the image** lets a dark image
+  turn the bars dark (or a bright one light) so it can show more strongly:
+  **Just the bars** switches only the ribbon, navigation pane, and status
+  bar; **Whole interface** switches everything, as if you'd changed
+  **Theme**; **Off** keeps your theme and keeps the image faint. An image
+  with both deep darks and bright highlights switches nothing. Desktop
+  layout only.
+- **Apply theme and palette to the document area** — off by default, so
+  dark mode and palettes tint only the interface and the document stays
+  paper-white; on, the document follows them too (for example, sepia
+  paper). Highlights and exported files are never affected.
 - **Icon style** — modern line icons (default) or classic glyphs;
   interface only.
 - **Show doc name in ribbon** — show the active filename as a pill in the

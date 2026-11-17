@@ -54,7 +54,10 @@ import {
 } from './settings.js';
 import { CATEGORY_TABS, visibleCategoryTabs, type SettingsTarget } from './settings-categories.js';
 import { compileSettingsQuery } from './settings-search.js';
-import { generateGroupId, normalizePairingCode } from './pairing/pairing-ids.js';
+import { generateGroupId, normalizePairingCode, pairingCodeRelay } from './pairing/pairing-ids.js';
+import { ownCrossServerCode, ownRelayFederation, refreshOwnRelayFederation } from './federation/self.js';
+import { onRelayCapabilitiesChanged } from './federation/relay-capabilities.js';
+import { relayLabel } from './federation/address.js';
 import { inboxStore, recentSenders } from './pairing/inbox-store.js';
 import { regenerateOwnCode } from './pairing/pairing-wiring.js';
 import { isFontAvailable } from './font-detect.js';
@@ -76,10 +79,36 @@ import {
   promptForText,
 } from './text-prompt.js';
 import { getInstallInfo } from './install-info.js';
+import { BUILD_VERSION_FLAGS } from './relay-protocol.js';
 import { launchBenchmarkOverlay } from './benchmark-ui.js';
 import { resetTimer } from './timer-state.js';
 import { applyTimerProfile } from './timer-profile.js';
 import { showToast } from './toast.js';
+import {
+  ACCENT_OPTIONS,
+  PALETTE_OPTIONS,
+  PALETTE_TEXTURE,
+  TEXTURE_OPTIONS,
+  type AccentOption,
+  type PaletteOption,
+  type TextureOption,
+} from './theme-options.js';
+import {
+  getCustomChromeTextureUrl,
+  importChromeTexture,
+  removeChromeTexture,
+} from './chrome-texture-store.js';
+import type { ChromeTexture, ChromeTextureMatch } from './settings.js';
+import {
+  deriveCustomAccent,
+  isUserDark,
+  onReadableCapChange,
+  readableFraction,
+  rescaleIntensity,
+  resolveScheme,
+} from './theme-apply.js';
+import { isRightClickContextMenu } from './context-menu-gate.js';
+import { registerOpenContextMenu, clearOpenContextMenu } from './context-menu-registry.js';
 import { setIcon, CUSTOM_BUTTON_ICONS, type IconName } from './icons';
 import { availableRibbonCommandIds } from './ribbon-availability.js';
 import { commandLabelFor, RIBBON_COMMAND_LABELS, type RibbonCommandId, ribbonKeyStringFor, formatKeyForDisplay } from './ribbon-commands.js';
@@ -1134,6 +1163,18 @@ class SettingsModal {
       row.appendChild(text);
       row.appendChild(buildThemeEditor());
       return row;
+    } else if (meta.kind === 'themePalette') {
+      row.appendChild(text);
+      row.appendChild(buildPaletteEditor());
+      return row;
+    } else if (meta.kind === 'themeAccent') {
+      row.appendChild(text);
+      row.appendChild(buildAccentEditor());
+      return row;
+    } else if (meta.kind === 'chromeTexture') {
+      row.appendChild(text);
+      row.appendChild(buildChromeTextureEditor());
+      return row;
     } else if (meta.kind === 'iconSet') {
       row.appendChild(text);
       row.appendChild(buildIconSetEditor());
@@ -2125,6 +2166,16 @@ function buildInstallInfoSection(): HTMLElement {
       'internet. To upgrade, install a newer Lite build from the ' +
       'releases page.';
     wrap.appendChild(liteNote);
+  }
+
+  if (electronHost && !isLiteBuild() && BUILD_VERSION_FLAGS.includes('f')) {
+    // Federation builds follow the `f` update channel (federation-main.ts).
+    const fedNote = document.createElement('div');
+    fedNote.className = 'pmd-update-pause-desc';
+    fedNote.textContent =
+      'This federation build updates only to newer federation builds ' +
+      '(versions ending in -f), never to a release without federation.';
+    wrap.appendChild(fedNote);
   }
 
   return wrap;
@@ -3133,7 +3184,27 @@ function buildPairingOwnCodeEditor(): HTMLElement {
     })();
   });
 
-  wrap.append(codeEl, copyBtn, regenBtn);
+  // Federation (relay/FEDERATION.md §2.1): when this relay connects to
+  // other servers, offer the code that names it — `cmk1f.<key>@<relay>`
+  // — for people on OTHER servers. The plain code stays the default
+  // (every build reads it; same-server partners need nothing more).
+  const crossBtn = document.createElement('button');
+  crossBtn.type = 'button';
+  crossBtn.className = 'pmd-settings-btn';
+  crossBtn.textContent = 'Copy cross-server code';
+  crossBtn.title = 'For someone on a different server: your code plus the address of your server.';
+  crossBtn.addEventListener('click', () => {
+    const code = ownCrossServerCode(settings.get('pairingOwnCode'));
+    if (!code) return;
+    void navigator.clipboard?.writeText(code).then(
+      () => showToast('Cross-server pairing code copied'),
+      () => showToast('Could not copy code'),
+    );
+  });
+  const serverEl = document.createElement('div');
+  serverEl.className = 'pmd-settings-row-desc pmd-pairing-owncode-server';
+
+  wrap.append(codeEl, copyBtn, crossBtn, regenBtn, serverEl);
 
   function refresh(): void {
     const code = settings.get('pairingOwnCode');
@@ -3148,10 +3219,25 @@ function buildPairingOwnCodeEditor(): HTMLElement {
       copyBtn.disabled = true;
       regenBtn.textContent = 'Generate now';
     }
+    const fed = ownRelayFederation();
+    const cross = code && fed?.mailbox ? ownCrossServerCode(code) : null;
+    crossBtn.hidden = !cross;
+    // The nickname is the server's own claim — always shown with its host.
+    serverEl.hidden = !fed;
+    serverEl.textContent = fed
+      ? `Your server: ${relayLabel(fed.url, fed.nickname)} — connects to other servers`
+      : '';
   }
   refresh();
   const unsub = settings.subscribe(refresh);
-  registerRowCleanup(wrap, () => unsub());
+  const unsubCaps = onRelayCapabilitiesChanged(refresh);
+  // Opening Settings re-reads the relay (forced: past the 5-min cache),
+  // so an operator's change shows up here without restarting the app.
+  void refreshOwnRelayFederation(true);
+  registerRowCleanup(wrap, () => {
+    unsub();
+    unsubCaps();
+  });
   return wrap;
 }
 
@@ -3260,7 +3346,7 @@ function buildPairingPartnersEditor(): HTMLElement {
       codeInput.type = 'text';
       codeInput.className = 'pmd-pairing-code';
       codeInput.value = partner.code;
-      codeInput.placeholder = 'paste their code (cmk1.…)';
+      codeInput.placeholder = 'paste their code (cmk1.… or cmk1f.…@server)';
       codeInput.spellcheck = false;
       codeInput.autocomplete = 'off';
       codeInput.addEventListener('change', () => {
@@ -5005,6 +5091,463 @@ function buildThemeEditor(): HTMLElement {
   refresh();
   const unsub = settings.subscribe(refresh);
   registerRowCleanup(wrap, () => unsub());
+  return wrap;
+}
+
+/** Whether the chrome is currently dark (drives which swatch variant the
+ *  pickers draw). Read from the attribute so 'system' resolves for free. */
+function chromeIsDark(): boolean {
+  return document.documentElement.getAttribute('data-theme') === 'dark';
+}
+
+/** Palette picker — a card per palette with a mini ribbon/surface/accent
+ *  preview in the current light/dark variant. */
+function buildPaletteEditor(): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'pmd-palette-editor';
+  wrap.setAttribute('role', 'group');
+  wrap.setAttribute('aria-label', 'Palette');
+  const cards: { btn: HTMLButtonElement; opt: PaletteOption; preview: HTMLElement; bar: HTMLElement; dot: HTMLElement; line: HTMLElement }[] = [];
+  for (const opt of PALETTE_OPTIONS) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pmd-palette-card';
+    const preview = document.createElement('span');
+    preview.className = 'pmd-palette-preview';
+    preview.setAttribute('aria-hidden', 'true');
+    const bar = document.createElement('span');
+    bar.className = 'pmd-palette-preview-bar';
+    const dot = document.createElement('span');
+    dot.className = 'pmd-palette-preview-dot';
+    const line = document.createElement('span');
+    line.className = 'pmd-palette-preview-line';
+    bar.appendChild(dot);
+    preview.append(bar, line);
+    const label = document.createElement('span');
+    label.className = 'pmd-palette-card-label';
+    label.textContent = opt.label;
+    btn.append(preview, label);
+    btn.addEventListener('click', () => settings.set('themePalette', opt.value));
+    wrap.appendChild(btn);
+    cards.push({ btn, opt, preview, bar, dot, line });
+  }
+  function refresh(): void {
+    const cur = settings.get('themePalette');
+    const dark = chromeIsDark();
+    for (const c of cards) {
+      const sw = dark ? c.opt.dark : c.opt.light;
+      c.preview.style.background = sw.bg;
+      c.bar.style.background = sw.surface;
+      c.dot.style.background = sw.accent;
+      c.line.style.background = sw.text;
+      c.btn.setAttribute('aria-pressed', c.opt.value === cur ? 'true' : 'false');
+    }
+  }
+  refresh();
+  const unsub = settings.subscribe(refresh);
+  registerRowCleanup(wrap, () => unsub());
+  return wrap;
+}
+
+/** Accent picker — a round swatch per accent; "Palette" shows the active
+ *  palette's own accent. Notes when the color-vision preset overrides it. */
+function buildAccentEditor(): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'pmd-accent-editor';
+  const row = document.createElement('div');
+  row.className = 'pmd-accent-swatches';
+  row.setAttribute('role', 'group');
+  row.setAttribute('aria-label', 'Accent color');
+  const swatches: { btn: HTMLButtonElement; opt: AccentOption }[] = [];
+  for (const opt of ACCENT_OPTIONS) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pmd-accent-swatch';
+    btn.dataset['value'] = opt.value;
+    btn.title = opt.label;
+    btn.setAttribute('aria-label', opt.label);
+    if (opt.value === 'auto') btn.classList.add('pmd-accent-swatch-auto');
+    btn.addEventListener('click', () => settings.set('themeAccent', opt.value));
+    row.appendChild(btn);
+    swatches.push({ btn, opt });
+  }
+  // Custom: the swatch opens the native color picker (kept in the DOM,
+  // invisible, over the swatch so the OS picker anchors there).
+  const customWrap = document.createElement('span');
+  customWrap.className = 'pmd-accent-custom';
+  const customBtn = document.createElement('button');
+  customBtn.type = 'button';
+  customBtn.className = 'pmd-accent-swatch pmd-accent-swatch-custom';
+  customBtn.title = 'Custom color…';
+  customBtn.setAttribute('aria-label', 'Custom color');
+  const picker = document.createElement('input');
+  picker.type = 'color';
+  picker.className = 'pmd-accent-custom-input';
+  picker.tabIndex = -1;
+  picker.setAttribute('aria-hidden', 'true');
+  customWrap.append(customBtn, picker);
+  row.appendChild(customWrap);
+  customBtn.addEventListener('click', () => {
+    picker.value = settings.get('themeAccentCustom');
+    if (settings.get('themeAccent') !== 'custom') settings.set('themeAccent', 'custom');
+    try {
+      picker.showPicker();
+    } catch {
+      picker.click();
+    }
+  });
+  // Live preview while dragging in the picker, at most once a frame.
+  let pendingColor: string | null = null;
+  picker.addEventListener('input', () => {
+    const first = pendingColor === null;
+    pendingColor = picker.value;
+    if (first) {
+      requestAnimationFrame(() => {
+        if (pendingColor) settings.set('themeAccentCustom', pendingColor);
+        pendingColor = null;
+      });
+    }
+  });
+  picker.addEventListener('change', () => {
+    pendingColor = null;
+    settings.set('themeAccentCustom', picker.value);
+    settings.set('themeAccent', 'custom');
+  });
+  const customNote = document.createElement('div');
+  customNote.className = 'pmd-accent-cvd-note';
+  const note = document.createElement('div');
+  note.className = 'pmd-accent-cvd-note';
+  note.textContent = 'The color-vision friendly preset (Accessibility) sets the accent while it is on.';
+  wrap.append(row, customNote, note);
+  function refresh(): void {
+    const cur = settings.get('themeAccent');
+    const dark = chromeIsDark();
+    const palette = PALETTE_OPTIONS.find((p) => p.value === settings.get('themePalette')) ?? PALETTE_OPTIONS[0]!;
+    for (const { btn, opt } of swatches) {
+      const color = opt.value === 'auto'
+        ? (dark ? palette.dark.accent : palette.light.accent)
+        : (dark ? opt.dark : opt.light);
+      btn.style.background = color ?? '';
+      btn.setAttribute('aria-pressed', opt.value === cur ? 'true' : 'false');
+    }
+    const picked = settings.get('themeAccentCustom');
+    const custom = deriveCustomAccent(picked);
+    customBtn.style.background = dark ? custom.dark : custom.light;
+    customBtn.setAttribute('aria-pressed', cur === 'custom' ? 'true' : 'false');
+    customNote.hidden = cur !== 'custom';
+    customNote.textContent = custom.adjusted
+      ? `Adjusted so text on it stays readable: using ${custom.light} (light) and ${custom.dark} (dark) for your ${picked}.`
+      : `Using ${custom.light} in light mode and a lighter ${custom.dark} in dark mode.`;
+    note.hidden = !settings.get('colorVisionFriendly');
+  }
+  refresh();
+  const unsub = settings.subscribe(refresh);
+  registerRowCleanup(wrap, () => unsub());
+  return wrap;
+}
+
+/** Texture picker — preview tiles for the bundled textures, a custom
+ *  image slot (upload / remove / fit), and an intensity slider. */
+function buildChromeTextureEditor(): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'pmd-texture-editor';
+  const tiles = document.createElement('div');
+  tiles.className = 'pmd-texture-tiles';
+  tiles.setAttribute('role', 'group');
+  tiles.setAttribute('aria-label', 'Background texture');
+
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = 'image/*';
+  fileInput.hidden = true;
+
+  let customUrl = '';
+  const tileEls: { btn: HTMLButtonElement; tex: HTMLElement; opt: TextureOption }[] = [];
+  for (const opt of TEXTURE_OPTIONS) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pmd-texture-tile';
+    btn.dataset['value'] = opt.value;
+    const tex = document.createElement('span');
+    tex.className = 'pmd-texture-tile-tex';
+    tex.setAttribute('aria-hidden', 'true');
+    const label = document.createElement('span');
+    label.className = 'pmd-texture-tile-label';
+    label.textContent = opt.label;
+    btn.append(tex, label);
+    btn.addEventListener('click', () => {
+      if (opt.value === 'custom' && !customUrl) fileInput.click();
+      else settings.set('chromeTexture', opt.value);
+    });
+    tiles.appendChild(btn);
+    tileEls.push({ btn, tex, opt });
+  }
+
+  const customRow = document.createElement('div');
+  customRow.className = 'pmd-texture-custom-row';
+  const chooseBtn = document.createElement('button');
+  chooseBtn.type = 'button';
+  chooseBtn.textContent = 'Choose image…';
+  chooseBtn.addEventListener('click', () => fileInput.click());
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.textContent = 'Remove image';
+  removeBtn.addEventListener('click', () => {
+    void removeChromeTexture().then(() => {
+      customUrl = '';
+      refresh();
+    });
+  });
+  const fit = document.createElement('div');
+  fit.className = 'pmd-theme-editor';
+  for (const o of [
+    { value: 'tile', label: 'Repeat' },
+    { value: 'cover', label: 'Fill' },
+  ] as const) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'pmd-theme-editor-btn';
+    b.textContent = o.label;
+    b.dataset['value'] = o.value;
+    b.addEventListener('click', () => settings.set('chromeTextureFit', o.value));
+    fit.appendChild(b);
+  }
+  customRow.append(chooseBtn, removeBtn, fit);
+
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = '';
+    if (!file) return;
+    chooseBtn.disabled = true;
+    void importChromeTexture(file)
+      .then(async (res) => {
+        if (!res.ok) {
+          showToast(res.reason);
+          return;
+        }
+        customUrl = await getCustomChromeTextureUrl();
+        showToast(`Background image set (${res.width}×${res.height}, ${Math.max(1, Math.round(res.bytes / 1024))} KB).`);
+      })
+      .finally(() => {
+        chooseBtn.disabled = false;
+        refresh();
+      });
+  });
+
+  // Light/dark match for a custom image: none, just the bars, or the
+  // whole interface (theme-apply.ts resolveScheme).
+  const matchRow = document.createElement('div');
+  matchRow.className = 'pmd-texture-match';
+  const matchLabel = document.createElement('span');
+  matchLabel.className = 'pmd-texture-match-label';
+  matchLabel.textContent = 'Match light/dark to the image';
+  const matchSeg = document.createElement('div');
+  matchSeg.className = 'pmd-theme-editor';
+  matchSeg.setAttribute('role', 'group');
+  matchSeg.setAttribute('aria-label', 'Match light/dark to the image');
+  for (const o of [
+    { value: 'off', label: 'Off' },
+    { value: 'bars', label: 'Just the bars' },
+    { value: 'interface', label: 'Whole interface' },
+  ] as const satisfies readonly { value: ChromeTextureMatch; label: string }[]) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'pmd-theme-editor-btn';
+    b.textContent = o.label;
+    b.dataset['value'] = o.value;
+    b.addEventListener('click', () => settings.set('chromeTextureMatch', o.value));
+    matchSeg.appendChild(b);
+  }
+  const matchStatus = document.createElement('div');
+  matchStatus.className = 'pmd-texture-match-status';
+  matchRow.append(matchLabel, matchSeg, matchStatus);
+
+  function matchStatusText(): string {
+    const s = settings.all();
+    if (!s.chromeTextureCustomTones) return 'Couldn\'t measure this image, so it\'s kept faint.';
+    if (s.chromeTextureMatch === 'off') return 'Your theme stays as it is; the image is kept faint enough for every label to stay readable.';
+    const base = isUserDark(s.theme) ? 'dark' : 'light';
+    const img = resolveScheme(s, base === 'dark').imageScheme;
+    if (!img) return 'This image has both deep darks and bright highlights, so switching wouldn\'t help; it\'s kept faint instead.';
+    const kind = img === 'dark' ? 'Dark image' : 'Bright image';
+    if (img === base) return `${kind}: it already suits your ${base} theme, so nothing switches.`;
+    return s.chromeTextureMatch === 'bars'
+      ? `${kind}: the ribbon, navigation pane, and status bar switch to ${img}.`
+      : `${kind}: the interface switches to ${img}${s.themeAppliesToDocument ? '' : ' (the document stays paper-white)'}.`;
+  }
+
+  const intensityRow = document.createElement('label');
+  intensityRow.className = 'pmd-texture-intensity';
+
+  const intensityLabel = document.createElement('span');
+  intensityLabel.textContent = 'Intensity';
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.min = '0';
+  slider.max = '100';
+  slider.step = '1';
+  // While uncapped, a tick marks where the readable range ends.
+  const sliderWrap = document.createElement('span');
+  sliderWrap.className = 'pmd-texture-slider';
+  const limitTick = document.createElement('span');
+  limitTick.className = 'pmd-texture-limit-tick';
+  limitTick.title = 'Readable limit';
+  limitTick.setAttribute('aria-hidden', 'true');
+  sliderWrap.append(slider, limitTick);
+  const readout = document.createElement('span');
+  readout.className = 'pmd-texture-intensity-value';
+  slider.addEventListener('input', () => {
+    settings.set('chromeTextureIntensity', Number(slider.value));
+  });
+  intensityRow.append(intensityLabel, sliderWrap, readout);
+
+  /** Turn the readability limit off/on without the texture jumping: the
+   *  two scales differ (readable range vs. the fixed ceiling), so the
+   *  stored percentage is converted to keep the same strength. */
+  const setUncapped = (on: boolean): void => {
+    if (on === settings.get('chromeTextureUncapped')) return;
+    const next = rescaleIntensity(settings.get('chromeTextureIntensity'), on, readableFraction(settings.all()));
+    settings.set('chromeTextureIntensity', next);
+    settings.set('chromeTextureUncapped', on);
+  };
+
+  // Escape hatch past the readability cap: a right-click (or the Menu key
+  // / Shift+F10) on the Intensity row. Not a settings row on purpose —
+  // you have to go looking for it — but announced under the slider while
+  // it's on, with a way back.
+  const uncapNote = document.createElement('div');
+  uncapNote.className = 'pmd-texture-uncap-note';
+  const uncapText = document.createElement('span');
+  uncapText.textContent = 'Textures can go past the point where every label stays readable. ';
+  const uncapOff = document.createElement('button');
+  uncapOff.type = 'button';
+  uncapOff.className = 'pmd-texture-uncap-off';
+  uncapOff.textContent = 'Turn off';
+  uncapOff.addEventListener('click', () => setUncapped(false));
+  uncapNote.append(uncapText, uncapOff);
+
+  let uncapMenu: HTMLElement | null = null;
+  const closeUncapMenu = (refocus: boolean): void => {
+    if (!uncapMenu) return;
+    uncapMenu.remove();
+    uncapMenu = null;
+    window.removeEventListener('keydown', onUncapMenuKey, true);
+    window.removeEventListener('mousedown', onUncapMenuPointer, true);
+    clearOpenContextMenu(closeUncapMenuQuietly);
+    if (refocus) slider.focus();
+  };
+  const closeUncapMenuQuietly = (): void => closeUncapMenu(false);
+  // Window capture runs before the Settings dialog's own (document
+  // capture) Escape handler, so Escape closes just this menu.
+  function onUncapMenuKey(e: KeyboardEvent): void {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeUncapMenu(true);
+    } else if (e.key === 'Tab') {
+      closeUncapMenu(false);
+    }
+  }
+  function onUncapMenuPointer(e: MouseEvent): void {
+    if (uncapMenu && !uncapMenu.contains(e.target as Node)) closeUncapMenu(false);
+  }
+  intensityRow.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    if (!isRightClickContextMenu(e)) return;
+    closeUncapMenu(false);
+    const menu = document.createElement('div');
+    menu.className = 'pmd-nav-context-menu pmd-texture-uncap-menu';
+    menu.setAttribute('role', 'menu');
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'pmd-nav-context-item';
+    item.setAttribute('role', 'menuitemcheckbox');
+    const on = settings.get('chromeTextureUncapped');
+    item.setAttribute('aria-checked', on ? 'true' : 'false');
+    if (on) item.classList.add('pmd-nav-context-item-checked');
+    item.textContent = 'Allow textures that make text harder to read';
+    item.addEventListener('click', () => {
+      setUncapped(!settings.get('chromeTextureUncapped'));
+      closeUncapMenu(true);
+    });
+    menu.appendChild(item);
+    // Positioned inside the row (not on <body>) so it stays within the
+    // dialog's focus/key trap and scrolls with it. A keyboard-opened menu
+    // has no pointer position: drop it under the slider.
+    const row = intensityRow.getBoundingClientRect();
+    const fromPointer = e.button === 2 && (e.clientX !== 0 || e.clientY !== 0);
+    menu.style.left = `${fromPointer ? e.clientX - row.left : slider.offsetLeft}px`;
+    menu.style.top = `${fromPointer ? e.clientY - row.top : row.height}px`;
+    intensityRow.appendChild(menu);
+    uncapMenu = menu;
+    registerOpenContextMenu(closeUncapMenuQuietly);
+    item.focus();
+    setTimeout(() => {
+      if (uncapMenu !== menu) return;
+      window.addEventListener('keydown', onUncapMenuKey, true);
+      window.addEventListener('mousedown', onUncapMenuPointer, true);
+    });
+  });
+  registerRowCleanup(wrap, () => closeUncapMenu(false));
+
+  wrap.append(tiles, customRow, matchRow, intensityRow, uncapNote, fileInput);
+
+  function resolvedTexture(v: ChromeTexture): ChromeTexture {
+    return v === 'auto' ? PALETTE_TEXTURE[settings.get('themePalette')] : v;
+  }
+  function refresh(): void {
+    const cur = settings.get('chromeTexture');
+    for (const { btn, tex, opt } of tileEls) {
+      const shown = resolvedTexture(opt.value);
+      tex.classList.toggle('pmd-texture-tile-tex-custom', shown === 'custom');
+      // Bundled tiles go through `--pmd-tile-tex` (painted faint by the
+      // ::after in style.css); a custom image paints the tile directly.
+      tex.style.backgroundImage = shown === 'custom' && customUrl ? `url("${customUrl}")` : '';
+      if (shown === 'custom' || shown === 'none') tex.style.removeProperty('--pmd-tile-tex');
+      else tex.style.setProperty('--pmd-tile-tex', `var(--pmd-tex-${shown})`);
+      btn.setAttribute('aria-pressed', opt.value === cur ? 'true' : 'false');
+    }
+    customRow.hidden = cur !== 'custom' && !customUrl;
+    removeBtn.hidden = !customUrl;
+    fit.hidden = cur !== 'custom';
+    matchRow.hidden = cur !== 'custom' || !customUrl;
+    for (const b of matchSeg.querySelectorAll<HTMLButtonElement>('.pmd-theme-editor-btn')) {
+      b.setAttribute('aria-pressed', b.dataset['value'] === settings.get('chromeTextureMatch') ? 'true' : 'false');
+    }
+    matchStatus.textContent = matchStatusText();
+    for (const b of fit.querySelectorAll<HTMLButtonElement>('.pmd-theme-editor-btn')) {
+      b.setAttribute('aria-pressed', b.dataset['value'] === settings.get('chromeTextureFit') ? 'true' : 'false');
+    }
+    const intensity = settings.get('chromeTextureIntensity');
+    if (document.activeElement !== slider) slider.value = String(intensity);
+    const uncapped = settings.get('chromeTextureUncapped');
+    const fraction = uncapped ? readableFraction(settings.all()) : null;
+    // Only ever "past" when beyond the tick (or when the limit is unknown).
+    const past = uncapped && (fraction === null || intensity > Math.round(fraction * 100));
+    readout.textContent = past ? `${intensity}% · past readable` : `${intensity}%`;
+    limitTick.hidden = fraction === null || fraction >= 1;
+    if (fraction !== null) limitTick.style.setProperty('--pmd-limit', String(fraction));
+    slider.title = uncapped
+      ? 'The readability limit is off (right-click to turn it back on).'
+      : '100% is as strong as the texture can be while every label stays readable.';
+    uncapNote.hidden = !uncapped;
+    const active = resolvedTexture(cur) !== 'none';
+    slider.disabled = !active;
+    intensityRow.classList.toggle('pmd-texture-intensity-off', !active);
+  }
+  refresh();
+  void getCustomChromeTextureUrl().then((url) => {
+    customUrl = url;
+    refresh();
+  });
+  const unsub = settings.subscribe(refresh);
+  // The limit is measured after settings apply (a microtask later), so
+  // re-draw the tick when it lands.
+  const unsubCap = onReadableCapChange(refresh);
+  registerRowCleanup(wrap, () => {
+    unsub();
+    unsubCap();
+  });
   return wrap;
 }
 

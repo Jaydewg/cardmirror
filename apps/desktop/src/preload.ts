@@ -721,6 +721,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ok: number;
       fail: number;
       authFail: number;
+      /** Federation: cross-server sends this relay can't make. */
+      peerFail: number;
+      /** Federation: queued for a relay that's unreachable right now. */
+      deferred: number;
+      /** Federation: the relay's reason for the first refusal (a code). */
+      peerReason?: string;
     }>,
   pairingInboxList: () =>
     ipcRenderer.invoke('host:pairing-inbox-list') as Promise<PairingInboxItemIpc[]>,
@@ -1045,8 +1051,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('host:plugin-install-inspect', ref),
   pluginBrowse: (): Promise<Record<string, unknown>> =>
     ipcRenderer.invoke('host:plugin-browse'),
-  pluginInstallCommit: (token: string): Promise<Record<string, unknown>> =>
-    ipcRenderer.invoke('host:plugin-install-commit', token),
+  pluginInstallCommit: (token: string, granted?: string[]): Promise<Record<string, unknown>> =>
+    granted === undefined
+      ? ipcRenderer.invoke('host:plugin-install-commit', token)
+      : ipcRenderer.invoke('host:plugin-install-commit', token, granted),
+  pluginSetPermissions: (id: string, granted: string[]): Promise<Record<string, unknown>> =>
+    ipcRenderer.invoke('host:plugin-set-permissions', id, granted),
   pluginInstallDiscard: (token: string): Promise<void> =>
     ipcRenderer.invoke('host:plugin-install-discard', token),
   pluginCommunityInstalls: (on: boolean): Promise<void> =>

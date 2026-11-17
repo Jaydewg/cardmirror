@@ -38,7 +38,7 @@ export function resolveJumpInView(view: EditorView, payload: SourcePayload): boo
 
 /** True when `pos` sits inside a `self_ref` or `transclusion_ref` mirror
  *  subtree. */
-function inMirroredContent(doc: PMNode, pos: number): boolean {
+export function inMirroredContent(doc: PMNode, pos: number): boolean {
   const $pos = doc.resolve(pos);
   for (let d = $pos.depth; d > 0; d--) {
     if ($pos.node(d).type.name === 'self_ref' || $pos.node(d).type.name === 'transclusion_ref') {

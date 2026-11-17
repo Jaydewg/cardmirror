@@ -22,6 +22,8 @@ import { showToast } from '../toast.js';
 import { RELAY_FIX_PATH } from '../relay-decline.js';
 import { postNotice } from '../status-notices.js';
 import { inboxStore } from './inbox-store.js';
+import { wireOwnRelayFederation } from '../federation/self.js';
+import { initSessionChip } from '../collab/session-chip.js';
 import { SendPillController } from './send-pill-ui.js';
 import { ReceivePillController } from './receive-pill-ui.js';
 
@@ -101,6 +103,13 @@ export function initPairingWiring(): void {
   // process deliberately never registers).
   if (isLiteBuild()) return;
   void inboxStore.init();
+  // Federation: learn whether this app's relay connects to other servers
+  // (and keep that current as the relay settings change). Everything
+  // federation-related stays dormant until it answers yes.
+  wireOwnRelayFederation();
+  // The status-bar chip's idle state ("Connected to <server>"); desktop
+  // only — the web edition has no collaboration chip (collab gate).
+  if (collabEnabled()) initSessionChip();
 
   const electron = getElectronHost();
   if (electron?.onPairingVersionMismatch) {

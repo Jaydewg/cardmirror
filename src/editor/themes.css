@@ -1,0 +1,335 @@
+/* Lightweight theming: named palettes, accent colors, chrome textures.
+ *
+ * Loaded AFTER style.css (index.html / timer.html). Everything here is
+ * gated on attributes theme-apply.ts writes to <html>:
+ *
+ *   data-palette="sepia|slate|forest|rose"   absent = stock palette
+ *   data-accent="blue|teal|violet|rose|amber|green"   absent = palette's
+ *   data-texture="none|grain|dots|grid|linen|custom"  absent = palette's
+ *   data-doc-paper   (style.css) keep the document paper-white
+ *   data-bar-scheme="light|dark"   just the textured bars use the other
+ *                    scheme (a custom image, "Just the bars"): every
+ *                    block below also targets the bars under it
+ *
+ * Precedence, lowest to highest:
+ *   style.css :root  <  style.css dark block  <  palette  <  accent
+ *   <  color-vision preset (for the accent family)  <  inline Color
+ *   overrides on <html> (customColorOverrides — always win).
+ *
+ * How the layers compose:
+ *   - Each palette has a light block `:root[data-palette=X]` (0,2,0) and
+ *     a dark block `:root[data-theme="dark"][data-palette=X]` (0,3,0).
+ *     The light block beats style.css's dark block on specificity ties
+ *     by source order, so the DARK block must re-set every token the
+ *     light block sets (tests/editor/themes-css.test.ts enforces it).
+ *   - Palettes and accents only set `--pmd-accent` / `--pmd-accent-hover`;
+ *     one derivation rule below expands those into the whole accent
+ *     family. That rule is skipped while `data-cvd` is set, so the
+ *     color-vision preset keeps its meaning-carrying blue anchor.
+ *   - Accent blocks come after palette blocks at equal specificity, so
+ *     an explicit accent beats the palette's own.
+ *
+ * Contrast guardrails (checked by the test): chrome text, secondary and
+ * muted text >= 4.5:1 on the palette surface; white on the accent
+ * >= 4.5:1 in light, >= 3:1 in dark (the stock dark blue's own bar);
+ * accent >= 3:1 against the palette background.
+ *
+ * Textures: theme-apply.ts caps the opacity live so the same text colors
+ * stay >= 4.5:1 (accent >= 3:1) over the texture's most extreme pixel.
+ *
+ * Texture tiles are inline SVG data URIs drawn in black on transparent.
+ * The `black` keyword (and `%23` = `#` for in-SVG id refs) is the one
+ * place this file writes a color outside a token; it never reaches the
+ * screen as-is — the pseudo-element's opacity (the readability cap
+ * theme-apply.ts computes, never above 0.16) scales it, and dark mode
+ * inverts it to white. */
+
+/* ── Texture tiles ──────────────────────────────────────────────── */
+:root {
+  --pmd-tex-grain: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .6 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  --pmd-tex-dots: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12'><circle cx='3' cy='3' r='1.1' fill='black'/></svg>");
+  --pmd-tex-grid: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><path d='M16 .5H.5V16' fill='none' stroke='black' stroke-width='.7'/></svg>");
+  --pmd-tex-linen: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='6' height='6'><path d='M0 .5h6M0 3.5h6' stroke='black' stroke-width='.5' opacity='.6'/><path d='M.5 0v6M3.5 0v6' stroke='black' stroke-width='.35' opacity='.45'/></svg>");
+
+  /* Resolved texture: the explicit pick (data-texture blocks below), else
+     the palette's pairing, else nothing. A custom image is written inline
+     on <html> by theme-apply.ts and so beats all of these. */
+  --pmd-chrome-texture: var(--pmd-palette-texture, none);
+  --pmd-chrome-texture-size: auto;
+  --pmd-chrome-texture-filter: none;
+}
+
+:root[data-texture="none"] { --pmd-chrome-texture: none; }
+:root[data-texture="grain"] { --pmd-chrome-texture: var(--pmd-tex-grain); }
+:root[data-texture="dots"] { --pmd-chrome-texture: var(--pmd-tex-dots); }
+:root[data-texture="grid"] { --pmd-chrome-texture: var(--pmd-tex-grid); }
+:root[data-texture="linen"] { --pmd-chrome-texture: var(--pmd-tex-linen); }
+
+/* Bundled tiles are black; flip them to white on dark chrome. A custom
+   image is the user's picture — never invert it. */
+:root[data-theme="dark"] { --pmd-chrome-texture-filter: invert(1); }
+:root[data-texture="custom"] { --pmd-chrome-texture-filter: none; }
+
+/* ── Palettes ───────────────────────────────────────────────────── */
+
+/* Sepia — warm paper. Dark: espresso. */
+:root[data-palette="sepia"],
+:root[data-bar-scheme="light"][data-palette="sepia"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) {
+  --pmd-palette-texture: var(--pmd-tex-grain);
+  --pmd-accent: #a0522d;
+  --pmd-accent-hover: #8a4424;
+  --pmd-c-bg: #fbf6ec;
+  --pmd-c-bg-soft: #f6efe1;
+  --pmd-c-surface-soft: #f8f1e4;
+  --pmd-c-surface: #efe5d2;
+  --pmd-c-surface-alt: #e6d9c1;
+  --pmd-c-border: #cdbb9b;
+  --pmd-c-border-soft: #d6c6a8;
+  --pmd-c-divider: #e2d5bd;
+  --pmd-c-divider-faint: #ebe0cc;
+  --pmd-c-hover: #eadfc9;
+  --pmd-c-hover-strong: #e0d2b7;
+  --pmd-c-text: #3b2f22;
+  --pmd-c-text-secondary: #5c4a36;
+  --pmd-c-text-muted: #6e5a44;
+  --pmd-c-text-faint: #8c7860;
+}
+:root[data-theme="dark"][data-palette="sepia"],
+:root[data-bar-scheme="dark"][data-palette="sepia"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) {
+  --pmd-accent: #c27a45;
+  --pmd-accent-hover: #d08f5e;
+  --pmd-c-bg: #1c1814;
+  --pmd-c-bg-soft: #241f1a;
+  --pmd-c-surface-soft: #211c17;
+  --pmd-c-surface: #2a241e;
+  --pmd-c-surface-alt: #332c24;
+  --pmd-c-border: #54493c;
+  --pmd-c-border-soft: #433a30;
+  --pmd-c-divider: #352e26;
+  --pmd-c-divider-faint: #2c2620;
+  --pmd-c-hover: #3a3229;
+  --pmd-c-hover-strong: #463d32;
+  --pmd-c-text: #ece3d6;
+  --pmd-c-text-secondary: #c4b6a3;
+  --pmd-c-text-muted: #a39480;
+  --pmd-c-text-faint: #85776a;
+}
+
+/* Slate — cool blue-gray. Dark: navy. */
+:root[data-palette="slate"],
+:root[data-bar-scheme="light"][data-palette="slate"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) {
+  --pmd-palette-texture: var(--pmd-tex-grid);
+  --pmd-accent: #33658f;
+  --pmd-accent-hover: #28557a;
+  --pmd-c-bg: #f7f9fc;
+  --pmd-c-bg-soft: #f1f4f8;
+  --pmd-c-surface-soft: #f4f6fa;
+  --pmd-c-surface: #e9eef4;
+  --pmd-c-surface-alt: #dfe6ee;
+  --pmd-c-border: #bcc7d4;
+  --pmd-c-border-soft: #c9d2dd;
+  --pmd-c-divider: #dbe2ea;
+  --pmd-c-divider-faint: #e6ebf1;
+  --pmd-c-hover: #e2e8ef;
+  --pmd-c-hover-strong: #d6dee8;
+  --pmd-c-text: #1e2733;
+  --pmd-c-text-secondary: #445163;
+  --pmd-c-text-muted: #556275;
+  --pmd-c-text-faint: #7a8698;
+}
+:root[data-theme="dark"][data-palette="slate"],
+:root[data-bar-scheme="dark"][data-palette="slate"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) {
+  --pmd-accent: #5a8cc6;
+  --pmd-accent-hover: #76a2d4;
+  --pmd-c-bg: #141a22;
+  --pmd-c-bg-soft: #1a212b;
+  --pmd-c-surface-soft: #171e27;
+  --pmd-c-surface: #1f2733;
+  --pmd-c-surface-alt: #27313f;
+  --pmd-c-border: #435064;
+  --pmd-c-border-soft: #344052;
+  --pmd-c-divider: #29323f;
+  --pmd-c-divider-faint: #212935;
+  --pmd-c-hover: #2c3644;
+  --pmd-c-hover-strong: #384456;
+  --pmd-c-text: #e3e9f1;
+  --pmd-c-text-secondary: #b3bfcd;
+  --pmd-c-text-muted: #93a0b1;
+  --pmd-c-text-faint: #717e90;
+}
+
+/* Forest — sage green. Dark: deep green. */
+:root[data-palette="forest"],
+:root[data-bar-scheme="light"][data-palette="forest"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) {
+  --pmd-palette-texture: var(--pmd-tex-linen);
+  --pmd-accent: #2f6b3a;
+  --pmd-accent-hover: #25582f;
+  --pmd-c-bg: #f6f9f5;
+  --pmd-c-bg-soft: #eff4ed;
+  --pmd-c-surface-soft: #f2f6f0;
+  --pmd-c-surface: #e5ede2;
+  --pmd-c-surface-alt: #d9e4d5;
+  --pmd-c-border: #b5c6ae;
+  --pmd-c-border-soft: #c4d2be;
+  --pmd-c-divider: #d6e1d2;
+  --pmd-c-divider-faint: #e3eadf;
+  --pmd-c-hover: #dfe8db;
+  --pmd-c-hover-strong: #d2dfcd;
+  --pmd-c-text: #1f2a1e;
+  --pmd-c-text-secondary: #435241;
+  --pmd-c-text-muted: #546451;
+  --pmd-c-text-faint: #778674;
+}
+:root[data-theme="dark"][data-palette="forest"],
+:root[data-bar-scheme="dark"][data-palette="forest"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) {
+  --pmd-accent: #4e9a5c;
+  --pmd-accent-hover: #66ad73;
+  --pmd-c-bg: #141a15;
+  --pmd-c-bg-soft: #1a221b;
+  --pmd-c-surface-soft: #171e18;
+  --pmd-c-surface: #1f2920;
+  --pmd-c-surface-alt: #283328;
+  --pmd-c-border: #435343;
+  --pmd-c-border-soft: #354435;
+  --pmd-c-divider: #2a352a;
+  --pmd-c-divider-faint: #222b22;
+  --pmd-c-hover: #2d392d;
+  --pmd-c-hover-strong: #394839;
+  --pmd-c-text: #e2ebe0;
+  --pmd-c-text-secondary: #b5c4b2;
+  --pmd-c-text-muted: #95a692;
+  --pmd-c-text-faint: #748572;
+}
+
+/* Rosé — dusty pink. Dark: plum. */
+:root[data-palette="rose"],
+:root[data-bar-scheme="light"][data-palette="rose"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) {
+  --pmd-palette-texture: var(--pmd-tex-dots);
+  --pmd-accent: #a3385a;
+  --pmd-accent-hover: #8a2c4b;
+  --pmd-c-bg: #fdf7f8;
+  --pmd-c-bg-soft: #f9eff1;
+  --pmd-c-surface-soft: #fbf3f4;
+  --pmd-c-surface: #f3e4e7;
+  --pmd-c-surface-alt: #ead6da;
+  --pmd-c-border: #d4b6bd;
+  --pmd-c-border-soft: #dfc6cc;
+  --pmd-c-divider: #ecdadd;
+  --pmd-c-divider-faint: #f2e5e7;
+  --pmd-c-hover: #f0dfe2;
+  --pmd-c-hover-strong: #e7d0d5;
+  --pmd-c-text: #33232a;
+  --pmd-c-text-secondary: #5a4249;
+  --pmd-c-text-muted: #6c535a;
+  --pmd-c-text-faint: #8f7880;
+}
+:root[data-theme="dark"][data-palette="rose"],
+:root[data-bar-scheme="dark"][data-palette="rose"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) {
+  --pmd-accent: #c75a7c;
+  --pmd-accent-hover: #d47591;
+  --pmd-c-bg: #1d1519;
+  --pmd-c-bg-soft: #251c21;
+  --pmd-c-surface-soft: #21181d;
+  --pmd-c-surface: #2b2127;
+  --pmd-c-surface-alt: #352930;
+  --pmd-c-border: #574450;
+  --pmd-c-border-soft: #45363f;
+  --pmd-c-divider: #372b32;
+  --pmd-c-divider-faint: #2d2329;
+  --pmd-c-hover: #3b2e36;
+  --pmd-c-hover-strong: #483842;
+  --pmd-c-text: #f0e3e8;
+  --pmd-c-text-secondary: #cbb5be;
+  --pmd-c-text-muted: #a8929c;
+  --pmd-c-text-faint: #8a7580;
+}
+
+/* ── Accents ────────────────────────────────────────────────────── */
+/* Blue is the stock accent; listing it lets a palette user switch back. */
+:root[data-accent="blue"],
+:root[data-bar-scheme="light"][data-accent="blue"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) { --pmd-accent: #2563eb; --pmd-accent-hover: #1d4ed8; }
+:root[data-theme="dark"][data-accent="blue"],
+:root[data-bar-scheme="dark"][data-accent="blue"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) { --pmd-accent: #5a8fff; --pmd-accent-hover: #7aa5ff; }
+
+:root[data-accent="teal"],
+:root[data-bar-scheme="light"][data-accent="teal"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) { --pmd-accent: #0f766e; --pmd-accent-hover: #115e59; }
+:root[data-theme="dark"][data-accent="teal"],
+:root[data-bar-scheme="dark"][data-accent="teal"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) { --pmd-accent: #2a9d8f; --pmd-accent-hover: #3fb3a5; }
+
+:root[data-accent="violet"],
+:root[data-bar-scheme="light"][data-accent="violet"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) { --pmd-accent: #6d4fd8; --pmd-accent-hover: #5b3cc4; }
+:root[data-theme="dark"][data-accent="violet"],
+:root[data-bar-scheme="dark"][data-accent="violet"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) { --pmd-accent: #8b74e8; --pmd-accent-hover: #a08ced; }
+
+:root[data-accent="rose"],
+:root[data-bar-scheme="light"][data-accent="rose"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) { --pmd-accent: #be2f5c; --pmd-accent-hover: #a3264e; }
+:root[data-theme="dark"][data-accent="rose"],
+:root[data-bar-scheme="dark"][data-accent="rose"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) { --pmd-accent: #d4577c; --pmd-accent-hover: #de7393; }
+
+:root[data-accent="amber"],
+:root[data-bar-scheme="light"][data-accent="amber"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) { --pmd-accent: #a85a06; --pmd-accent-hover: #8f4c04; }
+:root[data-theme="dark"][data-accent="amber"],
+:root[data-bar-scheme="dark"][data-accent="amber"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) { --pmd-accent: #c27a0e; --pmd-accent-hover: #d18f2a; }
+
+:root[data-accent="green"],
+:root[data-bar-scheme="light"][data-accent="green"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) { --pmd-accent: #18803d; --pmd-accent-hover: #146c33; }
+:root[data-theme="dark"][data-accent="green"],
+:root[data-bar-scheme="dark"][data-accent="green"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) { --pmd-accent: #2f9e55; --pmd-accent-hover: #45b36a; }
+
+/* Custom: theme-apply.ts derives both variants from the picked color
+   (nudged to the same contrast bar as the presets above) and writes them
+   inline on <html>. */
+:root[data-accent="custom"],
+:root[data-bar-scheme="light"][data-accent="custom"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) {
+  --pmd-accent: var(--pmd-accent-custom);
+  --pmd-accent-hover: var(--pmd-accent-custom-hover);
+}
+:root[data-theme="dark"][data-accent="custom"],
+:root[data-bar-scheme="dark"][data-accent="custom"] :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) {
+  --pmd-accent: var(--pmd-accent-custom-dark);
+  --pmd-accent-hover: var(--pmd-accent-custom-dark-hover);
+}
+
+/* ── Accent family derivation ───────────────────────────────────── */
+/* Expands the two base values into every accent-family token. Skipped
+   under the color-vision preset (its blocks in style.css own these). */
+:root:not([data-cvd]):is([data-palette], [data-accent]),
+:root[data-bar-scheme]:not([data-cvd]):is([data-palette], [data-accent]) :is(#ribbon, #status-bar, .pmd-nav-panel, .pmd-multi-nav) {
+  --pmd-c-accent: var(--pmd-accent);
+  --pmd-c-accent-hover: var(--pmd-accent-hover);
+  --pmd-c-accent-soft: color-mix(in srgb, var(--pmd-accent) 14%, transparent);
+  --pmd-c-focus: var(--pmd-accent);
+  --pmd-c-focus-glow: color-mix(in srgb, var(--pmd-accent) 22%, transparent);
+  --pmd-c-drop: var(--pmd-accent);
+  --pmd-c-drop-soft: color-mix(in srgb, var(--pmd-accent) 10%, var(--pmd-c-bg));
+  --pmd-c-drop-mid: color-mix(in srgb, var(--pmd-accent) 20%, var(--pmd-c-bg));
+  --pmd-c-drop-tint: color-mix(in srgb, var(--pmd-accent) 7%, transparent);
+  --pmd-c-drop-outline: color-mix(in srgb, var(--pmd-accent) 32%, transparent);
+  --pmd-c-info-bg: color-mix(in srgb, var(--pmd-accent) 7%, var(--pmd-c-bg));
+  --pmd-c-info-bg-alt: color-mix(in srgb, var(--pmd-accent) 10%, var(--pmd-c-bg));
+}
+
+/* ── Chrome texture painting ────────────────────────────────────── */
+/* A pseudo-element under each chrome surface's content: each host is
+   already positioned with a z-index (its own stacking context), so
+   z-index:-1 paints above the host's background and below its children.
+   Only mounted when a texture can resolve, so the stock look costs no
+   extra layer. `isolation` guarantees the stacking context for any host
+   placement that lacks a z-index (e.g. the multi-pane nav). */
+:root:is([data-palette]:not([data-texture]), [data-texture]:not([data-texture="none"]))
+  :is(#ribbon, #status-bar, .pmd-nav-panel) {
+  isolation: isolate;
+}
+:root:is([data-palette]:not([data-texture]), [data-texture]:not([data-texture="none"]))
+  :is(#ribbon, #status-bar, .pmd-nav-panel)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: var(--pmd-chrome-texture);
+  background-size: var(--pmd-chrome-texture-size);
+  background-position: center;
+  opacity: var(--pmd-chrome-texture-opacity, 0);
+  filter: var(--pmd-chrome-texture-filter);
+}

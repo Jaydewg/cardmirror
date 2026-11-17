@@ -42,6 +42,14 @@ import { createPairingKeystore, routingId, type PairingKeystore, type SealedBund
 import { BUILT_IN_RELAY_TOKEN } from './pairing-build.js';
 import { RelayStream } from './relay-stream.js';
 import {
+  ensureMainRelayCaps,
+  formatPairingCode,
+  mainRelayAcceptsFlags,
+  mainRelayFederation,
+  parsePairingCode,
+  wireVersion,
+} from './federation-main.js';
+import {
   entitlementIfValid,
   interpretConnectResponse,
   nextLapsedFlag,
@@ -59,6 +67,14 @@ import {
 // file-index-core.ts). Parity is pinned by relay-version-header.test.ts.
 const RELAY_CLIENT_VERSION_HEADER = 'X-CardMirror-Version';
 const RELAY_CLIENT_ROUTING_HEADER = 'X-CardMirror-Routing';
+
+/** The version this build names on relay calls: with its feature
+ *  flags (`1.15.0-f`) only for a relay that reads them; every other
+ *  relay — older ones included — gets the plain numeric version
+ *  (relay/FEDERATION.md §2.2). */
+function clientVersionHeader(): string {
+  return wireVersion(app.getVersion(), mainRelayAcceptsFlags(relayUrl()));
+}
 
 /** Relay endpoint defaults. Resolution order (see relayUrl()/relayToken()):
  *  user settings (self-hosted relay) → env override → baked default. Env
@@ -157,6 +173,10 @@ interface RelayMessage extends Partial<SealedBundle> {
   recipientCode?: string;
   sentAt?: number;
   receivedAt?: number;
+  /** Federation: the relay that delivered this bundle from another
+   *  server — verified by OUR relay (dialback), so it outranks any
+   *  sender claim inside the ciphertext. Absent on local mail. */
+  viaRelay?: string;
 }
 
 let config: PairingConfig = {
@@ -294,7 +314,7 @@ async function connectAccount(
   // 30-day grace) as the bearer. A bare routing code mints nothing.
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    [RELAY_CLIENT_VERSION_HEADER]: app.getVersion(),
+    [RELAY_CLIENT_VERSION_HEADER]: clientVersionHeader(),
   };
   if (!connectCode.trim() && entitlementState) {
     headers['Authorization'] = `Bearer ${entitlementState.entitlement}`;
@@ -348,7 +368,7 @@ async function releaseSeat(entitlement: string, routingCode = ks().ownRoutingId(
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${entitlement}`,
-        [RELAY_CLIENT_VERSION_HEADER]: app.getVersion(),
+        [RELAY_CLIENT_VERSION_HEADER]: clientVersionHeader(),
       },
       // `routingCode` is explicit because a regenerate names the OLD
       // routing id — the one the entitlement was minted for.
@@ -512,7 +532,7 @@ function authHeaders(extra?: Record<string, string>): Record<string, string> {
   const usingEntitlement = ent !== null && relayToken() === ent.entitlement;
   return {
     Authorization: `Bearer ${relayToken()}`,
-    [RELAY_CLIENT_VERSION_HEADER]: app.getVersion(),
+    [RELAY_CLIENT_VERSION_HEADER]: clientVersionHeader(),
     ...(usingEntitlement ? { [RELAY_CLIENT_ROUTING_HEADER]: ks().ownRoutingId() } : {}),
     ...extra,
   };
@@ -555,6 +575,31 @@ async function pollOnce(): Promise<void> {
   } finally {
     polling = false;
   }
+}
+
+/** The `error` code (and policy `reason`) of a federation refusal body. */
+async function federationError(res: Response): Promise<{ code: string; reason: string }> {
+  try {
+    const body = (await res.json()) as { error?: unknown; reason?: unknown };
+    return {
+      code: typeof body?.error === 'string' ? body.error : '',
+      reason: typeof body?.reason === 'string' ? body.reason : '',
+    };
+  } catch {
+    return { code: '', reason: '' };
+  }
+}
+
+/** The inbox's sender code. Local mail keeps the sender's own claim,
+ *  exactly as before. Mail another relay delivered is re-qualified with
+ *  that relay — `cmk1f.<key>@<viaRelay>` — because the relay-verified
+ *  origin is what a reply must address, whatever the (unauthenticated,
+ *  sealed-box) payload claims. */
+function senderCodeFor(claimed: unknown, viaRelay: unknown): string {
+  const code = typeof claimed === 'string' ? claimed : '';
+  if (typeof viaRelay !== 'string' || !viaRelay) return code;
+  const a = parsePairingCode(code);
+  return a ? formatPairingCode(a.key, viaRelay) : code;
 }
 
 /** Decrypt + dedupe + inbox + ack one batch of relay messages. Shared by
@@ -616,7 +661,7 @@ async function processMessages(messages: RelayMessage[]): Promise<void> {
             type: typeof item.type === 'string' ? item.type : '',
             sliceJson: item.sliceJson,
             senderName: typeof inner.senderName === 'string' ? inner.senderName : '',
-            senderCode: typeof inner.senderCode === 'string' ? inner.senderCode : '',
+            senderCode: senderCodeFor(inner.senderCode, m.viaRelay),
             via: typeof inner.via === 'string' && inner.via ? inner.via : undefined,
             receivedAt: Date.now(),
             read: false,
@@ -669,6 +714,9 @@ function applyDelivery(): void {
     console.log('[pairing] delivery off');
     return;
   }
+  // What this relay supports (federation, version flags) — re-read on
+  // every delivery (re)configuration, i.e. whenever the relay changes.
+  void ensureMainRelayCaps(relayUrl(), true);
   if (streamUnsupportedUrl !== null && streamUnsupportedUrl === relayUrl()) {
     startFallbackPolling();
     return;
@@ -864,22 +912,50 @@ export function registerPairingIpc(): void {
         via?: string;
         minReceiverVersion?: string;
       },
-    ): Promise<{ ok: number; fail: number; authFail: number }> => {
+    ): Promise<{ ok: number; fail: number; authFail: number; peerFail: number; deferred: number; peerReason?: string }> => {
       const targets = Array.isArray(payload?.recipientCodes)
         ? Array.from(new Set(payload.recipientCodes.filter((c) => typeof c === 'string' && c)))
         : [];
       if (targets.length === 0 || !payload?.item) {
-        return { ok: 0, fail: targets.length, authFail: 0 };
+        return { ok: 0, fail: targets.length, authFail: 0, peerFail: 0, deferred: 0 };
       }
-      const senderCode = ks().ownPublicCode();
+      const plainSenderCode = ks().ownPublicCode();
+      // Federation (relay/FEDERATION.md §5): a recipient code naming ANOTHER
+      // relay goes through our relay's outbox; everything else is the
+      // unchanged local send. Learn whether our relay federates first.
+      const needsFederation = targets.some((c) => !!parsePairingCode(c)?.relay);
+      if (needsFederation) await ensureMainRelayCaps(relayUrl());
+      const fed = mainRelayFederation(relayUrl());
       let ok = 0;
       let fail = 0;
       /** How many of `fail` were the relay DECLINING our credentials
        *  (401/403) rather than an outage — the renderer names the fix
        *  instead of "couldn't reach". Inert while the relay is ungated. */
       let authFail = 0;
+      /** How many of `fail` were cross-server sends our relay can't make
+       *  (it doesn't federate, or refuses / can't reach that relay). */
+      let peerFail = 0;
+      /** How many of `ok` were queued for a relay that is unreachable
+       *  right now (delivered if it returns within the TTL). */
+      let deferred = 0;
+      /** The relay's stated reason for the first federation refusal. */
+      let peerReason = '';
       await Promise.all(
-        targets.map(async (recipientPublicCode) => {
+        targets.map(async (rawRecipientCode) => {
+          const addr = parsePairingCode(rawRecipientCode);
+          const remoteRelay = addr?.relay && addr.relay !== fed?.url ? addr.relay : null;
+          // Seal to the KEY; the relay part only routes.
+          const recipientPublicCode = addr ? addr.key : rawRecipientCode;
+          if (remoteRelay && !fed?.mailbox) {
+            fail++;
+            peerFail++;
+            peerReason ||= 'relay-not-federating';
+            console.warn('[pairing] cross-server send, but this relay does not federate');
+            return;
+          }
+          // Cross-server recipients get our cross-server code to reply to;
+          // same-server recipients keep the plain code every build reads.
+          const senderCode = remoteRelay && fed ? formatPairingCode(plainSenderCode, fed.url) : plainSenderCode;
           try {
             // Seal everything-but-routing to the recipient's public key.
             // Per-message floor (session invites) beats the config-level
@@ -908,9 +984,13 @@ export function registerPairingIpc(): void {
               recipientCode: routingId(recipientPublicCode),
               sentAt: Date.now(),
               ...bundle,
+              ...(remoteRelay ? { recipientRelay: remoteRelay } : {}),
             };
             const gz = gzipSync(Buffer.from(JSON.stringify(body), 'utf8'));
-            const res = await fetch(`${relayUrl()}/messages`, {
+            // A distinct route for cross-server sends: an older relay
+            // answers 404 instead of filing the bundle in a local mailbox
+            // nobody reads.
+            const res = await fetch(`${relayUrl()}${remoteRelay ? '/federation/v1/outbox' : '/messages'}`, {
               method: 'POST',
               headers: authHeaders({
                 'Content-Type': 'application/json',
@@ -918,11 +998,20 @@ export function registerPairingIpc(): void {
               }),
               body: gz,
             });
-            if (res.ok) ok++;
-            else {
+            if (res.ok) {
+              ok++;
+              if (remoteRelay) {
+                const r = (await res.json().catch(() => null)) as { peerState?: string } | null;
+                if (r?.peerState === 'unreachable') deferred++;
+              }
+            } else {
               fail++;
-              if (res.status === 401 || res.status === 403) authFail++;
-              console.warn(`[pairing] POST returned ${res.status}`);
+              const { code, reason } = remoteRelay ? await federationError(res) : { code: '', reason: '' };
+              if (remoteRelay && (code.startsWith('peer-') || code === 'too-large-for-peer' || res.status === 404)) {
+                peerFail++;
+                peerReason ||= reason || code;
+              } else if (res.status === 401 || res.status === 403) authFail++;
+              console.warn(`[pairing] POST returned ${res.status}${code ? ` (${code})` : ''}`);
             }
           } catch (err) {
             fail++;
@@ -930,7 +1019,7 @@ export function registerPairingIpc(): void {
           }
         }),
       );
-      return { ok, fail, authFail };
+      return { ok, fail, authFail, peerFail, deferred, ...(peerReason ? { peerReason } : {}) };
     },
   );
 

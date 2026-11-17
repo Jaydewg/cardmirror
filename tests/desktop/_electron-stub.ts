@@ -66,6 +66,7 @@ export function setMockAllWindows(wins: MockWin[]): void {
 export function resetElectronStub(userDataPath: string): void {
   sentToRenderer.length = 0;
   ipcListeners.clear();
+  ipcHandlers.clear();
   const win = makeWin();
   setMockFocusedWindow(win);
   (app as any).__userData = userDataPath;
@@ -98,7 +99,18 @@ export const BrowserWindow = {
   getAllWindows: () => mockAllWindows,
 };
 
+/** `ipcMain.handle` registrations, for tests that invoke a main-process
+ *  handler directly (`ipcHandlers.get(channel)!(evt, payload)`). */
+export const ipcHandlers = new Map<string, (evt: unknown, ...args: any[]) => any>();
+
+export const powerMonitor = {
+  on: (_event: string, _listener: (...args: any[]) => void) => {},
+};
+
 export const ipcMain = {
+  handle: (channel: string, handler: (evt: unknown, ...args: any[]) => any) => {
+    ipcHandlers.set(channel, handler);
+  },
   on: (channel: string, listener: (evt: unknown, ack: any) => void) => {
     const arr = ipcListeners.get(channel) ?? [];
     arr.push(listener);

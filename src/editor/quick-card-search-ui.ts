@@ -60,7 +60,7 @@ import {
 } from './settings.js';
 import { runSettingToggle, runSettingCycle } from './setting-commands.js';
 import { CATEGORY_TABS, visibleCategoryTabs, type SettingsTarget } from './settings-categories.js';
-import { appVersion } from './install-info.js';
+import { displayVersion } from './install-info.js';
 import { getHost, getElectronHost, isWindowsHost } from './host/index.js';
 import type { WindowListEntry } from './host/electron-host.js';
 import { showToast } from './toast.js';
@@ -806,7 +806,7 @@ function searchSettingsSource(query: string): PaletteResult[] {
   if (q.length > 0 && aboutKeys.some((k) => k.startsWith(q) || q.startsWith(k))) {
     results.unshift({
       source: 'settings',
-      name: `CardMirror ${appVersion}`,
+      name: `CardMirror ${displayVersion}`,
       meta: 'About this install',
       matchedName: true,
       snippet: null,

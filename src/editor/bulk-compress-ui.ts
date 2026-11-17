@@ -229,10 +229,12 @@ export function runCompressSingleFileWeb(): Promise<void> {
     accept: /\.cmir$/i,
     acceptMsg: 'Compress works on .cmir files — please choose a .cmir file.',
     run: async (bytes, name) => {
-      const { doc, threads, docId } = parseNative(bytes);
+      const { doc, threads, docId, plugins } = parseNative(bytes);
       const out = serializeNative(doc, {
         ...(threads.length ? { threads } : {}),
         ...(docId ? { docId } : {}),
+        // Other plugins' data rides through untouched (files.data).
+        ...(Object.keys(plugins).length ? { plugins } : {}),
       });
       const before = bytes.length;
       const after = out.length;

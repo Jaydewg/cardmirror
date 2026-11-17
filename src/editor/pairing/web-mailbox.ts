@@ -38,7 +38,10 @@ import {
   RELAY_CLIENT_ROUTING_HEADER,
   RELAY_CLIENT_VERSION_HEADER,
   compareAppVersions,
+  wireVersion,
 } from '../relay-protocol.js';
+import { formatPairingCode, parsePairingCode } from '../federation/address.js';
+import { acceptsVersionFlags, ensureRelayCapabilities, federationFor } from '../federation/relay-capabilities.js';
 import { appVersion } from '../install-info.js';
 import type { PairingConfigIpc, PairingInboxItemIpc, PairingSendIpc } from '../host/electron-host.js';
 import { inboxStore } from './inbox-store.js';
@@ -47,6 +50,18 @@ const LEADER_LOCK = 'cardmirror-mailbox-leader';
 
 interface RelayMessage extends SealedBundle {
   msgId: string;
+  /** Federation: the relay-verified sending relay (another server's
+   *  mail only) — see apps/desktop/src/pairing-ipc.ts senderCodeFor. */
+  viaRelay?: string;
+}
+
+/** Same rule as the desktop main process: mail another relay delivered
+ *  is attributed to THAT relay (verified), not to the sealed claim. */
+function senderCodeFor(claimed: unknown, viaRelay: unknown): string {
+  const code = typeof claimed === 'string' ? claimed : '';
+  if (typeof viaRelay !== 'string' || !viaRelay) return code;
+  const a = parsePairingCode(code);
+  return a ? formatPairingCode(a.key, viaRelay) : code;
 }
 
 interface InnerPayload {
@@ -101,7 +116,7 @@ function authHeaders(extra: Record<string, string> = {}): Record<string, string>
   const { token, isEntitlement } = mailboxToken();
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
-    [RELAY_CLIENT_VERSION_HEADER]: appVersion,
+    [RELAY_CLIENT_VERSION_HEADER]: wireVersion(appVersion, acceptsVersionFlags(relayUrl())),
     ...extra,
   };
   // The routing header is bound to the ENTITLEMENT; a self-host token
@@ -176,7 +191,7 @@ async function processMessages(messages: RelayMessage[]): Promise<void> {
       type: typeof item.type === 'string' ? item.type : '',
       sliceJson: item.sliceJson,
       senderName: typeof inner.senderName === 'string' ? inner.senderName : '',
-      senderCode: typeof inner.senderCode === 'string' ? inner.senderCode : '',
+      senderCode: senderCodeFor(inner.senderCode, m.viaRelay),
       via: typeof inner.via === 'string' && inner.via ? inner.via : undefined,
       receivedAt: Date.now(),
       read: false,
@@ -338,13 +353,31 @@ export async function webPairingRegenerateKey(): Promise<{ ownCode: string }> {
 
 export async function webPairingSend(
   payload: PairingSendIpc,
-): Promise<{ ok: number; fail: number; authFail: number }> {
-  const senderCode = await webOwnPublicCode();
+): Promise<{ ok: number; fail: number; authFail: number; peerFail: number; deferred: number; peerReason?: string }> {
+  const plainSenderCode = await webOwnPublicCode();
+  // Federation (relay/FEDERATION.md §5) — same routing rule as desktop.
+  if (payload.recipientCodes.some((c) => !!parsePairingCode(c)?.relay)) {
+    await ensureRelayCapabilities(relayUrl());
+  }
+  const fed = federationFor(relayUrl());
   let ok = 0;
   let fail = 0;
   let authFail = 0;
+  let peerFail = 0;
+  let deferred = 0;
+  let peerReason = '';
   await Promise.all(
-    payload.recipientCodes.map(async (recipientPublicCode) => {
+    payload.recipientCodes.map(async (rawRecipientCode) => {
+      const addr = parsePairingCode(rawRecipientCode);
+      const remoteRelay = addr?.relay && addr.relay !== fed?.url ? addr.relay : null;
+      const recipientPublicCode = addr ? addr.key : rawRecipientCode;
+      if (remoteRelay && !fed?.mailbox) {
+        fail++;
+        peerFail++;
+        peerReason ||= 'relay-not-federating';
+        return;
+      }
+      const senderCode = remoteRelay && fed ? formatPairingCode(plainSenderCode, fed.url) : plainSenderCode;
       try {
         const floor =
           typeof payload.minReceiverVersion === 'string' && payload.minReceiverVersion.trim()
@@ -368,23 +401,39 @@ export async function webPairingSend(
           recipientCode: await webRoutingId(recipientPublicCode),
           sentAt: Date.now(),
           ...bundle,
+          ...(remoteRelay ? { recipientRelay: remoteRelay } : {}),
         };
-        const res = await fetch(`${relayUrl()}/messages`, {
+        const res = await fetch(`${relayUrl()}${remoteRelay ? '/federation/v1/outbox' : '/messages'}`, {
           method: 'POST',
           headers: authHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify(body),
         });
-        if (res.ok) ok++;
-        else {
+        if (res.ok) {
+          ok++;
+          if (remoteRelay) {
+            const r = (await res.json().catch(() => null)) as { peerState?: string } | null;
+            if (r?.peerState === 'unreachable') deferred++;
+          }
+        } else {
           fail++;
-          if (res.status === 401 || res.status === 403) authFail++;
+          let code = '';
+          let reason = '';
+          if (remoteRelay) {
+            const r = (await res.json().catch(() => null)) as { error?: unknown; reason?: unknown } | null;
+            code = typeof r?.error === 'string' ? r.error : '';
+            reason = typeof r?.reason === 'string' ? r.reason : '';
+          }
+          if (remoteRelay && (code.startsWith('peer-') || code === 'too-large-for-peer' || res.status === 404)) {
+            peerFail++;
+            peerReason ||= reason || code;
+          } else if (res.status === 401 || res.status === 403) authFail++;
         }
       } catch {
         fail++;
       }
     }),
   );
-  return { ok, fail, authFail };
+  return { ok, fail, authFail, peerFail, deferred, ...(peerReason ? { peerReason } : {}) };
 }
 
 export function onWebPairingVersionMismatch(

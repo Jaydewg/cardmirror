@@ -24,7 +24,7 @@ import {
   collabEndOrLeaveSession,
   collabCaptureSessionHandoff,
 } from '../../src/editor/collab/collab-hooks.js';
-import { loadSessionRecord, loadRecentRoom } from '../../src/editor/collab/collab-store.js';
+import { loadSessionRecord, loadRecentRoom, deleteSessionRecord, saveRecentRoom } from '../../src/editor/collab/collab-store.js';
 
 // Sessions are keyed by the owning doc's uid; this test window's one doc.
 const OWNER = 'ui-flows-doc';
@@ -139,7 +139,9 @@ describe('collab UI flows through the editor seams', () => {
     await settle();
     const chip = document.getElementById('collab-chip')!;
     expect(chip.hidden).toBe(false);
-    expect(chip.textContent).toContain('Session');
+    // The chip names the state ("Synced"); the status ring carries it too.
+    expect(chip.textContent).toContain('Synced');
+    expect(chip.querySelector('.pmd-presence-ring.pmd-ring-streaming')).not.toBeNull();
     // Movable rooms (ambient at >= 1.0.0) mint v2 codes whose format
     // fences pre-1.0 parsers out of the join-by-code path.
     expect(shareCode.startsWith('cmshare2.')).toBe(true);
@@ -744,6 +746,67 @@ describe('collab UI flows through the editor seams', () => {
 
     viewK.destroy();
     viewE.destroy();
+  }, 20_000);
+
+  it('rejoining a session you hosted and left keeps you the host (End, not Leave)', async () => {
+    const view = mkIndexStyleView('rejoin-host');
+    const deps = {
+      getView: () => view,
+      getOwnerUid: () => 'rejoin-host',
+      getViewForUid: (u: string) => (u === 'rejoin-host' ? view : null),
+      refreshPlugins: () => view.updateState(view.state.reconfigure({ plugins: buildMiniPlugins('rejoin-host') })),
+      newSessionDoc: () => true,
+    };
+    let copied = '';
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: (t: string) => ((copied = t), Promise.resolve()) },
+    });
+    await startSession(deps);
+    const roomId = collabUi.activeSession()!.roomId;
+    const code = copied;
+    expect(collabUi.activeSession()!.role).toBe('host');
+    // Leave it (closing marks it left in recent rooms) and lose the
+    // resumable record — the state that used to bring you back as a
+    // participant who could only Leave.
+    await collabCloseKeepResumable('rejoin-host');
+    await settle();
+    await deleteSessionRecord(roomId);
+    expect((await loadRecentRoom(roomId))?.leftAt).toBeDefined();
+    expect(await collabUi.joinSessionWithCode(deps, code)).toBe(true);
+    await settle();
+    expect(collabUi.activeSession()!.roomId).toBe(roomId);
+    expect(collabUi.activeSession()!.role).toBe('host');
+    await collabEndOrLeaveSession('rejoin-host');
+    await settle();
+    view.destroy();
+  }, 20_000);
+
+  it('joining a session you are hosting LIVE elsewhere (not left) stays a participant', async () => {
+    // The host runs in "another window" (outside these UI flows); recent
+    // rooms says host, but with no leftAt — it's still live there.
+    const client = new RoomsClient({ baseUrl: () => mock.url, token: () => mock.token });
+    const { session: host, shareCode } = await CollabSession.host({ pmDoc: simpleDoc('live elsewhere'), client });
+    const roomId = decodeShareCode(shareCode)!.roomId;
+    await saveRecentRoom({
+      roomId, shareCode, guestPass: null, role: 'host', docTitle: 'Live', lastActiveAt: Date.now(),
+    });
+    const view = mkIndexStyleView('live-join');
+    const deps = {
+      getView: () => view,
+      getOwnerUid: () => 'live-join',
+      getViewForUid: (u: string) => (u === 'live-join' ? view : null),
+      refreshPlugins: () => view.updateState(view.state.reconfigure({ plugins: buildMiniPlugins('live-join') })),
+      newSessionDoc: () => true,
+    };
+    expect(await collabUi.joinSessionWithCode(deps, shareCode)).toBe(true);
+    await settle();
+    expect(collabUi.activeSession()!.roomId).toBe(roomId);
+    expect(collabUi.activeSession()!.role).toBe('participant');
+    await collabEndOrLeaveSession('live-join');
+    await settle();
+    await host.stop();
+    view.destroy();
   }, 20_000);
 
   it('session flush + keep-resumable close + resume-in-place (existingDoc)', async () => {
