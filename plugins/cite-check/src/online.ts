@@ -20,7 +20,7 @@
 import type { PluginCard, PluginFetchResult } from '@cardmirror/plugin-api';
 import type { Confirmation, Finding } from './findings.js';
 import { fold, type ParsedCite } from './parse-cite.js';
-import { anchorIn } from './rules.js';
+import { anchorIn, shortAnchor } from './rules.js';
 
 export interface NetLike {
   fetch(url: string, init?: { headers?: Record<string, string>; method?: 'GET' | 'HEAD' | 'POST'; timeoutMs?: number }): Promise<PluginFetchResult>;
@@ -138,7 +138,7 @@ async function checkWork(card: PluginCard, p: ParsedCite, opts: VerifyOptions, r
       res.confirmations.push({ ruleId: 'doi-ok', message: `DOI matches “${work.title || p.doi}”` });
       const citeYear = p.short?.year ?? p.date?.year ?? null;
       if (work.year && citeYear && Math.abs(work.year - citeYear) > 1) {
-        res.findings.push({ ruleId: 'year-mismatch', severity: 'warning', message: `Crossref dates this work ${work.year}, the cite says ${citeYear}`, online: true, ...anchorIn(card, p.short?.text) });
+        res.findings.push({ ruleId: 'year-mismatch', severity: 'warning', message: `Crossref dates this work ${work.year}, the cite says ${citeYear}`, online: true, ...anchorIn(card, shortAnchor(card, p.short)) });
       }
     }
     return;
@@ -157,7 +157,7 @@ async function checkWork(card: PluginCard, p: ParsedCite, opts: VerifyOptions, r
       severity: 'warning',
       message: `Crossref lists “${best.title}” by ${best.surnames.slice(0, 4).join(', ')}, not ${surnames.join(' & ')}`,
       online: true,
-      ...anchorIn(card, p.short?.text),
+      ...anchorIn(card, shortAnchor(card, p.short)),
     });
   } else {
     res.confirmations.push({ ruleId: 'work-found', message: `Found in Crossref: “${best.title}”` });
@@ -324,7 +324,7 @@ async function checkPage(card: PluginCard, p: ParsedCite, opts: VerifyOptions, r
         severity: 'warning',
         message: `The page lists ${meta.authors.slice(0, 3).join(', ')} as author, not ${surnames.join(' & ')}`,
         online: true,
-        ...anchorIn(card, p.short?.text),
+        ...anchorIn(card, shortAnchor(card, p.short)),
       });
     } else {
       res.confirmations.push({ ruleId: 'page-author-ok', message: `Page author matches (${meta.authors.slice(0, 2).join(', ')})` });
@@ -338,7 +338,7 @@ async function checkPage(card: PluginCard, p: ParsedCite, opts: VerifyOptions, r
       severity: 'warning',
       message: `The page says it was published ${meta.date!.slice(0, 10)}, the cite says ${citeYear}`,
       online: true,
-      ...anchorIn(card, p.date?.text ?? p.short?.text),
+      ...anchorIn(card, p.date?.text ?? shortAnchor(card, p.short)),
     });
   }
   if (p.titleText && meta.title && similarity(p.titleText, meta.title) < 0.3) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { expandYear, findDate, hostOf, parseCite, parseShortCite } from '../src/parse-cite.js';
+import { expandYear, findDate, hostOf, parseCite, parseShortCite, trimUrl } from '../src/parse-cite.js';
 import { GOOD, TODAY } from './fixtures.js';
 
 describe('parseShortCite', () => {
@@ -18,6 +18,14 @@ describe('parseShortCite', () => {
     expect(parseShortCite('Smith n.d.', TODAY)).toMatchObject({ noDate: true, dateText: null });
     expect(parseShortCite('Smith', TODAY)).toMatchObject({ surnames: ['Smith'], dateText: null, noDate: false });
     expect(parseShortCite('', TODAY)).toBeNull();
+  });
+
+  it('reads a date joined to the name (no space, or separate cite runs)', () => {
+    expect(parseShortCite('Toby20', TODAY)).toMatchObject({ surnames: ['Toby'], year: 2020, dateText: '20' });
+    expect(parseShortCite('Smith2020', TODAY)).toMatchObject({ surnames: ['Smith'], year: 2020 });
+    expect(parseShortCite('Smith,24', TODAY)).toMatchObject({ surnames: ['Smith'], year: 2024 });
+    expect(parseShortCite('Smith24a', TODAY)).toMatchObject({ surnames: ['Smith'], year: 2024 });
+    expect(parseShortCite('Smith & Jones3/26', TODAY)).toMatchObject({ surnames: ['Smith', 'Jones'], month: 3, day: 26 });
   });
 
   it('reads a 2-digit year as the latest past year', () => {
@@ -97,5 +105,48 @@ describe('parseCite on CardMirror’s reference cites', () => {
     const p = parseCite('Doe 24', ['Jane Doe 24, Reporter at Vox,', '"Headline here," Vox, 2024, https://www.vox.com/a/b).'], TODAY);
     expect(p.urls).toEqual(['https://www.vox.com/a/b']);
     expect(hostOf(p.urls[0]!)).toBe('vox.com');
+  });
+
+  it('reads a cite whose name and date are highlighted in place', () => {
+    // "Toby **Smith**, …, March 7, **2020**" reaches the plugin as "Smith2020".
+    const p = parseCite(
+      'Smith2020',
+      ['Toby Smith, Professor of Law at Yale University, "A Long Enough Title," Yale Law Journal, March 7, 2020, https://yalelawjournal.org/a'],
+      TODAY,
+    );
+    expect(p.short).toMatchObject({ surnames: ['Smith'], year: 2020 });
+    expect(p.authorText).toBe('Toby Smith');
+    expect(p.qualsText).toBe('Professor of Law at Yale University');
+    expect(p.titleText).toBe('A Long Enough Title');
+    expect(p.publicationText).toBe('Yale Law Journal');
+    expect(p.date).toMatchObject({ year: 2020, month: 3, day: 7 });
+  });
+
+  it('reads an in-place cite whose name is mid-cite', () => {
+    const p = parseCite(
+      'Smith2020',
+      ['Professor Toby Smith of Yale University, "A Long Enough Title," Yale Law Journal, 2020, https://yalelawjournal.org/a'],
+      TODAY,
+    );
+    expect(p.qualsText).toBe('Professor Toby Smith of Yale University');
+    expect(p.titleText).toBe('A Long Enough Title');
+    expect(p.date?.year).toBe(2020);
+  });
+
+  it('still splits a full name written before the date', () => {
+    const p = parseCite('Doe 24', ['Jane Q. Doe 24, Reporter at Vox, "Headline here," Vox, 2024'], TODAY);
+    expect(p.authorText).toBe('Jane Q. Doe');
+    expect(p.qualsText).toBe('Reporter at Vox');
+  });
+
+  it('ends a URL at a bracket it did not open, or a backslash', () => {
+    expect(trimUrl('https://x.com/a/b]\\Toby')).toBe('https://x.com/a/b');
+    expect(trimUrl('https://x.com/a/b]')).toBe('https://x.com/a/b');
+    expect(trimUrl('https://x.com/a/b\\Toby')).toBe('https://x.com/a/b');
+    expect(trimUrl('https://en.wikipedia.org/wiki/Foo_(bar)')).toBe('https://en.wikipedia.org/wiki/Foo_(bar)');
+    expect(trimUrl('https://x.com/q?a[0]=1]')).toBe('https://x.com/q?a[0]=1');
+    expect(trimUrl('https://x.com/a).')).toBe('https://x.com/a');
+    const p = parseCite('Doe 24', ['Doe 24 [Jane Doe, Reporter at Vox, "Headline here," Vox, 2024, https://www.vox.com/a/b]\\Toby'], TODAY);
+    expect(p.urls).toEqual(['https://www.vox.com/a/b']);
   });
 });

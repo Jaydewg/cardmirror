@@ -85,7 +85,9 @@ export function expandYear(digits: string, today: Date): number {
   return y > now ? y - 100 : y;
 }
 
-const SHORT_DATE_RE = /(?:^|\s)('?)(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|\d{4}|\d{1,2})([a-z])?\s*$/i;
+// The date may follow the name with no space ("Toby20"): the host joins
+// separate cite-styled runs ("Toby **Smith**, …, **2020**" → "Smith2020").
+const SHORT_DATE_RE = /(?:^|[\s,;:(\[]|(?<=\p{L}))('?)(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|\d{4}|\d{1,2})([a-z])?\s*$/iu;
 const NO_DATE_RE = /(?:^|\s)(n\.?\s?d\.?|no date|undated)\s*$/i;
 
 export function parseShortCite(raw: string, today = new Date()): ShortCite | null {
@@ -182,19 +184,53 @@ const TITLE_RE = /["“]([^"“”]{3,}?)["”]/;
 const ACCESSED_RE = /\b(?:date\s+)?(?:last\s+)?(?:accessed|retrieved|visited|DOA)\b[:\s]*/i;
 const BOOK_RE = /\b(?:press|publish(?:er|ing|ed by)|isbn|pp?\.\s*\d|pgs?\.?\s*\d|ch(?:apter|\.)\s*\d|edition|ed\.\s|eds\.|vol\.)/i;
 
-function trimUrl(u: string): string {
-  return u.replace(/[.,;:!?)\]}]+$/, '');
+const OPENS: Record<string, string> = { ')': '(', ']': '[', '}': '{' };
+
+/** A cite URL without what follows it. A closing bracket ends the URL
+ *  unless the URL opened it ("…/a]\Toby" — the cutter's name after the
+ *  bracket — is "…/a"; "…/Foo_(bar)" keeps its parenthesis). A backslash
+ *  is never part of a URL. Then trailing punctuation is dropped. */
+export function trimUrl(u: string): string {
+  const depth: Record<string, number> = { '(': 0, '[': 0, '{': 0 };
+  let end = u.length;
+  for (let i = 0; i < u.length; i++) {
+    const ch = u[i]!;
+    if (ch === '\\') {
+      end = i;
+      break;
+    }
+    if (ch in depth) depth[ch]!++;
+    else if (ch in OPENS) {
+      const open = OPENS[ch]!;
+      if (depth[open]! === 0) {
+        end = i;
+        break;
+      }
+      depth[open]!--;
+    }
+  }
+  return u.slice(0, end).replace(/[.,;:!?]+$/, '');
 }
 
 /** Words that open a quals clause rather than continue a name. */
 const QUAL_START = /^(?:is|was|a|an|the|professor|prof|dr|director|senior|fellow|former|ph\.?d|md|jd|editor|reporter|writer|author|researcher|analyst|lecturer|associate|assistant|chair|president|ceo|founder)\b/i;
+
+/** A run of capitalized name words ("Mary Ann de la Cruz & Jo Lee"). */
+function isNameLike(s: string): boolean {
+  const w = s.trim().split(/\s+/);
+  return (
+    w.length >= 1 &&
+    w.length <= 9 &&
+    w.every((x) => /^[\p{Lu}][\p{L}.'’-]*$|^(?:&|and|et|al\.?|de|van|von|der|la|le|da|del|bin|al|el)$/u.test(x))
+  );
+}
 
 export function parseCite(shortCiteText: string, citeParagraphs: readonly string[], today = new Date()): ParsedCite {
   const full = citeParagraphs.join(' ').replace(/\s+/g, ' ').trim();
   let short = parseShortCite(shortCiteText, today);
   // No cite-styled run: try the start of the cite ("Smith 24, ...").
   if (!short && full) {
-    const lead = /^([^,;:(\[—–-]{2,60}?\s(?:'?\d{1,2}\/\d{1,2}|'?\d{4}|'?\d{1,2}))(?=[\s,;:(\[—–-]|$)/.exec(full);
+    const lead = /^([^,;:(\[—–-]{2,60}?(?:\s|(?<=\p{L}))(?:'?\d{1,2}\/\d{1,2}|'?\d{4}|'?\d{1,2}))(?=[\s,;:(\[—–-]|$)/u.exec(full);
     if (lead) short = parseShortCite(lead[1]!, today);
   }
   // Where the short cite ends, and any full name written BEFORE its
@@ -214,8 +250,13 @@ export function parseCite(shortCiteText: string, citeParagraphs: readonly string
       const esc = short.dateText.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
       const m = new RegExp(`(^|\\s)'?${esc}[a-z]?(?=[\\s,;:(\\[\\u2014\\u2013-]|$)`, 'i').exec(full.slice(0, 160));
       const last = short.surnames[short.surnames.length - 1];
-      if (m && last && fold(full.slice(0, m.index)).includes(fold(last))) {
-        nameBefore = full.slice(0, m.index).trim();
+      const before = m ? full.slice(0, m.index).trim() : '';
+      // Split there only when just the name precedes the date ("Jane Doe
+      // 24, …"). Otherwise the name and date are highlighted in place,
+      // inside the full cite ("Toby Smith, Prof…, March 7, 2020"): the
+      // whole cite is the rest.
+      if (m && last && fold(before).includes(fold(last)) && isNameLike(before)) {
+        nameBefore = before;
         rest = full.slice(m.index + m[0].length);
       }
     }
@@ -238,14 +279,6 @@ export function parseCite(shortCiteText: string, citeParagraphs: readonly string
 
   // Author name: a run of capitalized words leading the rest that
   // contains one of the short-cite surnames.
-  const isNameLike = (s: string): boolean => {
-    const w = s.trim().split(/\s+/);
-    return (
-      w.length >= 1 &&
-      w.length <= 9 &&
-      w.every((x) => /^[\p{Lu}][\p{L}.'’-]*$|^(?:&|and|et|al\.?|de|van|von|der|la|le|da|del|bin|al|el)$/u.test(x))
-    );
-  };
   let authorText: string | null = nameBefore && isNameLike(nameBefore) && nameBefore.split(/\s+/).length > (short?.surnames.length ?? 0) ? nameBefore : null;
   let afterAuthor = desc;
   if (!authorText && short && short.surnames.length > 0) {

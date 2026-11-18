@@ -63,6 +63,24 @@ export function anchorIn(card: PluginCard, text: string | null | undefined): Pic
   return card.citeParagraphs.length > 0 ? { part: 'cite', index: 0 } : { part: 'heading' };
 }
 
+/** What a finding about the short cite should anchor on. The host joins
+ *  separate cite-styled runs, so for a cite highlighted in place the
+ *  short cite ("Smith2020") isn't in the text: fall back to a surname. */
+export function shortAnchor(card: PluginCard, short: ParsedCite['short']): string | null {
+  if (!short) return null;
+  const inCite = (t: string): boolean => card.citeParagraphs.some((p) => p.includes(t));
+  if (inCite(short.text)) return short.text;
+  return short.surnames.find(inCite) ?? short.text;
+}
+
+/** Whether a card has evidence: read-aloud (highlighted) body text, or —
+ *  on hosts without `bodyRead` — any body text. A tag with nothing read
+ *  under it is an empty tag or an analytic written as a tag. */
+function hasEvidence(card: PluginCard): boolean {
+  if (card.bodyRead) return card.bodyRead.some((ranges) => ranges.length > 0);
+  return card.body.some((p) => p.trim());
+}
+
 const f = (
   card: PluginCard,
   ruleId: string,
@@ -100,23 +118,25 @@ export function checkCard(card: PluginCard, parsed: ParsedCite, cfg: RuleConfig)
   const out: Finding[] = [];
   const hasCiteText = card.citeParagraphs.some((p) => p.trim());
   if (!hasCiteText) {
-    // Analytics carry no evidence; only a card needs a cite.
-    if (card.kind === 'card') out.push({ ruleId: 'no-cite', severity: 'error', message: 'Card has no cite', part: 'heading' });
+    // Only evidence needs a cite: not analytics, empty tags, or
+    // analytics written as tags.
+    if (card.kind === 'card' && hasEvidence(card)) out.push({ ruleId: 'no-cite', severity: 'error', message: 'Card has no cite', part: 'heading' });
     return out;
   }
   const short = parsed.short;
+  const at = shortAnchor(card, short);
 
   // ── The short cite ────────────────────────────────────────────────
   if (!card.cite.trim()) {
     out.push(f(card, 'no-short-cite', 'warning', 'No short cite (author + date in cite style)'));
   }
   if (short?.noDate) {
-    out.push(f(card, 'no-date', 'warning', 'Cite says it has no date', short.text));
+    out.push(f(card, 'no-date', 'warning', 'Cite says it has no date', at));
   } else if (short && !short.dateText) {
-    out.push(f(card, 'no-date', 'warning', 'Short cite has no date', short.text));
+    out.push(f(card, 'no-date', 'warning', 'Short cite has no date', at));
   }
   if (short && short.month !== null && (short.month < 1 || short.month > 12 || (short.day ?? 1) < 1 || (short.day ?? 1) > 31)) {
-    out.push(f(card, 'bad-short-date', 'warning', `“${short.dateText}” isn’t a valid date`, short.text));
+    out.push(f(card, 'bad-short-date', 'warning', `“${short.dateText}” isn’t a valid date`, at));
   }
 
   // ── Dates ─────────────────────────────────────────────────────────
@@ -127,10 +147,10 @@ export function checkCard(card: PluginCard, parsed: ParsedCite, cfg: RuleConfig)
     if (when > tomorrow) out.push(f(card, 'future-date', 'error', `Date ${d.text} is in the future`, d.text));
     if (short?.year !== null && short?.year !== undefined && short.dateText && !short.dateText.includes('/')) {
       if (short.year !== d.year) {
-        out.push(f(card, 'date-mismatch', 'warning', `Short cite says ${short.dateText}, but the cite is dated ${d.text}`, short.text));
+        out.push(f(card, 'date-mismatch', 'warning', `Short cite says ${short.dateText}, but the cite is dated ${d.text}`, at));
       }
     } else if (short?.month && d.month && (short.month !== d.month || (short.day && d.day && short.day !== d.day))) {
-      out.push(f(card, 'date-mismatch', 'warning', `Short cite says ${short.dateText}, but the cite is dated ${d.text}`, short.text));
+      out.push(f(card, 'date-mismatch', 'warning', `Short cite says ${short.dateText}, but the cite is dated ${d.text}`, at));
     }
     if (cfg.maxAgeYears > 0 && cfg.today.getFullYear() - d.year > cfg.maxAgeYears) {
       out.push(f(card, 'old-evidence', 'info', `Evidence is from ${d.year} (older than ${cfg.maxAgeYears} years)`, d.text));
@@ -149,12 +169,12 @@ export function checkCard(card: PluginCard, parsed: ParsedCite, cfg: RuleConfig)
     const missing = short.surnames.filter((s) => !named.includes(fold(s)));
     if (missing.length > 0 && missing.length === short.surnames.length) {
       out.push(
-        f(card, 'author-not-in-cite', 'warning', `“${missing.join(', ')}” (short cite) isn’t named in the full cite`, short.text),
+        f(card, 'author-not-in-cite', 'warning', `“${missing.join(', ')}” (short cite) isn’t named in the full cite`, at),
       );
     }
   }
   if (orgAuthor) {
-    out.push(f(card, 'org-author', 'info', 'No individual author (staff / editorial byline)', short?.text));
+    out.push(f(card, 'org-author', 'info', 'No individual author (staff / editorial byline)', at));
   }
 
   // ── Quals ─────────────────────────────────────────────────────────
@@ -253,7 +273,7 @@ export function checkDocument(cards: readonly { card: PluginCard; parsed: Parsed
         .filter((j) => shortKey(cards[j]!.parsed) !== shortKey(cards[i]!.parsed))
         .map((j) => `“${cards[j]!.parsed.short?.text ?? '?'}”`);
       const { card, parsed } = cards[i]!;
-      add(i, f(card, 'source-cited-differently', 'warning', `Same source is cited as ${[...new Set(others)].join(', ')} elsewhere`, parsed.short?.text));
+      add(i, f(card, 'source-cited-differently', 'warning', `Same source is cited as ${[...new Set(others)].join(', ')} elsewhere`, shortAnchor(card, parsed.short)));
     }
   }
 
@@ -268,7 +288,7 @@ export function checkDocument(cards: readonly { card: PluginCard; parsed: Parsed
     if (sources.size < 2) continue;
     for (const i of idx) {
       const { card, parsed } = cards[i]!;
-      add(i, f(card, 'short-cite-collision', 'info', `“${parsed.short!.text}” also names a different source here (use 24a / 24b)`, parsed.short!.text));
+      add(i, f(card, 'short-cite-collision', 'info', `“${parsed.short!.text}” also names a different source here (use 24a / 24b)`, shortAnchor(card, parsed.short)));
     }
   }
 

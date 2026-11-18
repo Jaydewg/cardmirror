@@ -36,6 +36,33 @@ describe('structure and dates', () => {
     expect(run(card('', [], { kind: 'analytic' }))).toEqual([]);
   });
 
+  it('no cite on an empty tag or an analytic written as a tag', () => {
+    // Empty tag, nothing under it.
+    expect(run(card('', [], { heading: '', body: [], bodyRead: [] }))).toEqual([]);
+    // Analytic as a tag: no body, or an unhighlighted explanation.
+    expect(run(card('', [], { body: [], bodyRead: [] }))).toEqual([]);
+    expect(run(card('', [], { body: ['My own reasoning.'], bodyRead: [[]] }))).toEqual([]);
+    // Highlighted evidence with no cite is a real card missing its cite.
+    expect(ids(card('', [], { body: ['Evidence.'], bodyRead: [[[0, 8]]] }))).toEqual(['no-cite']);
+    // Older hosts without bodyRead: any body text counts as evidence.
+    expect(ids(card('', [], { body: ['Evidence.'] }))).toEqual(['no-cite']);
+    expect(run(card('', [], { body: ['  '] }))).toEqual([]);
+  });
+
+  it('a date joined to the name ("Toby20") is a name and a date', () => {
+    const got = ids(card('Toby20', 'Jane Toby20, Professor at MIT, "Title is long," Journal, 2020, https://mit.edu/a'));
+    expect(got).not.toContain('author-not-in-cite');
+    expect(got).not.toContain('no-date');
+    expect(got).not.toContain('date-mismatch');
+  });
+
+  it('an in-place cite: no false findings, marks on the surname', () => {
+    const c = card('Smith2020', 'Toby Smith, Professor of Law at Yale University, "A Long Enough Title," Yale Law Journal, 3/7/2020, https://yalelawjournal.org/a');
+    expect(serious(c)).toEqual([]);
+    const late = card('Smith2020', 'Toby Smith, Professor of Law at Yale University, "A Long Enough Title," Yale Law Journal, 3/7/2021, https://yalelawjournal.org/a');
+    expect(run(late).find((x) => x.ruleId === 'date-mismatch')).toMatchObject({ match: 'Smith' });
+  });
+
   it('no short cite, no date, n.d.', () => {
     expect(ids(card('', 'Jane Doe, Professor at MIT, "Title is long," Journal, 2024'))).toContain('no-short-cite');
     expect(ids(card('Doe', 'Doe, Professor at MIT, "Title is long," Journal, 2024'))).toContain('no-date');
