@@ -89,6 +89,7 @@ export type {
   PluginHeadingType,
   PluginInsertRequest,
   PluginInsertRole,
+  PluginJumpTarget,
   PluginOutlineItem,
 } from '../editor/plugin-api.js';
 export type {
@@ -99,6 +100,17 @@ export type {
 } from '../editor/plugin-api.js';
 export type { PluginPanelApi, PluginPanelHandle } from '../editor/plugin-api.js';
 export type { PluginMenuApi, PluginMenuItem, PluginMenuTarget } from '../editor/plugin-api.js';
+export type {
+  PluginAnnotateResult,
+  PluginAnnotation,
+  PluginAnnotationAction,
+  PluginAnnotationColor,
+  PluginAnnotationPart,
+  PluginAnnotationSeverity,
+  PluginAnnotationStyle,
+  PluginAnnotationsApi,
+} from '../editor/plugin-api.js';
+export type { PluginFetchInit, PluginFetchResult, PluginNetApi } from '../editor/plugin-api.js';
 
 // The one global a bundle calls to register (the desktop host installs
 // it before loading plugins; feature-detect with `?.`). The registry

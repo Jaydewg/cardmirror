@@ -9,15 +9,23 @@ import { setIcon } from './icons';
 import { isLiteBuild } from './lite.js';
 import { isTopOverlay, popOverlay, pushOverlay } from './overlay-stack.js';
 import { managePluginPermissionsDialog, permissionConsentDialog } from './plugin-permission-dialog.js';
-import { sanitizePermissionList, splitKnown } from './plugin-permissions.js';
+import { consentedHosts, sanitizeNetworkHosts, sanitizePermissionList, splitKnown } from './plugin-permissions.js';
 import {
   pluginSettingsDefs,
   regrantPlugin,
   setPluginConsent,
+  setPluginManifestPermissions,
   unregisterPlugin,
 } from './plugin-registry.js';
 import { openPluginSettingsModal } from './plugin-settings-modal.js';
-import { isPluginEnabled, setPluginEnabled } from './plugins-store.js';
+import {
+  forgetPluginUpdateState,
+  isPluginAutoUpdate,
+  isPluginEnabled,
+  setPluginAutoUpdate,
+  setPluginEnabled,
+} from './plugins-store.js';
+import { clearPluginUpdateNotice, completeStagedUpdate, stagePluginUpdate } from './plugin-update.js';
 import {
   forgetPluginPermissionPrefs,
   getPluginPermissionPrefs,
@@ -45,6 +53,10 @@ interface InstalledPlugin {
   grantedPermissions?: string[];
   /** The plugin's reasons, per permission (sanitized main-side). */
   permissionReasons?: Record<string, string>;
+  /** Where `net.fetch` may connect (sanitized main-side). */
+  networkHosts?: string[];
+  /** The hosts consented to with `net.fetch` (⊆ networkHosts). */
+  grantedNetworkHosts?: string[];
 }
 
 /** Surface an IPC rejection as a toast instead of an unhandled rejection. */
@@ -224,75 +236,48 @@ export function renderPluginsPanel(container: HTMLElement): void {
           if (await confirmDialog(`Update ${p.name} to v${res.latest}?${reviewNote}`)) {
             // Same-repo reinstall of an already-consented plugin: the update
             // confirm above IS the consent for everything already granted, so
-            // inspect rolls straight into commit — UNLESS the new version asks
+            // staging rolls straight into commit — UNLESS the new version asks
             // for permissions its installed version didn't, which get their
             // own consent dialog. Permissions the user turned off stay off
             // and aren't asked again (the shield turns them back on). Nothing
             // touches the existing install unless commit runs; declining
-            // discards the staged release.
-            const ins = (await host!.pluginInstallInspect(p.repo ?? '')) as
-              | {
-                  ok: true;
-                  pending: string;
-                  plugin: InstalledPlugin;
-                  ownerRepo: string;
-                  installedGranted?: string[];
-                }
-              | { ok: false; error: string }
-              | undefined;
-            if (!ins?.ok) {
-              showError(`Update failed: ${ins && 'error' in ins ? ins.error : 'unavailable'}`);
+            // discards the staged release. The rules live in plugin-update.ts,
+            // shared with background auto-update.
+            const st = await stagePluginUpdate(host!, p);
+            if (!st.ok) {
+              showError(`Update failed: ${st.error}`);
               return;
             }
-            const requested = sanitizePermissionList(ins.plugin?.permissions);
-            const prior = sanitizePermissionList(ins.installedGranted ?? p.grantedPermissions);
-            const kept = prior.filter((x) => requested.includes(x));
-            const { known, unknown } = splitKnown(requested);
-            // What's NEW in this version is asked about, ticked. A
-            // permission the installed version already requested but isn't
-            // granted was turned off by the user: re-asking it ticked would
-            // undo that with one click, so it's listed UNticked, and only
-            // when the user lets this plugin ask again and hasn't blocked it.
-            const priorRequested = sanitizePermissionList(p.permissions);
-            const prefs = getPluginPermissionPrefs(p.id);
-            const added = known.filter((x) => !prior.includes(x) && !priorRequested.includes(x));
-            const turnedOff = prefs.askAgain
-              ? known.filter((x) => !prior.includes(x) && priorRequested.includes(x) && !prefs.blocked.includes(x))
-              : [];
-            const asked = [...added, ...turnedOff];
-            let granted = kept;
-            if (asked.length > 0) {
-              const chosen = await permissionConsentDialog({
-                mode: 'update',
-                name: ins.plugin.name,
-                version: ins.plugin.version,
-                author: ins.plugin.author,
-                ownerRepo: ins.ownerRepo,
-                known: asked,
-                unknown: unknown.filter((x) => !prior.includes(x) && !priorRequested.includes(x)),
-                reasons: ins.plugin.permissionReasons,
-                unchecked: turnedOff,
-              });
-              if (!chosen) {
-                await host!.pluginInstallDiscard(ins.pending);
-                showToast(`${p.name} was not updated.`);
-                return;
-              }
-              // Only what stayed (or was) ticked; the rest stays off.
-              granted = [...kept, ...chosen.filter((x) => asked.includes(x))];
+            const out = await completeStagedUpdate(host!, p, st.staged);
+            if (out.kind === 'declined') {
+              showToast(`${p.name} was not updated.`);
+              return;
             }
-            const r = (await host!.pluginInstallCommit(ins.pending, granted)) as
-              | { ok: true }
-              | { ok: false; error: string }
-              | undefined;
-            if (r?.ok) {
-              setPluginConsent(p.id, granted);
+            if (out.kind === 'updated') {
+              clearPluginUpdateNotice(p.id);
               showToast(`${p.name} updated. Restart to apply.`);
               guarded(refresh);
-            } else showError(`Update failed: ${r && 'error' in r ? r.error : 'unavailable'}`);
+            } else showError(`Update failed: ${out.error}`);
           }
         });
       });
+      // Auto-update switch — only for plugins installed from a repo (a
+      // dev load has nowhere to update from).
+      let autoUpdate: HTMLLabelElement | null = null;
+      if (p.repo && !p.incompatible) {
+        autoUpdate = document.createElement('label');
+        autoUpdate.className = 'pmd-plugins-autoupdate';
+        autoUpdate.title = 'Install updates automatically. Updates that ask for new permissions still ask you first.';
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.checked = isPluginAutoUpdate(p.id);
+        box.setAttribute('aria-label', `Auto-update ${p.name}`);
+        box.addEventListener('change', () => {
+          setPluginAutoUpdate(p.id, box.checked);
+          showToast(box.checked ? `${p.name} will update automatically.` : `${p.name} won’t update automatically.`);
+        });
+        autoUpdate.append(box, document.createTextNode('Auto-update'));
+      }
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.className = 'pmd-install-info-btn';
@@ -306,6 +291,8 @@ export function renderPluginsPanel(container: HTMLElement): void {
           // Drop the plugin's storage bag so a reinstall starts clean.
           localStorage.removeItem(`plugin:${p.id}`);
           forgetPluginPermissionPrefs(p.id);
+          forgetPluginUpdateState(p.id);
+          clearPluginUpdateNotice(p.id);
           // Deregister NOW: palette rows, keybinding rows, and hotkeys
           // vanish immediately (the onCommandsChanged hook rebuilds live
           // keymaps) instead of lingering until restart. Already-executed
@@ -380,11 +367,17 @@ export function renderPluginsPanel(container: HTMLElement): void {
               askAgain: prefs.askAgain,
               blocked: prefs.blocked,
               reasons: p.permissionReasons,
+              networkHosts: sanitizeNetworkHosts(p.networkHosts),
             });
             if (!next) return;
             setPluginPermissionPrefs(p.id, { askAgain: next.askAgain, blocked: next.blocked });
-            const r = (await host!.pluginSetPermissions(p.id, next.granted)) as
-              | { ok: true; granted: string[] }
+            const hadNet = sanitizePermissionList(p.grantedPermissions).includes('net.fetch');
+            const hosts = consentedHosts(next.granted, p.networkHosts, {
+              asked: !hadNet,
+              priorHosts: p.grantedNetworkHosts,
+            });
+            const r = (await host!.pluginSetPermissions(p.id, next.granted, hosts)) as
+              | { ok: true; granted: string[]; networkHosts?: string[] }
               | { ok: false; error: string }
               | undefined;
             if (!r?.ok) {
@@ -392,13 +385,14 @@ export function renderPluginsPanel(container: HTMLElement): void {
               return;
             }
             // Live: the registry re-mints the api the next command run sees.
-            regrantPlugin(p.id, r.granted);
+            regrantPlugin(p.id, r.granted, r.networkHosts ?? hosts);
             showToast(`${p.name} permissions updated.`);
             guarded(refresh);
           });
         });
         row.append(shield);
       }
+      if (autoUpdate) row.append(autoUpdate);
       row.append(update, remove);
       list.append(row);
     }
@@ -447,6 +441,7 @@ export function renderPluginsPanel(container: HTMLElement): void {
             known,
             unknown,
             reasons: p.permissionReasons,
+            networkHosts: sanitizeNetworkHosts(p.networkHosts),
           });
     if (!consent) {
       await host!.pluginInstallDiscard(res.pending);
@@ -455,8 +450,10 @@ export function renderPluginsPanel(container: HTMLElement): void {
     // Consent covers the supported permissions left ticked; unknown ones
     // were listed as "won't be granted".
     const granted = consent.filter((x) => known.includes(x));
-    setPluginConsent(p.id, granted);
-    const committed = (await host!.pluginInstallCommit(res.pending, granted)) as
+    const grantedHosts = consentedHosts(granted, p.networkHosts, { asked: true });
+    setPluginConsent(p.id, granted, grantedHosts);
+    setPluginManifestPermissions(p.id, requested, p.permissionReasons, p.networkHosts);
+    const committed = (await host!.pluginInstallCommit(res.pending, granted, grantedHosts)) as
       | { ok: true }
       | { ok: false; error: string }
       | undefined;

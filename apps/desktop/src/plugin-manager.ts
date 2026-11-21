@@ -9,6 +9,7 @@ import { app } from 'electron';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { intersectHosts, sanitizeNetworkHosts } from './plugin-net.js';
 
 export const MANIFEST_NAME = 'cardmirror-plugin.json';
 export const BUNDLE_NAME = 'plugin.js';
@@ -43,6 +44,14 @@ export interface PluginManifest {
    *  each, shown in the consent dialogs as the plugin's text). Keys
    *  outside `permissions` are dropped. */
   permissionReasons?: Record<string, string>;
+  /** Where `net.fetch` may connect (exact hostnames, or "*"). Shown in
+   *  the consent dialogs beside `net.fetch`. Off-shape entries dropped. */
+  networkHosts?: string[];
+  /** The hosts the user consented to with `net.fetch` — written ONLY by
+   *  this module (like `grantedPermissions`), always ⊆ `networkHosts`,
+   *  empty unless `net.fetch` is granted. Stripped from downloaded
+   *  manifests. */
+  grantedNetworkHosts?: string[];
 }
 
 // Permission-id shape (parity-tested against src/editor/plugin-permissions.ts).
@@ -76,6 +85,12 @@ export function sanitizePermissionReasons(raw: unknown, declared: readonly strin
     if (text) out[p] = text;
   }
   return out;
+}
+
+/** The `net.fetch` hosts to store: none unless `net.fetch` is granted,
+ *  else the consented hosts ∩ the manifest's request. */
+export function grantedHostsFor(grant: readonly string[], consented: unknown, requested: unknown): string[] {
+  return grant.includes('net.fetch') ? intersectHosts(consented, requested) : [];
 }
 
 /** `granted ∩ requested`, sanitized — consent can never exceed what the
@@ -146,12 +161,19 @@ export function validateManifest(
   delete manifest.permissions;
   delete manifest.grantedPermissions;
   delete manifest.permissionReasons;
+  delete manifest.networkHosts;
+  delete manifest.grantedNetworkHosts;
   const permissions = sanitizePermissionList(m.permissions);
   if (permissions.length > 0) manifest.permissions = permissions;
   const reasons = sanitizePermissionReasons(m.permissionReasons, permissions);
   if (Object.keys(reasons).length > 0) manifest.permissionReasons = reasons;
+  const hosts = sanitizeNetworkHosts(m.networkHosts);
+  if (hosts.length > 0) manifest.networkHosts = hosts;
   if (m.grantedPermissions !== undefined) {
     manifest.grantedPermissions = intersectGrant(m.grantedPermissions, permissions);
+  }
+  if (m.grantedNetworkHosts !== undefined) {
+    manifest.grantedNetworkHosts = grantedHostsFor(manifest.grantedPermissions ?? [], m.grantedNetworkHosts, hosts);
   }
   return { ok: true, manifest };
 }
@@ -409,6 +431,8 @@ interface PendingInstall {
   expiresAt: number;
   /** Installed grant at inspect time (update path); undefined = fresh. */
   previousGranted?: string[];
+  /** Installed `net.fetch` hosts at inspect time (update path). */
+  previousGrantedHosts?: string[];
 }
 const pendingInstalls = new Map<string, PendingInstall>();
 /** Consent dialogs are humans reading text; a stale token is a bug or a
@@ -433,6 +457,10 @@ export async function inspectFromGithub(
        *  undefined for a fresh install — lets the renderer re-prompt
        *  only for what an update ADDS. */
       installedGranted?: string[];
+      /** The current install's consented `net.fetch` hosts (update
+       *  path) — lets the renderer re-ask `net.fetch` when an update
+       *  adds hosts. */
+      installedGrantedNetworkHosts?: string[];
     }
   | { ok: false; error: string }
 > {
@@ -478,6 +506,7 @@ export async function inspectFromGithub(
   // Consent is the USER's, recorded at commit — a published manifest
   // claiming a grant is ignored.
   delete v.manifest.grantedPermissions;
+  delete v.manifest.grantedNetworkHosts;
   const now = Date.now();
   prunePendingInstalls(now);
   const token = randomUUID();
@@ -486,13 +515,19 @@ export async function inspectFromGithub(
     bundleText,
     expiresAt: now + PENDING_TTL_MS,
     previousGranted: existing ? (existing.grantedPermissions ?? []) : undefined,
+    previousGrantedHosts: existing ? (existing.grantedNetworkHosts ?? []) : undefined,
   });
   return {
     ok: true,
     pending: token,
     plugin: v.manifest,
     ownerRepo,
-    ...(existing ? { installedGranted: existing.grantedPermissions ?? [] } : {}),
+    ...(existing
+      ? {
+          installedGranted: existing.grantedPermissions ?? [],
+          installedGrantedNetworkHosts: existing.grantedNetworkHosts ?? [],
+        }
+      : {}),
   };
 }
 
@@ -506,10 +541,14 @@ async function writeAtomic(finalPath: string, text: string): Promise<void> {
 /** Commit a staged install after the user consented. `granted` is the
  *  permission list the user agreed to (stored ∩ the manifest's request).
  *  An older renderer omits it: an update then keeps the prior consent
- *  (∩ the new request) and a fresh install grants nothing. */
+ *  (∩ the new request) and a fresh install grants nothing.
+ *  `networkHosts` is the same for the `net.fetch` host list: omitted,
+ *  the prior hosts ∩ the new request (an update's added hosts are never
+ *  granted without the renderer saying so). */
 export async function commitPendingInstall(
   token: string,
   granted?: unknown,
+  networkHosts?: unknown,
 ): Promise<{ ok: true; plugin: PluginManifest } | { ok: false; error: string }> {
   prunePendingInstalls(Date.now());
   const staged = pendingInstalls.get(String(token));
@@ -519,6 +558,10 @@ export async function commitPendingInstall(
   const consented = granted === undefined ? (staged.previousGranted ?? []) : granted;
   const grant = intersectGrant(consented, manifest.permissions);
   if (manifest.permissions?.length || grant.length) manifest.grantedPermissions = grant;
+  const hostConsent = networkHosts === undefined ? (staged.previousGrantedHosts ?? []) : networkHosts;
+  const hosts = grantedHostsFor(grant, hostConsent, manifest.networkHosts);
+  if (manifest.networkHosts?.length) manifest.grantedNetworkHosts = hosts;
+  else delete manifest.grantedNetworkHosts;
   const dir = pluginDir(manifest.id);
   await fs.mkdir(dir, { recursive: true });
   await writeAtomic(path.join(dir, MANIFEST_NAME), JSON.stringify(manifest, null, 2));
@@ -532,16 +575,24 @@ export async function commitPendingInstall(
 export async function setGrantedPermissions(
   id: string,
   granted: unknown,
-): Promise<{ ok: true; granted: string[] } | { ok: false; error: string }> {
+  networkHosts?: unknown,
+): Promise<{ ok: true; granted: string[]; networkHosts: string[] } | { ok: false; error: string }> {
   if (typeof id !== 'string' || !ID_RE.test(id)) return { ok: false, error: 'bad plugin id' };
   const manifest = await readInstalledManifest(id);
   if (!manifest) return { ok: false, error: 'not installed' };
   const grant = intersectGrant(granted, manifest.permissions);
-  await writeAtomic(
-    path.join(pluginDir(id), MANIFEST_NAME),
-    JSON.stringify({ ...manifest, grantedPermissions: grant }, null, 2),
+  // Omitted hosts: keep the stored ones (∩ the request) — a caller that
+  // doesn't know about hosts can never widen them.
+  const hosts = grantedHostsFor(
+    grant,
+    networkHosts === undefined ? (manifest.grantedNetworkHosts ?? []) : networkHosts,
+    manifest.networkHosts,
   );
-  return { ok: true, granted: grant };
+  const next: PluginManifest = { ...manifest, grantedPermissions: grant };
+  if (manifest.networkHosts?.length) next.grantedNetworkHosts = hosts;
+  else delete next.grantedNetworkHosts;
+  await writeAtomic(path.join(pluginDir(id), MANIFEST_NAME), JSON.stringify(next, null, 2));
+  return { ok: true, granted: grant, networkHosts: hosts };
 }
 
 export function discardPendingInstall(token: string): void {

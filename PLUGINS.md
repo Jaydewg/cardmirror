@@ -31,7 +31,7 @@ A plugin is one GitHub repository. Each release attaches two assets:
 | --- | --- | --- | --- |
 | `id` | string | yes | Lowercase. Must match `^[a-z0-9][a-z0-9-]*$`. Cannot be a Windows reserved device name (`con`, `prn`, `aux`, `nul`, `comN`, `lptN`). |
 | `name` | string | yes | Display name. |
-| `version` | string | yes | Semver, for example `0.1.0` or `0.2.0-beta.1`. |
+| `version` | string | yes | Semver, for example `0.1.0` or `0.2.0-beta.1`. Bump it for every release: update checks compare it with the installed copy's. Released versions should be plain (`1.2.3`); see [Releasing a plugin](#releasing-a-plugin). |
 | `permissions` | list | No | A list of permissions that the plugin asks for on startup.
 | `permissionReasons` | object | no | Why the plugin wants each permission, in its own words: `{ "collab.join": "…" }`. One line each, at most 200 characters, only for permissions in `permissions`. The install and update dialogs show it under CardMirror's own description, quoted and attributed to the plugin. Older builds ignore it. |
 | `description` | string | no | One line for the Plugins tab. Also shown on your plugin's card in the Browse-plugins picker when it is listed in the public directory. |
@@ -40,6 +40,8 @@ A plugin is one GitHub repository. Each release attaches two assets:
 | `minAppVersion` | string | no | Oldest CardMirror version that the plugin supports. Compared as plain semver — read the note below before setting it. |
 | `repo` | string | never in your release | The installer stamps `owner/repo` into the saved manifest. Update checks read it. Do not set it yourself. |
 | `grantedPermissions` | list | never | The permissions that the client grants.
+| `networkHosts` | list | no | Where `net.fetch` may connect: exact hostnames (`"api.crossref.org"`), or `"*"` for any https site. At most 16. No IP addresses, `localhost`, ports or paths; off-shape entries are dropped. List the same hosts in the registered definition: only hosts in both count. The consent dialogs show them beside `net.fetch`. Older builds ignore it. |
+| `grantedNetworkHosts` | list | never | The hosts the user consented to with `net.fetch`. Written by CardMirror; a release that sets it is ignored. |
 
 Example 1 (permissions-less):
 
@@ -143,6 +145,36 @@ the allowlist.
 A developer path exists: "Load plugin from file..." in the Plugins tab
 loads a local `plugin.js` without an install.
 
+### Updates
+
+An update is a reinstall of the same repo's newer latest release,
+through the same staging and allowlist check as an install. "Newer"
+means the release manifest's `version` sorts above the installed one.
+Two paths lead there; both apply the same permission rules
+(`src/editor/plugin-update.ts`):
+
+- **Check for updates** (the button on the plugin's row). The user
+  confirms the update. Permissions the new version adds are then asked
+  about, ticked; ones the user turned off are listed unticked, only
+  while the plugin may "ask again". Declining discards the staged
+  release.
+- **Auto-update** (the checkbox on the plugin's row, on by default;
+  only shown for plugins installed from a repo). Shortly after launch,
+  and every few hours while the app stays open, CardMirror checks each
+  such plugin, at most once a day per plugin (a failed check counts).
+  - If the new version asks for no permission it didn't already
+    request, it installs without asking. What was granted stays
+    granted, what the user turned off stays off, and permissions this
+    build doesn't know are never granted. A status-bar notice says
+    which plugins were updated.
+  - If it asks for a new permission, nothing is installed. A
+    status-bar notice offers **Review update**, which opens the
+    permission dialog.
+
+Either way the new bundle takes effect on the next launch: code that
+already ran can't be unloaded. Removing a repo from the allowlist also
+stops its updates, since every update re-checks the list.
+
 ### Uninstall
 
 Uninstalling removes the install directory, the plugin's enabled flag
@@ -175,6 +207,51 @@ nothing).
   the namespace or method you need (`api.ui?.…`,
   `api.permissions?.status(p)`) and explain to the user what's
   missing.
+
+### Releasing a plugin
+
+What users' copies pick up is the **latest release** of the plugin's
+repo, as GitHub reports it at `/repos/{owner}/{repo}/releases/latest`.
+So:
+
+1. **One public repo per plugin.** A repo whose releases are the app
+   itself (or another plugin) can't also host a plugin. The repo needs
+   at least one commit (a README is enough) before it can carry a
+   release. The repo name is permanent for existing installs: each
+   install records it and checks it for updates.
+2. **Bump `version` in `cardmirror-plugin.json` for every release.** An
+   equal or lower version is ignored by update checks.
+3. **Release a plain version (`1.2.3`), not a prerelease.** GitHub's
+   "latest release" skips releases marked prerelease and drafts, so
+   users would never see one.
+4. **Attach exactly `cardmirror-plugin.json` and `plugin.js`**, built
+   from the same commit, each 5 MiB or less.
+5. **Get the repo onto the allowlist** (see above) before the first
+   install. It stays there for updates.
+
+First-party plugins keep their source in this repository under
+`plugins/<id>/` and publish with:
+
+```sh
+npm run release:plugin -- <id> [--repo owner/name]          # dry run
+GITHUB_TOKEN=… npm run release:plugin -- <id> --publish
+```
+
+`scripts/release-plugin.mjs` refuses to run when any of these fail:
+
+- the manifest is invalid, or uses a prerelease version;
+- the plugin's own test, typecheck or build fails;
+- the target repo is private or missing;
+- the tag already exists;
+- the version isn't newer than the latest release.
+
+The target repo comes from `--repo` or `"releaseRepo"` in the plugin's
+`package.json` (never the manifest — the installer writes `repo`
+there). Release notes come from the plugin's `CHANGELOG.md` section
+for that version, when there is one. With `--publish`, the script
+creates the release as a draft, uploads both files, and then publishes
+it, so no client ever sees a release without its files. The token
+needs `contents: write` on the target repo.
 
 ## 2. Registration
 
@@ -221,6 +298,15 @@ export interface PluginDefinition {
   apiVersion: number;
   commands: PluginCommandDef[];
   settings?: PluginSettingDef[];
+  /** Same list as the manifest's `permissions` (section 3). */
+  permissions?: string[];
+  /** Your reason per permission, for `api.permissions.request` prompts. */
+  permissionReasons?: Record<string, string>;
+  /** Same list as the manifest's `networkHosts` (for `net.fetch`). */
+  networkHosts?: string[];
+  /** Runs at load and again with a fresh api after every permission
+   *  change; return a cleanup. */
+  activate?: (api: CardMirrorPluginApi) => void | (() => void);
 }
 ```
 
@@ -462,6 +548,16 @@ if (r.status === 'granted') await r.api.collab?.join(address);
   builds have neither, so feature-detect with
   `api.permissions?.request`.
 
+#### What gets read aloud (`PluginCard.bodyRead`, with `doc.read`)
+
+```ts
+const card = api.doc?.read?.()?.cards[0];
+card?.bodyRead; // e.g. [[[17, 31]], []] — one list per entry of card.body
+const read = card?.bodyRead?.[0]?.map(([from, to]) => card.body[0]!.slice(from, to));
+```
+
+Each card carries `bodyRead` next to `body`: for every body paragraph, the `[start, end)` character ranges of its text that are read aloud. That is highlighted text that isn't shaded, the same rule the read-aloud word count uses. Ranges are sorted, never overlap, and adjacent runs are merged, so a highlight color change mid-word stays one range. An empty list means nothing in that paragraph is read. Builds before it existed leave it out, so check `card.bodyRead !== undefined` and explain that the user needs a newer CardMirror. To mark a range with `annotations.set`, pass the paragraph's index and the exact text as `match`, with `occurrence` counted the way `String.indexOf` finds it (each search starts one character after the last hit).
+
 <!-- permission-table:start -->
 <!-- Generated from src/editor/plugin-permissions.ts and src/editor/plugin-call-rules.ts. Do not edit by hand: run `npm run docs:permissions`. -->
 
@@ -473,16 +569,71 @@ if (r.status === 'granted') await r.api.collab?.join(address);
 | `collab.server` | low | See which co-editing server you use | `collab.server`, `collab.reach`, `collab.parseAddress` |
 | `collab.shareCode` | high | Read your session share codes | `collab.shareCode`, `collab.shareAddress` |
 | `collab.viewCode` | medium | Read your sessions’ view-only links | `collab.viewCode`, `collab.viewAddress` |
+| `doc.annotate` | low | Mark text in your documents | `annotations.set`, `annotations.clear` |
 | `doc.edit` | high | Add content to your documents | `doc.insert` |
 | `doc.events` | low | Notice when you edit or switch documents | `events.onDocChange`, `events.onSelectionChange`, `events.onFocusChange` |
-| `doc.read` | medium | Read your open documents | `doc.read` |
+| `doc.read` | medium | Read your open documents | `doc.read`, `doc.jumpTo` |
 | `files.data` | medium | Store its own data in your documents | `files.onSave`, `files.onOpen`, `files.get`, `files.focusedDoc` |
+| `net.fetch` | high | Connect to websites | `net.fetch` |
 | `ui.contextMenu` | low | Add right-click menu items | `menu.add` |
 | `ui.dialogs` | low | Show dialogs | `ui.choose`, `ui.confirm` |
 | `ui.notices` | low | Post notices in the status bar | `notices.post` |
 | `ui.panel` | low | Show a side panel | `panel.get` |
 
 <!-- permission-table:end -->
+
+#### Jumping to a card (`doc.jumpTo`, with `doc.read`)
+
+```ts
+const r = await api.doc?.jumpTo?.({ headingId: card.headingId!, part: 'cite' });
+// r: JumpResult — { ok: true } | { ok: false, error: 'doc-not-open' | 'not-found' | 'bad-request' }
+```
+
+Takes any heading id the plugin got from `doc.read` (`PluginCard.headingId`, an outline item's `id`) or from a menu target. It puts the cursor there and scrolls to it. `part: 'cite'` lands on the start of the card's first cite paragraph instead (the heading when it has none). `docUid` targets another open document. Headings inside live views and linked copies are never targets.
+
+#### Marking text (`doc.annotate` → `api.annotations`)
+
+Spellcheck-style marks with a note. They are display-only: never saved, never synced to a co-editing session, never in undo. Each `set` **replaces** all of the plugin's marks in that document. Between calls they move with the user's edits, so re-set them from `events.onDocChange`.
+
+```ts
+const r = api.annotations?.set([
+  {
+    headingId: card.headingId!,      // from doc.read
+    part: 'cite',                    // 'heading' | 'cite' | 'body' | 'undertag'
+    index: 0,                        // which paragraph of that part (default 0)
+    match: 'Freelance writer',       // exact substring (default: the whole paragraph)
+    occurrence: 0,                   // which match (default 0)
+    severity: 'warning',             // 'error' | 'warning' | 'info'
+    message: 'Vague quals',          // ≤ 200 chars; hover + right-click
+    style: 'squiggle',               // optional: 'squiggle' | 'underline' | 'dotted' | 'tint' | 'box'
+    color: 'amber',                  // optional: 'red' | 'amber' | 'blue' | 'green' | 'purple' | 'gray'
+    key: 'quals:abc',                // optional, your own id
+    actions: [{ label: 'Ignore for this card', run: () => ignore(card) }], // ≤ 2
+  },
+], { docUid });
+// r: { ok: true, placed, unplaced } | { ok: false, error: 'no-doc' | 'hidden' }
+api.annotations?.clear({ docUid });
+```
+
+- Anchors use ids, never positions. One that doesn't land (heading gone, no such paragraph, match not found) is skipped and counted in `unplaced`. Mirrored content (live views, linked copies) is never marked.
+- `severity` sets the look unless you pass `style` / `color`: errors are red squiggles, warnings amber squiggles, info blue dots. Colors are theme colors picked by name, so they follow dark mode, the color-vision preset and the user's own color choices. There is no raw CSS.
+- Unknown fields and unknown `style` / `color` values are ignored, so a plugin written for a newer CardMirror degrades instead of failing. At most 2,000 marks per document. A non-array throws.
+- Right-clicking a mark shows its message labeled with your plugin's name, your actions, and **Hide markings from <plugin> in this document**. After that, `set` answers `hidden` in that document until CardMirror restarts. A misspelled word inside a mark keeps the spelling menu.
+- Revoking `doc.annotate` removes every mark the plugin made.
+
+#### Connecting to websites (`net.fetch` → `api.net`)
+
+```ts
+const r = await api.net?.fetch('https://api.crossref.org/works/10.1038/nature12373', {
+  headers: { Accept: 'application/json' },
+});
+if (r?.ok && r.status === 200) JSON.parse(r.body);
+```
+
+- Only https, and only the hosts in `networkHosts` (manifest **and** definition) that the user saw when they allowed `net.fetch`. Anything else, including a redirect that leaves those hosts, answers `{ ok: false, error: 'host-not-granted' }`. An update that adds hosts asks for `net.fetch` again.
+- `ok: true` means a reply arrived, whatever its status. Read `status`. Errors are a growing union: `host-not-granted`, `offline` (this build can't make requests), `timeout`, `too-large`, `network`, `bad-request`. Treat an unknown one like `network`.
+- Requests run in CardMirror's desktop process. They carry no cookies or credentials, `Cookie`, `Host`, `Proxy-*` and hop-by-hop headers are dropped, and the User-Agent is `CardMirror-Plugin/1` unless you set one. Methods are `GET`, `HEAD` and `POST`. The request body is a string of at most 1 MB, and replies are capped at 5 MB, decoded as UTF-8. `timeoutMs` defaults to 15000 and is at most 30000.
+- Anything you send can include the user's document text, and the consent copy says so. Send only what the feature needs, and never the user's identity unless they typed it into your settings for that purpose.
 
 ### Extraction rules
 

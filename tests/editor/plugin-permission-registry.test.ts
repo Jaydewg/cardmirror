@@ -89,6 +89,7 @@ describe('registry permission grants', () => {
       unknown: ['future.thing'],
       granted: ['ui.dialogs'],
       reasons: {},
+      networkHosts: [],
     });
   });
 

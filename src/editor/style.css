@@ -832,6 +832,15 @@ button {
      the AI purple used elsewhere. */
   --pmd-color-zone-diverged: var(--pmd-user-color-zoneDiverged, #c0504d);
   --pmd-c-spellcheck: red;             /* misspelling squiggle */
+  /* Plugin marks (api.annotations): the ONLY colors a plugin can pick,
+     by name. Theme tokens so they track dark mode, the color-vision
+     preset and user rebinding (settings.ts rebindable list). */
+  --pmd-c-plugin-mark-red: #d32f2f;
+  --pmd-c-plugin-mark-amber: #d97706;
+  --pmd-c-plugin-mark-blue: #2563eb;
+  --pmd-c-plugin-mark-green: #15803d;
+  --pmd-c-plugin-mark-purple: #7c3aed;
+  --pmd-c-plugin-mark-gray: #6b7280;
   --pmd-c-live-indicator: #00ff66;     /* benchmark live dot */
   --pmd-c-bench-chip-bg: rgba(20, 22, 26, 0.92); /* diagnostics chip: fixed dark */
   --pmd-c-bench-chip-text: #eaeaea;
@@ -1039,6 +1048,12 @@ button {
      editor surface. Word's canonical #0563C1 has perceived
      luminance ~0.32 and disappears against #1a1a1a. */
   --pmd-c-link: #7AB0FF;
+  --pmd-c-plugin-mark-red: #f87171;
+  --pmd-c-plugin-mark-amber: #fbbf24;
+  --pmd-c-plugin-mark-blue: #60a5fa;
+  --pmd-c-plugin-mark-green: #4ade80;
+  --pmd-c-plugin-mark-purple: #a78bfa;
+  --pmd-c-plugin-mark-gray: #9ca3af;
 }
 
 /* ── Color-vision friendly preset ───────────────────────────────────
@@ -1109,6 +1124,14 @@ button {
   --pmd-c-cat-cite-fg: #96426d;
   --pmd-c-cat-undertag-bg: rgba(0, 158, 115, 0.16);
   --pmd-c-cat-undertag-fg: #00775a;
+
+  /* Plugin marks: Okabe-Ito (vermillion / orange / blue / bluish
+     green / reddish purple), so the six stay distinguishable. */
+  --pmd-c-plugin-mark-red: #d55e00;
+  --pmd-c-plugin-mark-amber: #e69f00;
+  --pmd-c-plugin-mark-blue: #0072b2;
+  --pmd-c-plugin-mark-green: #009e73;
+  --pmd-c-plugin-mark-purple: #cc79a7;
 }
 
 /* Dark theme + preset: brighter Okabe-Ito variants (sky-blue anchor),
@@ -1151,6 +1174,12 @@ button {
   --pmd-c-cat-cite-fg: #e3a7c7;
   --pmd-c-cat-undertag-bg: rgba(0, 158, 115, 0.25);
   --pmd-c-cat-undertag-fg: #66d2b3;
+
+  --pmd-c-plugin-mark-red: #ee7733;
+  --pmd-c-plugin-mark-amber: #f0b429;
+  --pmd-c-plugin-mark-blue: #56b4e9;
+  --pmd-c-plugin-mark-green: #20c997;
+  --pmd-c-plugin-mark-purple: #e09cc4;
 }
 
 /* Bars re-themed by `data-bar-scheme`: text color and native-control
@@ -6690,6 +6719,19 @@ html.pmd-nav-flat .pmd-nav-type-analytic:hover .pmd-nav-label {
   font-weight: 500;
 }
 
+/* Per-plugin Auto-update switch: a small labelled checkbox before the
+   Check-for-updates button. */
+.pmd-plugins-autoupdate {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+  font-size: 0.85rem;
+  color: var(--pmd-c-text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
 /* An install that needs a newer CardMirror: listed (so it's visible and
    uninstallable) but muted, with its toggle disabled. */
 .pmd-plugins-row-incompatible .pmd-plugins-name {
@@ -6817,6 +6859,12 @@ label.pmd-plugin-perm-row {
   font-size: 0.82rem;
   color: var(--pmd-c-text-muted);
   line-height: 1.35;
+}
+.pmd-plugin-perm-hosts {
+  font-size: 0.8rem;
+  font-family: ui-monospace, monospace;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 .pmd-plugin-perm-badge {
   display: inline-block;
@@ -14047,6 +14095,51 @@ body.pmd-timer-popout-page .pmd-timer-display {
 .pmd-misspelled {
   text-decoration: var(--pmd-c-spellcheck) wavy underline;
   text-decoration-skip-ink: none;
+}
+
+/* Plugin marks (plugin-annotations.ts): a fixed set of styles in the
+   fixed --pmd-c-plugin-mark-* palette. Colored, offset and thick enough
+   that none reads as document formatting (black underline, highlight,
+   shading) or as the spellcheck squiggle. */
+.pmd-plugin-mark { --pmd-plugin-mark-c: var(--pmd-c-plugin-mark-blue); }
+.pmd-plugin-mark--red { --pmd-plugin-mark-c: var(--pmd-c-plugin-mark-red); }
+.pmd-plugin-mark--amber { --pmd-plugin-mark-c: var(--pmd-c-plugin-mark-amber); }
+.pmd-plugin-mark--blue { --pmd-plugin-mark-c: var(--pmd-c-plugin-mark-blue); }
+.pmd-plugin-mark--green { --pmd-plugin-mark-c: var(--pmd-c-plugin-mark-green); }
+.pmd-plugin-mark--purple { --pmd-plugin-mark-c: var(--pmd-c-plugin-mark-purple); }
+.pmd-plugin-mark--gray { --pmd-plugin-mark-c: var(--pmd-c-plugin-mark-gray); }
+.pmd-plugin-mark--squiggle {
+  text-decoration: var(--pmd-plugin-mark-c) wavy underline;
+  text-decoration-skip-ink: none;
+  text-underline-offset: 2px;
+}
+.pmd-plugin-mark--underline {
+  text-decoration: var(--pmd-plugin-mark-c) solid underline;
+  text-decoration-thickness: 2px;
+  text-decoration-skip-ink: none;
+  text-underline-offset: 4px;
+}
+.pmd-plugin-mark--dotted {
+  text-decoration: var(--pmd-plugin-mark-c) dotted underline;
+  text-decoration-thickness: 2px;
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
+.pmd-plugin-mark--tint {
+  background-color: color-mix(in srgb, var(--pmd-plugin-mark-c) 14%, transparent);
+  box-shadow: inset 0 -1px 0 var(--pmd-plugin-mark-c);
+}
+.pmd-plugin-mark--box {
+  outline: 1px solid var(--pmd-plugin-mark-c);
+  outline-offset: 1px;
+  border-radius: 2px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.pmd-plugin-mark-menu-message {
+  white-space: normal;
+  max-width: 28rem;
+  font-style: italic;
 }
 
 /* ── Voice card ─────────────────────────────────────────────

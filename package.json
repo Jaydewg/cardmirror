@@ -35,7 +35,8 @@
     "build:lite": "VITE_LITE=1 VITE_OUT_DIR=dist-lite vite build",
     "verify:lite": "node scripts/verify-lite-bundle.mjs",
     "docs:permissions": "node scripts/update-permission-table.mjs",
-    "check:plugins": "node scripts/check-plugins.mjs"
+    "check:plugins": "node scripts/check-plugins.mjs",
+    "release:plugin": "node scripts/release-plugin.mjs"
   },
   "dependencies": {
     "fast-xml-parser": "^5.12.0",

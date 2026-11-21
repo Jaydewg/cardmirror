@@ -86,6 +86,7 @@ import {
   uninstallPlugin,
   checkPluginUpdate,
 } from './plugin-manager.js';
+import { pluginFetch } from './plugin-net.js';
 import {
   grantReadPath,
   grantReadDir,
@@ -1002,12 +1003,14 @@ ipcMain.handle('host:plugin-browse', async () => fetchPluginDirectory());
 // `granted` = the permissions the user just consented to (absent from an
 // older renderer — commit then keeps the prior consent on an update).
 // Main clamps it to the manifest's own request.
-ipcMain.handle('host:plugin-install-commit', async (_e, token: string, granted?: unknown) =>
-  commitPendingInstall(String(token), granted),
+ipcMain.handle('host:plugin-install-commit', async (_e, token: string, granted?: unknown, networkHosts?: unknown) =>
+  commitPendingInstall(String(token), granted, networkHosts),
 );
-ipcMain.handle('host:plugin-set-permissions', async (_e, id: string, granted: unknown) =>
-  setGrantedPermissions(String(id), granted),
+ipcMain.handle('host:plugin-set-permissions', async (_e, id: string, granted: unknown, networkHosts?: unknown) =>
+  setGrantedPermissions(String(id), granted, networkHosts),
 );
+// `api.net.fetch` — see plugin-net.ts (Lite refuses inside).
+ipcMain.handle('host:plugin-fetch', async (_e, req: unknown) => pluginFetch(req));
 ipcMain.handle('host:plugin-install-discard', async (_e, token: string) => {
   discardPendingInstall(String(token));
 });

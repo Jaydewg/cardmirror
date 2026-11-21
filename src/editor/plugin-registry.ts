@@ -9,8 +9,10 @@
 import { showToast } from './toast.js';
 import type { CardMirrorPluginApi, PluginGrantContext, PluginPermissionRequestResult } from './plugin-api.js';
 import {
+  intersectHosts,
   isKnownPermission,
   permissionStatus,
+  sanitizeNetworkHosts,
   resolveGrant,
   sanitizePermissionList,
   sanitizePermissionReasons,
@@ -75,6 +77,13 @@ export interface PluginDefinition {
    *  show; this one is used for `api.permissions.request` prompts and a
    *  bundle loaded from file. Older CardMirror builds ignore it. */
   permissionReasons?: Record<string, string>;
+  /** Where `net.fetch` may connect: exact hostnames
+   *  (`"api.crossref.org"`), or `"*"` for any https site. Must also be
+   *  listed in the manifest's `networkHosts` — like permissions, only
+   *  hosts in both count — and the user sees the list when asked for
+   *  `net.fetch`. At most 16; off-shape entries are dropped. Older
+   *  CardMirror builds ignore it. */
+  networkHosts?: string[];
   /** Lifecycle hook: called with the plugin's api right after it
    *  registers, and AGAIN every time that api is re-minted (the user
    *  grants or revokes a permission, or the bundle re-registers). Register
@@ -99,6 +108,8 @@ interface RegisteredPlugin {
   declared: string[];
   /** Sanitized `permissionReasons` from the definition. */
   reasons: Record<string, string>;
+  /** Sanitized `networkHosts` from the definition. */
+  hosts: string[];
   granted: ReadonlySet<string>;
   /** The definition's `activate`, read once at registration. */
   activate: PluginDefinition['activate'] | undefined;
@@ -121,6 +132,11 @@ const consent = new Map<string, string[]>();
 const manifestPermissions = new Map<string, string[]>();
 /** Installed plugins' MANIFEST `permissionReasons` (host-provided). */
 const manifestReasons = new Map<string, Record<string, string>>();
+/** Installed plugins' MANIFEST `networkHosts` (host-provided). */
+const manifestHosts = new Map<string, string[]>();
+/** The hosts the user saw when they granted `net.fetch` (installed:
+ *  main's `grantedNetworkHosts`; session-only for dev loads). */
+const consentHosts = new Map<string, string[]>();
 /** The user's answer to a just-in-time permission prompt. */
 export type PermissionPromptAnswer = 'allow' | 'not-now' | 'never';
 export interface PermissionPromptRequest {
@@ -129,12 +145,16 @@ export interface PermissionPromptRequest {
   permission: string;
   /** The plugin's reason, sanitized; null when it gave none. */
   reason: string | null;
+  /** For `net.fetch`: the hosts it would reach (`"*"` = any website). */
+  networkHosts?: string[];
 }
 let permissionPromptHook: ((req: PermissionPromptRequest) => Promise<PermissionPromptAnswer>) | null = null;
 /** Persist a new consent list (installed plugins: main's manifest).
  *  Resolves the stored list, or null when it couldn't be stored. Absent:
  *  session-only, like a bundle loaded from file. */
-let persistConsentHook: ((pluginId: string, consented: string[]) => Promise<string[] | null>) | null = null;
+let persistConsentHook:
+  | ((pluginId: string, consented: string[], networkHosts: string[]) => Promise<string[] | null>)
+  | null = null;
 let permissionRequestHook:
   | ((pluginId: string, name: string, known: string[], unknown: string[]) => void)
   | null = null;
@@ -261,6 +281,7 @@ export function registerPluginDefinition(
   // built for a newer CardMirror must still load here.
   const declared = sanitizePermissionList(def.permissions);
   const reasons = sanitizePermissionReasons(def.permissionReasons, declared);
+  const hosts = sanitizeNetworkHosts(def.networkHosts);
   const activate = def.activate;
   if (activate !== undefined && typeof activate !== 'function') {
     return { ok: false, error: 'activate must be a function' };
@@ -278,6 +299,7 @@ export function registerPluginDefinition(
       p.settings = settingsRes.settings;
       p.declared = declared;
       p.reasons = reasons;
+      p.hosts = hosts;
       // A re-run bundle brings fresh closures: activate the new ones.
       p.activate = activate;
       mintApi(p);
@@ -293,6 +315,7 @@ export function registerPluginDefinition(
     settings: settingsRes.settings,
     declared,
     reasons,
+    hosts,
     granted: new Set(),
     activate,
     cleanup: null,
@@ -389,11 +412,45 @@ function maybeRequestPermissions(p: RegisteredPlugin): void {
   }
 }
 
-/** Record the user's consented permissions for a plugin id. The host
- *  calls this from the installed manifest BEFORE loading the bundle, so
- *  registration mints with the right grant. */
-export function setPluginConsent(pluginId: string, consented: readonly string[]): void {
+/** Record the user's consented permissions for a plugin id (and, for
+ *  `net.fetch`, the hosts they consented to). The host calls this from
+ *  the installed manifest BEFORE loading the bundle, so registration
+ *  mints with the right grant. Omitting `networkHosts` keeps the hosts
+ *  already on record. */
+export function setPluginConsent(
+  pluginId: string,
+  consented: readonly string[],
+  networkHosts?: readonly string[],
+): void {
   consent.set(pluginId, sanitizePermissionList(consented));
+  if (networkHosts !== undefined) consentHosts.set(pluginId, sanitizeNetworkHosts(networkHosts));
+}
+
+/** The hosts a plugin asks for: its definition's ∩ its manifest's (an
+ *  installed plugin), else whichever of the two is known. */
+export function pluginDeclaredNetworkHosts(pluginId: string): string[] {
+  const def = plugins.get(pluginId)?.hosts;
+  const manifest = manifestHosts.get(pluginId);
+  if (def && manifest) return intersectHosts(def, manifest);
+  return [...(def ?? manifest ?? [])];
+}
+
+/** Where `net.fetch` may connect right now: none unless `net.fetch` is
+ *  granted; then the declared hosts the user consented to. */
+export function pluginNetworkHosts(pluginId: string): string[] {
+  if (!pluginHasPermission(pluginId, 'net.fetch')) return [];
+  return intersectHosts(pluginDeclaredNetworkHosts(pluginId), consentHosts.get(pluginId) ?? []);
+}
+
+/** The hosts to record with a new consent list: none without
+ *  `net.fetch`; the ones already consented to when it stays granted;
+ *  else (newly granted) the declared hosts, which is what every consent
+ *  surface shows beside it. */
+export function nextConsentHosts(pluginId: string, consented: readonly string[]): string[] {
+  if (!consented.includes('net.fetch')) return [];
+  const had = consent.get(pluginId)?.includes('net.fetch') ?? false;
+  const prior = consentHosts.get(pluginId);
+  return had && prior ? [...prior] : pluginDeclaredNetworkHosts(pluginId);
 }
 
 /** Record an installed plugin's manifest permission list and reasons
@@ -403,10 +460,12 @@ export function setPluginManifestPermissions(
   pluginId: string,
   permissions: readonly string[],
   reasons?: unknown,
+  networkHosts?: unknown,
 ): void {
   const list = sanitizePermissionList(permissions);
   manifestPermissions.set(pluginId, list);
   manifestReasons.set(pluginId, sanitizePermissionReasons(reasons, list));
+  manifestHosts.set(pluginId, sanitizeNetworkHosts(networkHosts));
 }
 
 /** A plugin's reason for `permission`: the definition's, else the
@@ -449,9 +508,12 @@ export async function requestPluginPermission(
   const own = typeof opts?.reason === 'string' ? sanitizePermissionReasons({ [perm]: opts.reason }, [perm])[perm] : undefined;
   const reason = own ?? pluginPermissionReason(pluginId, perm);
   const prompt = permissionPromptHook;
+  const networkHosts = perm === 'net.fetch' ? pluginDeclaredNetworkHosts(pluginId) : undefined;
   let answer: PermissionPromptAnswer;
   try {
-    answer = await withPromptSlot(() => prompt({ pluginId, name: p.def.name, permission: perm, reason }));
+    answer = await withPromptSlot(() =>
+      prompt({ pluginId, name: p.def.name, permission: perm, reason, ...(networkHosts ? { networkHosts } : {}) }),
+    );
   } catch (err) {
     console.error('[plugins] permission prompt failed:', err);
     return result();
@@ -465,10 +527,11 @@ export async function requestPluginPermission(
     return result();
   }
   const next = sanitizePermissionList([...(consent.get(pluginId) ?? []), perm]);
+  const nextHosts = nextConsentHosts(pluginId, next);
   let stored: string[] | null = next;
   if (persistConsentHook) {
     try {
-      stored = await persistConsentHook(pluginId, next);
+      stored = await persistConsentHook(pluginId, next, nextHosts);
     } catch (err) {
       console.error('[plugins] storing a permission grant failed:', err);
       stored = null;
@@ -480,7 +543,7 @@ export async function requestPluginPermission(
   }
   // The plugin may have unregistered while the prompt was open.
   if (plugins.get(pluginId) !== p) return result();
-  regrantPlugin(pluginId, stored);
+  regrantPlugin(pluginId, stored, nextHosts);
   return result();
 }
 
@@ -512,6 +575,14 @@ function warnManifestDrift(p: RegisteredPlugin): void {
       );
     }
   }
+  const mHosts = manifestHosts.get(p.def.id);
+  if (mHosts && (mHosts.join(',') !== p.hosts.join(','))) {
+    console.warn(
+      `[plugins] ${p.def.id}: cardmirror-plugin.json and the registered definition list different networkHosts ` +
+        `(manifest: ${mHosts.join(', ') || 'none'}; definition: ${p.hosts.join(', ') || 'none'}); ` +
+        `net.fetch reaches only hosts in both.`,
+    );
+  }
   const drift = pluginManifestDrift(p.def.id);
   if (!drift) return;
   const list = (xs: string[]): string => (xs.length ? xs.join(', ') : 'none');
@@ -526,13 +597,20 @@ function warnManifestDrift(p: RegisteredPlugin): void {
  *  (the dev Permission Demo's off switch). */
 export function forgetPluginConsent(pluginId: string): void {
   consent.delete(pluginId);
+  consentHosts.delete(pluginId);
 }
 
 /** Change a plugin's consent and re-mint its api immediately (the
  *  Settings → Plugins permissions modal, and the dev-load prompt).
- *  Returns the new effective grant. */
-export function regrantPlugin(pluginId: string, consented: readonly string[]): ReadonlySet<string> {
-  setPluginConsent(pluginId, consented);
+ *  `networkHosts` defaults to `nextConsentHosts`. Returns the new
+ *  effective grant. */
+export function regrantPlugin(
+  pluginId: string,
+  consented: readonly string[],
+  networkHosts?: readonly string[],
+): ReadonlySet<string> {
+  const hosts = networkHosts ?? nextConsentHosts(pluginId, sanitizePermissionList(consented));
+  setPluginConsent(pluginId, consented, hosts);
   const p = plugins.get(pluginId);
   if (!p) return new Set();
   mintApi(p);
@@ -556,7 +634,15 @@ export function pluginDisplayName(pluginId: string): string | null {
  *  falls back to the manifest's lists. */
 export function pluginPermissionInfo(
   pluginId: string,
-): { declared: string[]; known: string[]; unknown: string[]; granted: string[]; reasons: Record<string, string> } | null {
+): {
+  declared: string[];
+  known: string[];
+  unknown: string[];
+  granted: string[];
+  reasons: Record<string, string>;
+  /** Hosts it asks for (definition ∩ manifest). */
+  networkHosts: string[];
+} | null {
   const p = plugins.get(pluginId);
   if (!p) return null;
   const { known, unknown } = splitKnown(p.declared);
@@ -566,6 +652,7 @@ export function pluginPermissionInfo(
     unknown,
     granted: [...p.granted].sort(),
     reasons: pluginPermissionReasons(pluginId),
+    networkHosts: pluginDeclaredNetworkHosts(pluginId),
   };
 }
 
@@ -633,8 +720,9 @@ export function installPluginRegistry(
     /** Show a just-in-time prompt (`api.permissions.request`). Absent:
      *  requests never prompt. */
     onPermissionPrompt?: (req: PermissionPromptRequest) => Promise<PermissionPromptAnswer>;
-    /** Store a consent list a prompt changed (see persistConsentHook). */
-    persistConsent?: (pluginId: string, consented: string[]) => Promise<string[] | null>;
+    /** Store a consent list a prompt changed (see persistConsentHook),
+     *  with the `net.fetch` hosts to record beside it. */
+    persistConsent?: (pluginId: string, consented: string[], networkHosts: string[]) => Promise<string[] | null>;
   } = {},
 ): void {
   makeApi = createApi;
@@ -706,6 +794,8 @@ export function resetPluginRegistryForTests(): void {
   consent.clear();
   manifestPermissions.clear();
   manifestReasons.clear();
+  manifestHosts.clear();
+  consentHosts.clear();
   permissionPromptHook = null;
   persistConsentHook = null;
   grantListeners.clear();

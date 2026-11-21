@@ -993,6 +993,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   flowApps: (): Promise<unknown[]> => ipcRenderer.invoke('host:flow-apps'),
   flowPost: (appId: string, route: string, body: unknown): Promise<Record<string, unknown>> =>
     ipcRenderer.invoke('host:flow-post', appId, route, body),
+  /** `api.net.fetch` (plugin-caps/net.ts): run in main, see plugin-net.ts. */
+  pluginFetch: (req: unknown): Promise<Record<string, unknown>> => ipcRenderer.invoke('host:plugin-fetch', req),
   onExternalJumpRequest(handler: (req: {
     requestId: string;
     source: string;
@@ -1045,12 +1047,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('host:plugin-install-inspect', ref),
   pluginBrowse: (): Promise<Record<string, unknown>> =>
     ipcRenderer.invoke('host:plugin-browse'),
-  pluginInstallCommit: (token: string, granted?: string[]): Promise<Record<string, unknown>> =>
+  pluginInstallCommit: (token: string, granted?: string[], networkHosts?: string[]): Promise<Record<string, unknown>> =>
     granted === undefined
       ? ipcRenderer.invoke('host:plugin-install-commit', token)
-      : ipcRenderer.invoke('host:plugin-install-commit', token, granted),
-  pluginSetPermissions: (id: string, granted: string[]): Promise<Record<string, unknown>> =>
-    ipcRenderer.invoke('host:plugin-set-permissions', id, granted),
+      : networkHosts === undefined
+        ? ipcRenderer.invoke('host:plugin-install-commit', token, granted)
+        : ipcRenderer.invoke('host:plugin-install-commit', token, granted, networkHosts),
+  pluginSetPermissions: (id: string, granted: string[], networkHosts?: string[]): Promise<Record<string, unknown>> =>
+    networkHosts === undefined
+      ? ipcRenderer.invoke('host:plugin-set-permissions', id, granted)
+      : ipcRenderer.invoke('host:plugin-set-permissions', id, granted, networkHosts),
   pluginInstallDiscard: (token: string): Promise<void> =>
     ipcRenderer.invoke('host:plugin-install-discard', token),
   pluginCommunityInstalls: (on: boolean): Promise<void> =>
