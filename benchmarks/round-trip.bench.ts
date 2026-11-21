@@ -5,9 +5,12 @@
  * tracking. Benches every `.docx` in the configured fixtures directory
  * (override with `CARDMIRROR_DOCS_DIR`). Silent when the directory is
  * empty or missing.
+ *
+ * Vitest 5+ API: each benchmark is a `test` that registers and runs its
+ * bench through the `bench` test-context fixture.
  */
 
-import { bench, describe, beforeAll } from 'vitest';
+import { test, describe, beforeAll } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { fromDocx } from '../src/import/index.js';
 import { toDocx } from '../src/export/index.js';
@@ -34,28 +37,34 @@ beforeAll(async () => {
 
 describe.skipIf(discovered.length === 0)('import (.docx → schema)', () => {
   for (const { filename } of discovered) {
-    bench(`import ${filename}`, async () => {
-      const fix = loaded.find((f) => f.filename === filename)!;
-      await fromDocx(fix.bytes);
+    test(`import ${filename}`, async ({ bench }) => {
+      await bench(`import ${filename}`, async () => {
+        const fix = loaded.find((f) => f.filename === filename)!;
+        await fromDocx(fix.bytes);
+      }).run();
     });
   }
 });
 
 describe.skipIf(discovered.length === 0)('export (schema → .docx)', () => {
   for (const { filename } of discovered) {
-    bench(`export ${filename}`, async () => {
-      const fix = loaded.find((f) => f.filename === filename)!;
-      await toDocx(fix.doc);
+    test(`export ${filename}`, async ({ bench }) => {
+      await bench(`export ${filename}`, async () => {
+        const fix = loaded.find((f) => f.filename === filename)!;
+        await toDocx(fix.doc);
+      }).run();
     });
   }
 });
 
 describe.skipIf(discovered.length === 0)('full round-trip (.docx → schema → .docx)', () => {
   for (const { filename } of discovered) {
-    bench(`round-trip ${filename}`, async () => {
-      const fix = loaded.find((f) => f.filename === filename)!;
-      const doc = await fromDocx(fix.bytes);
-      await toDocx(doc);
+    test(`round-trip ${filename}`, async ({ bench }) => {
+      await bench(`round-trip ${filename}`, async () => {
+        const fix = loaded.find((f) => f.filename === filename)!;
+        const doc = await fromDocx(fix.bytes);
+        await toDocx(doc);
+      }).run();
     });
   }
 });

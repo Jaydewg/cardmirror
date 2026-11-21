@@ -52,7 +52,7 @@ describe('decryptOfficeDocument', () => {
     // And the importer opens it — the whole point.
     const { doc } = await fromDocxFull(pkg);
     expect(doc.textContent).toContain('lol');
-  });
+  }, 30_000); // 100k-spin Agile key derivation is CPU-bound (~4-5s)
 
   it('rejects a wrong password with WrongPasswordError', () => {
     expect(() => decryptOfficeDocument(fixture, 'not-it')).toThrow(WrongPasswordError);
@@ -62,13 +62,13 @@ describe('decryptOfficeDocument', () => {
     } catch (e) {
       expect(e).toBeInstanceOf(EncryptedOfficeError);
     }
-  });
+  }, 30_000);
 
   it('is deterministic (same input → same output)', () => {
     const a = decryptOfficeDocument(fixture, 'password');
     const b = decryptOfficeDocument(fixture, 'password');
     expect(a).toEqual(b);
-  });
+  }, 30_000);
 
   it('rejects a compound file with no encryption streams (legacy binary)', () => {
     // A minimal valid CFB header with no EncryptionInfo stream. Build

@@ -19,7 +19,7 @@
     "dev": "vite",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:bench": "vitest bench --run",
+    "test:bench": "vitest bench --run --reporter=verbose",
     "typecheck": "tsc --noEmit",
     "check:links": "node scripts/check-doc-links.mjs",
     "round-trip": "tsx bin/round-trip.ts",
