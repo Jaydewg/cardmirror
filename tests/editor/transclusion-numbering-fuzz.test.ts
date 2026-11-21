@@ -329,7 +329,7 @@ describe('new-features fuzz — transclusion + numbering (single view)', () => {
 
       view.destroy();
     }
-  });
+  }, 30_000); // 20 seeds, synchronous; ~6s
 
   it('numbering survives a .docx round-trip across 30 random skeletons', async () => {
     for (let seed = 1; seed <= 30; seed++) {

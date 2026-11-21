@@ -5,11 +5,11 @@
  * modal and swallow number input meant for it.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, type Mock, beforeEach, afterEach } from 'vitest';
 import { homeScreen, type HomeScreenCallbacks } from '../../src/editor/home-screen.js';
 import { pushOverlay, popOverlay } from '../../src/editor/overlay-stack.js';
 
-function makeCallbacks(): HomeScreenCallbacks & { newDoc: ReturnType<typeof vi.fn> } {
+function makeCallbacks(): HomeScreenCallbacks & { newDoc: Mock<() => void> } {
   return {
     newDoc: vi.fn(),
     newSpeechDoc: vi.fn(),
@@ -84,7 +84,7 @@ describe('home-screen shortcuts reflow around the gated Compress tile', () => {
       clean: vi.fn(),
       bulkConvert: vi.fn(),
       ...extra,
-    } as HomeScreenCallbacks & { manageQuickCards: ReturnType<typeof vi.fn> };
+    } as HomeScreenCallbacks & { manageQuickCards: Mock<() => void> };
     homeScreen.mount(document.body, cb);
     homeScreen.show();
     return cb;
