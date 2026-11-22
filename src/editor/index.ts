@@ -2912,6 +2912,11 @@ if (docMenuBtn) {
             run: () => runRibbon('convertCitedAnalyticsToTags'),
           },
           {
+            label: 'Convert Bold Cites to Cite Style',
+            commandId: 'convertBoldCites',
+            run: () => runRibbon('convertBoldCites'),
+          },
+          {
             label: 'Fix Formatting Gaps',
             commandId: 'fixFormattingGaps',
             run: () => runRibbon('fixFormattingGaps'),

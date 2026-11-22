@@ -346,6 +346,7 @@ export const RIBBON_GROUPS: RibbonGroup[] = [
     commands: [
       'convertAnalyticsToTags',
       'convertCitedAnalyticsToTags',
+      'convertBoldCites',
       'fixFormattingGaps',
       'repairParagraphIntegrity',
       'removeHyperlinks',

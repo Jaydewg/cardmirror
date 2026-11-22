@@ -43,6 +43,7 @@ import { undo as historyUndo, redo as historyRedo } from 'prosemirror-history';
 import { toggleReadingMarkerCommand } from './reading-marker.js';
 import { moveToHeadingOfType } from './word-selection-keymap.js';
 import { convertCardsToReadMode } from './convert-cards-to-read-mode.js';
+import { looksLikeBoldCite } from './read-mode-rules.js';
 import { openFootnoteEditor } from './footnote-popover.js';
 import { flipQuoteDirection } from './flip-quote-direction.js';
 import { refreshFileSearchIndex } from './file-index-refresh.js';
@@ -4144,6 +4145,67 @@ export function convertCitedAnalyticsToTags(): Command {
   });
 }
 
+/** Containers whose children can hold a cite slot (tag / undertag,
+ *  then the cite paragraph). */
+const BOLD_CITE_CONTAINERS = new Set(['card', 'analytic_unit']);
+
+/**
+ * Doc → Convert Bold Cites to Cite Style. A "fake cite" is a short cite
+ * (e.g. **Petian 21**) styled by hand as bold plain text instead of the
+ * Cite style, so its paragraph stays a `card_body`: read markers, cite
+ * checks and read-time estimates all read it as evidence. Read mode's
+ * bold-cite rule already DISPLAYS such text as a cite; this makes it
+ * one, using the same shape test (`looksLikeBoldCite`) but ignoring the
+ * read-mode setting.
+ *
+ * Only `card_body` paragraphs are touched — a `cite_paragraph` already
+ * has a real cite. In each qualifying paragraph the bold runs lose
+ * `bold` and gain `cite_mark`; the cite classifier then retypes the
+ * paragraph to `cite_paragraph` in the same dispatch. Scope is the
+ * selection when non-empty, else the whole doc (a paragraph counts if
+ * it overlaps the selection). Returns false when nothing qualifies.
+ */
+export function convertBoldCites(): Command {
+  return (state, dispatch) => {
+    const boldType = schema.marks['bold']!;
+    const citeType = schema.marks['cite_mark']!;
+    const sel = state.selection;
+    const from = sel.empty ? 0 : sel.from;
+    const to = sel.empty ? state.doc.content.size : sel.to;
+
+    const ranges: { from: number; to: number }[] = [];
+    state.doc.nodesBetween(from, to, (node, pos) => {
+      if (!BOLD_CITE_CONTAINERS.has(node.type.name)) return true;
+      let prev: PMNode | null = null;
+      node.forEach((child, offset) => {
+        const childPos = pos + 1 + offset;
+        const inScope = childPos < to && childPos + child.nodeSize > from;
+        if (inScope && child.type.name === 'card_body' && looksLikeBoldCite(child, prev)) {
+          child.forEach((run, runOffset) => {
+            if (!run.isText || !boldType.isInSet(run.marks)) return;
+            const start = childPos + 1 + runOffset;
+            ranges.push({ from: start, to: start + run.nodeSize });
+          });
+        }
+        prev = child;
+      });
+      // Containers don't nest.
+      return false;
+    });
+    if (ranges.length === 0) return false;
+    if (!dispatch) return true;
+
+    // Marks never move positions, so the ranges stay valid in order.
+    const tr = state.tr;
+    for (const r of ranges) {
+      tr.removeMark(r.from, r.to, boldType);
+      tr.addMark(r.from, r.to, citeType.create());
+    }
+    dispatch(tr);
+    return true;
+  };
+}
+
 /**
  * Extract the current selection into a new `undertag` paragraph beneath
  * the enclosing card's tag, below any existing undertags. The original
@@ -4781,6 +4843,7 @@ export type RibbonCommandId =
   | 'linkUrls'
   | 'convertAnalyticsToTags'
   | 'convertCitedAnalyticsToTags'
+  | 'convertBoldCites'
   | 'fixFormattingGaps'
   | 'insertTable'
   | 'addRowAfter'
@@ -5069,6 +5132,7 @@ export const RIBBON_COMMAND_IDS: RibbonCommandId[] = [
   'linkUrls',
   'convertAnalyticsToTags',
   'convertCitedAnalyticsToTags',
+  'convertBoldCites',
   'fixFormattingGaps',
   'insertTable',
   'addRowAfter',
@@ -5300,6 +5364,7 @@ export const RIBBON_COMMAND_LABELS: Record<RibbonCommandId, string> = {
   linkUrls: 'Link URLs',
   convertAnalyticsToTags: 'Convert Analytics to Tags',
   convertCitedAnalyticsToTags: 'Convert Cited Analytics to Tags',
+  convertBoldCites: 'Convert Bold Cites to Cite Style',
   fixFormattingGaps: 'Fix Formatting Gaps',
   insertTable: 'Insert Table',
   addRowAfter: 'Insert Row Below',
@@ -5496,6 +5561,7 @@ export const RIBBON_COMMAND_ALIASES: Partial<Record<RibbonCommandId, readonly st
   aiCitePromptPreset9: ['cite prompt', 'cite preset', 'prompt preset', 'preset 9'],
   aiCitePromptPreset10: ['cite prompt', 'cite preset', 'prompt preset', 'preset 10'],
   convertCardsToReadMode: ['zap card', 'zap cards'],
+  convertBoldCites: ['fake cite', 'fake cites', 'bold cite', 'bolded cite', 'fix cites', 'cite style'],
   toggleReadMode: ['show read mode', 'hide read mode', 'invisibility mode'],
   toggleReaderView: ['reading view', 'reader view', 'paginated view', 'read view', 'book view', 'columns'],
   openContainingFolder: ['reveal in finder', 'show in folder', 'show in explorer', 'reveal file', 'file location', 'containing folder'],
@@ -5743,6 +5809,7 @@ export const DEFAULT_RIBBON_KEYS: Record<RibbonCommandId, string | string[]> = {
   linkUrls: '',
   convertAnalyticsToTags: '',
   convertCitedAnalyticsToTags: '',
+  convertBoldCites: '',
   fixFormattingGaps: '',
   // Table commands — no default keys; bind via the keybinding editor.
   insertTable: '',
@@ -6734,6 +6801,8 @@ function commandFor(id: RibbonCommandId, ctx: RibbonContext): Command {
       return convertAnalyticsToTags();
     case 'convertCitedAnalyticsToTags':
       return convertCitedAnalyticsToTags();
+    case 'convertBoldCites':
+      return convertBoldCites();
     case 'fixFormattingGaps':
       return fixFormattingGaps(ctx.effectivePtForNode);
     case 'insertTable':

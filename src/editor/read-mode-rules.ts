@@ -48,7 +48,15 @@ const UNDERLINE_FAMILY = new Set(['underline_mark', 'underline_direct', 'emphasi
  * entire cite" treats a bold run as the run that unlocks the whole cite.
  */
 export function isBoldCiteParagraph(para: PMNode, prev: PMNode | null | undefined): boolean {
-  if (!settings.get('readModeBoldCites')) return false;
+  return settings.get('readModeBoldCites') && looksLikeBoldCite(para, prev);
+}
+
+/** The bold-cite shape test behind `isBoldCiteParagraph`, without the
+ *  setting gate. Also used by Doc → Convert Bold Cites to Cite Style,
+ *  which turns what read mode only DISPLAYS as a cite into a real one —
+ *  sharing the test keeps the two from disagreeing about what a bold
+ *  cite is. */
+export function looksLikeBoldCite(para: PMNode, prev: PMNode | null | undefined): boolean {
   if (!prev || (prev.type.name !== 'tag' && prev.type.name !== 'undertag')) return false;
   const name = para.type.name;
   if (name !== 'cite_paragraph' && name !== 'card_body') return false;

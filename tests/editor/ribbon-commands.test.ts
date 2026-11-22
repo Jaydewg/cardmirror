@@ -26,6 +26,7 @@ import {
   removeHyperlinks,
   convertAnalyticsToTags,
   convertCitedAnalyticsToTags,
+  convertBoldCites,
   extractUndertag,
   fixFormattingGaps,
   buildRibbonKeymap,
@@ -39,6 +40,7 @@ import {
   type RibbonContext,
 } from '../../src/editor/ribbon-commands.js';
 import { SETTING_METADATA, settings } from '../../src/editor/settings.js';
+import { citeClassifierPlugin } from '../../src/editor/cite-classifier-plugin.js';
 import {
   buildPlainTextSlice,
   normalizeClipboardTextForPaste,
@@ -4131,6 +4133,87 @@ describe('convertCitedAnalyticsToTags', () => {
     expect(next).not.toBeNull();
     expect(next!.doc.child(0).type.name).toBe('card');
     expect(next!.doc.child(1).type.name).toBe('analytic_unit');
+  });
+});
+
+// ---- convertBoldCites ----
+
+describe('convertBoldCites', () => {
+  const B = () => schema.marks['bold']!.create();
+  const U = () => schema.marks['underline_mark']!.create();
+  const C = () => schema.marks['cite_mark']!.create();
+  const HL = () => schema.marks['highlight']!.create({ color: 'yellow' });
+  const tag = (t = 'Tag') => schema.nodes['tag']!.create({ id: newHeadingId() }, schema.text(t));
+  const undertag = (t: string) => schema.nodes['undertag']!.create(null, schema.text(t));
+  const body = (...c: ReturnType<typeof schema.text>[]) => schema.nodes['card_body']!.create(null, c);
+  const citeP = (...c: ReturnType<typeof schema.text>[]) => schema.nodes['cite_paragraph']!.create(null, c);
+  const card = (...c: ReturnType<typeof tag>[]) => schema.nodes['card']!.createChecked(null, c);
+  const docOf = (...c: ReturnType<typeof tag>[]) => schema.nodes['doc']!.createChecked(null, c);
+  const fakeCite = () => body(schema.text('Petian 21', [B()]), schema.text(', Professor at X, "Title," 2021'));
+  const evidence = () => body(schema.text('The evidence says ', [U()]), schema.text('this', [U(), HL()]));
+
+  /** Run through the real classifier, as the editor does. */
+  function run(state: EditorState): EditorState | null {
+    let next: EditorState | null = null;
+    convertBoldCites()(state, (tr) => { next = state.apply(tr); });
+    return next;
+  }
+  const stateOf = (doc: ReturnType<typeof docOf>) => EditorState.create({ doc, schema, plugins: [citeClassifierPlugin] });
+  const marksOf = (para: ReturnType<typeof tag>, i: number) => para.child(i).marks.map((m) => m.type.name).sort();
+
+  it('turns a bold fake cite into a real cite paragraph', () => {
+    const next = run(stateOf(docOf(card(tag(), fakeCite(), evidence()))))!;
+    expect(next).not.toBeNull();
+    const c = next.doc.child(0);
+    expect(c.child(1).type.name).toBe('cite_paragraph');
+    expect(c.child(1).child(0).text).toBe('Petian 21');
+    expect(marksOf(c.child(1), 0)).toEqual(['cite_mark']);
+    expect(marksOf(c.child(1), 1)).toEqual([]);
+    // The evidence below is untouched.
+    expect(c.child(2).type.name).toBe('card_body');
+    expect(c.child(2).eq(evidence())).toBe(true);
+  });
+
+  it('converts after an undertag too, and inside analytic units', () => {
+    const analytic = schema.nodes['analytic']!.create({ id: newHeadingId() }, schema.text('A'));
+    const unit = schema.nodes['analytic_unit']!.createChecked(null, [analytic, fakeCite()]);
+    const next = run(stateOf(docOf(card(tag(), undertag('u'), fakeCite()), unit)))!;
+    expect(next.doc.child(0).child(2).type.name).toBe('cite_paragraph');
+    // An analytic is not a cite slot (same as read mode's rule).
+    expect(next.doc.child(1).child(1).type.name).toBe('card_body');
+  });
+
+  it('works with "Read mode: treat bold as a cite" off', () => {
+    const before = settings.get('readModeBoldCites');
+    settings.set('readModeBoldCites', false);
+    try {
+      const next = run(stateOf(docOf(card(tag(), fakeCite()))));
+      expect(next!.doc.child(0).child(1).type.name).toBe('cite_paragraph');
+    } finally {
+      settings.set('readModeBoldCites', before);
+    }
+  });
+
+  it('skips bold without a digit, underlined paragraphs, and bodies not in the cite slot', () => {
+    const noDigit = body(schema.text('Petian', [B()]), schema.text(' quals'));
+    const underlined = body(schema.text('Petian 21', [B()]), schema.text(' quals', [U()]));
+    const state = stateOf(docOf(card(tag(), noDigit), card(tag(), underlined), card(tag(), evidence(), fakeCite())));
+    expect(convertBoldCites()(state, undefined)).toBe(false);
+  });
+
+  it('leaves an existing cite paragraph alone', () => {
+    const real = citeP(schema.text('Smith 20', [C()]), schema.text(' quals, '), schema.text('bold 2', [B()]));
+    const state = stateOf(docOf(card(tag(), real)));
+    expect(convertBoldCites()(state, undefined)).toBe(false);
+  });
+
+  it('with a selection, only converts cites the selection touches', () => {
+    const state0 = stateOf(docOf(card(tag('One'), fakeCite()), card(tag('Two'), fakeCite())));
+    // Inside the first card's "Petian 21" (card 0, tag 1–5, body text from 7).
+    const sel = state0.apply(state0.tr.setSelection(TextSelection.create(state0.doc, 7, 9)));
+    const next = run(sel)!;
+    expect(next.doc.child(0).child(1).type.name).toBe('cite_paragraph');
+    expect(next.doc.child(1).child(1).type.name).toBe('card_body');
   });
 });
 

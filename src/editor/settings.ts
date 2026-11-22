@@ -2689,7 +2689,7 @@ export const SETTING_METADATA: SettingMeta[] = [
     key: 'readModeBoldCites',
     label: 'Read mode: treat bold as a cite',
     description:
-      'When on, read mode shows hand-bolded text in the cite slot as if it were cite-marked: in the paragraph right after a tag or undertag, if nothing is underlined or emphasized and some text is bold, the bold runs are read aloud (in a body paragraph the bold must include a number, like a date). Catches imported files whose cites are bold plain text instead of the Cite style, which read mode otherwise hides. On by default. Display-only, like the rest of read mode; Convert Cards to Read Mode, read-mode copy and read-mode export follow it.',
+      'When on, read mode shows hand-bolded text in the cite slot as if it were cite-marked: in the paragraph right after a tag or undertag, if nothing is underlined or emphasized and some text is bold, the bold runs are read aloud (in a body paragraph the bold must include a number, like a date). Catches imported files whose cites are bold plain text instead of the Cite style, which read mode otherwise hides. On by default. Display-only, like the rest of read mode; Convert Cards to Read Mode, read-mode copy and read-mode export follow it. To fix such cites for good (so read markers, cite checks and read-time estimates see them too), use Doc → Convert Bold Cites to Cite Style.',
     kind: 'toggle',
     category: 'general',
     section: 'Editor behavior',
