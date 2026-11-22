@@ -1,0 +1,26 @@
+{
+  // The companion app. Unlike the plugin it DOES bundle CardMirror code
+  // (the schema, the importer's back end and the .cmir writer), so that
+  // what it builds is exactly what CardMirror would.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "types": ["node"],
+    "paths": {
+      "@cardmirror/plugin-api": ["../../../src/plugin-sdk/index.ts"]
+    }
+  },
+  "include": ["src", "tests", "vitest.config.ts", "../../../apps/desktop/node_modules/electron/electron.d.ts"]
+}

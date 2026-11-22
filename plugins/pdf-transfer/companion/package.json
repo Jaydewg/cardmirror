@@ -1,0 +1,19 @@
+{
+  "name": "cardmirror-pdf",
+  "productName": "CardMirror PDF",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Companion app for the PDF Export & Import plugin: file dialogs, PDF rendering and PDF reading for CardMirror.",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "npm run build && node ../../../apps/desktop/node_modules/electron/cli.js .",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "6.5.438"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "pdf-transfer",
+  "name": "PDF Export & Import",
+  "version": "0.1.0",
+  "description": "Export documents to PDF with their highlighting, and import PDFs as cards. Works with the CardMirror PDF companion app.",
+  "author": "Jaydewg",
+  "apiVersion": 1,
+  "permissions": [
+    "doc.read",
+    "ui.dialogs"
+  ],
+  "permissionReasons": {
+    "doc.read": "To read the document, with its highlighting, when you export it to PDF.",
+    "ui.dialogs": "To ask whether an imported PDF goes into this document or a new one."
+  }
+}
