@@ -1,11 +1,14 @@
 /**
  * Plugin permissions — the extension mechanism for the plugin API.
  *
- * The problem: Right now plugins recieve limited user-facing functionality -- some
- * 
+ * The problem: the v1 core gives every plugin the same small surface,
+ * and some features (dialogs, co-editing, reading or marking documents,
+ * the network) need more. Widening the core would hand every plugin
+ * abilities it never asked for and the user never agreed to.
+ *
  * The API grows by PERMISSION, not by `apiVersion`: a plugin lists the
- * permissions it wants (manifest + registration), the user will instead consent at
- * install (and of course again when an update requests more), main persists the
+ * permissions it wants (manifest + registration), the user consents at
+ * install (and again when an update requests more), main persists the
  * granted set beside the install, and the registry mints each plugin's
  * api object with only the namespaces it was granted. A plugin that
  * declares nothing gets exactly the v1 surface (plus `api.permissions`).
@@ -27,10 +30,9 @@
 
 /** `namespace.action` (one or more dotted segments). */
 export const PERMISSION_ID_RE = /^[a-z]+(\.[a-z][a-zA-Z]*)+$/;
-/** Hard cap on how many permission strings one plugin may declare. This can 
- * be raised in the future, but this is set so that plugins can't attempt to declare
- * an insane amount of permissions.
-*/
+/** Hard cap on how many permission strings one plugin may declare, so a
+ *  manifest can't flood the consent dialog. Raising it later is safe:
+ *  older builds just keep the first 32 declared. */
 export const MAX_PERMISSIONS = 32;
 
 export type PermissionSensitivity = 'low' | 'medium' | 'high';
@@ -258,9 +260,10 @@ export function splitKnown(list: readonly string[]): { known: string[]; unknown:
  *                    revoked it (fix: Settings → Plugins);
  *  - `unsupported` — declared, but this CardMirror doesn't implement it
  *                    (fix: update CardMirror);
- *  - `undeclared`  — the running definition never asked for it. 
- * Here for feature detection for clients -- while they can do process of elimination,
- * extensions can suggest, or elegantly actively probe if a feature is in namespace. */
+ *  - `undeclared`  — the running definition never asked for it.
+ * It exists for feature detection: a plugin could infer most of this from
+ * which namespaces are present, but `status` says WHY one is missing, so
+ * the plugin can point the user at the right fix. */
 export type PermissionStatus = 'granted' | 'denied' | 'unsupported' | 'undeclared';
 
 export function permissionStatus(

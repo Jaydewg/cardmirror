@@ -9,6 +9,7 @@ export type {
   PluginCard,
   PluginCardFormatting,
   PluginDocStats,
+  PluginDocStructure,
   PluginHeadingType,
   PluginOutlineItem,
   PluginReadOptions,

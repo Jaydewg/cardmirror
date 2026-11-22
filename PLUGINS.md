@@ -32,14 +32,14 @@ A plugin is one GitHub repository. Each release attaches two assets:
 | `id` | string | yes | Lowercase. Must match `^[a-z0-9][a-z0-9-]*$`. Cannot be a Windows reserved device name (`con`, `prn`, `aux`, `nul`, `comN`, `lptN`). |
 | `name` | string | yes | Display name. |
 | `version` | string | yes | Semver, for example `0.1.0` or `0.2.0-beta.1`. Bump it for every release: update checks compare it with the installed copy's. Released versions should be plain (`1.2.3`); see [Releasing a plugin](#releasing-a-plugin). |
-| `permissions` | list | No | A list of permissions that the plugin asks for on startup.
+| `permissions` | list | no | The permissions the plugin wants (section 3). The user consents at install, and again when an update adds some; the registered definition must list the same ones. Unknown ids are ignored, never fatal. At most 32. |
 | `permissionReasons` | object | no | Why the plugin wants each permission, in its own words: `{ "collab.join": "…" }`. One line each, at most 200 characters, only for permissions in `permissions`. The install and update dialogs show it under CardMirror's own description, quoted and attributed to the plugin. Older builds ignore it. |
 | `description` | string | no | One line for the Plugins tab. Also shown on your plugin's card in the Browse-plugins picker when it is listed in the public directory. |
 | `author` | string | no | Shown in the consent prompt. |
 | `apiVersion` | number | yes | Must be `1`. |
 | `minAppVersion` | string | no | Oldest CardMirror version that the plugin supports. Compared as plain semver — read the note below before setting it. |
 | `repo` | string | never in your release | The installer stamps `owner/repo` into the saved manifest. Update checks read it. Do not set it yourself. |
-| `grantedPermissions` | list | never | The permissions that the client grants.
+| `grantedPermissions` | list | never | The permissions the user consented to. Written by CardMirror; a release that sets it is ignored. |
 | `networkHosts` | list | no | Where `net.fetch` may connect: exact hostnames (`"api.crossref.org"`), or `"*"` for any https site. At most 16. No IP addresses, `localhost`, ports or paths; off-shape entries are dropped. List the same hosts in the registered definition: only hosts in both count. The consent dialogs show them beside `net.fetch`. Older builds ignore it. |
 | `grantedNetworkHosts` | list | never | The hosts the user consented to with `net.fetch`. Written by CardMirror; a release that sets it is ignored. |
 
@@ -67,6 +67,23 @@ Example 2 (with permissions):
   "author": "CardMirror",
   "apiVersion": 1,
   "permissions": ["collab.join", "collab.probe", "collab.read", "collab.server", "collab.shareCode", "files.data", "ui.dialogs", "ui.notices"]
+}
+```
+
+Example 3 (with reasons and network hosts, abridged from Cite Check):
+```json
+{
+  "id": "cite-check",
+  "name": "Cite Check",
+  "version": "0.1.1",
+  "author": "CardMirror",
+  "apiVersion": 1,
+  "permissions": ["doc.annotate", "doc.read", "net.fetch", "ui.panel"],
+  "permissionReasons": {
+    "doc.read": "To read the cites in your open documents.",
+    "net.fetch": "Only when you run “Verify sources”: to look cites up on Crossref and OpenAlex."
+  },
+  "networkHosts": ["api.crossref.org", "api.openalex.org"]
 }
 ```
 
@@ -207,6 +224,25 @@ nothing).
   the namespace or method you need (`api.ui?.…`,
   `api.permissions?.status(p)`) and explain to the user what's
   missing.
+
+### Starting a plugin
+
+Copy `plugins/_template/`. It is a standalone package (its own
+`package.json`, `tsconfig.json` and tests) that imports only
+`@cardmirror/plugin-api`, mapped through `tsconfig` `paths` to
+`src/plugin-sdk/index.ts`. That module is type-only, so the bundle never
+carries app code. Everything it exports is public API.
+
+For unit tests, `@cardmirror/plugin-api/testing` provides
+`createFakePluginApi({ granted, ...overrides })`. It is a fake `api`
+that gates methods with the same table the host uses, so which methods
+exist and how a revoked call fails match the real app. Script the
+calls you need (`vi.fn()` works); every other granted method is a
+harmless stub. Import it from tests only, never from the bundle.
+
+`npm run check:plugins` runs each `plugins/*` package's `test`,
+`typecheck` and `build` scripts. CI runs it, and `release:plugin` runs
+the same three steps for the plugin it publishes.
 
 ### Releasing a plugin
 
@@ -372,8 +408,13 @@ the plugin name.
 
 ## 3. The capability API
 
-Each command's `run` receives one `api` argument. The full surface,
-verbatim from `src/editor/plugin-api.ts`:
+Each command's `run` (and the definition's `activate`) receives one `api`
+argument. The core surface and the optional namespaces' slots, copied from
+`src/editor/plugin-api.ts`; each namespace's own types are in
+`src/plugin-sdk/index.ts` and described in the sections below:
+
+<!-- api-surface:start -->
+<!-- Copied from src/editor/plugin-api.ts. Do not edit by hand: run `npm run docs:permissions`. -->
 
 ```ts
 export type ExtractedKind =
@@ -415,7 +456,11 @@ export interface FlowAppInfo {
   appVersion: string;
   schema: number;
   kind: 'flow';
-  /** A session file exists AND the app answered /ping just now. */
+  /** Whether the app answered a liveness ping just now. Closed apps are
+   *  LISTED (their identity registration persists) — selection never
+   *  requires the app to be running; sends to a closed app fail at
+   *  runtime with `app-not-running`. Keep in sync with the main-process
+   *  declaration in apps/desktop/src/bridge-handshake.ts. */
   running: boolean;
 }
 
@@ -425,15 +470,80 @@ export type FlowPostResult =
 
 export interface PluginStorage {
   get(key: string): unknown;
-  /** `__settings` is reserved for declared-setting values (section 2). */
+  /** `__settings` is reserved — it holds the values of the settings the
+   *  plugin declared at registration (rendered by the host's settings
+   *  modal). Writing it directly only corrupts your own settings; reads
+   *  through `api.settings.get` fall back to declared defaults. */
   set(key: string, value: unknown): void;
 }
 
 export interface PluginSettingsApi {
+  /** Current value of a setting DECLARED in the plugin definition's
+   *  `settings` array (the declared default when the user hasn't set
+   *  it); undefined for undeclared keys. */
   get(key: string): boolean | string | number | undefined;
+  /** Fires when the user changes one of this plugin's settings in the
+   *  settings modal. Returns an unsubscribe function. Most plugins
+   *  don't need this — reading lazily via `get` when a command runs
+   *  always sees the current value. */
   onChanged(cb: (key: string, value: boolean | string | number) => void): () => void;
 }
 
+/** What this plugin was granted (see plugin-permissions.ts). Absent on
+ *  CardMirror builds that predate permissions — feature-detect with
+ *  `api.permissions?.has('ui.dialogs')`. */
+export interface PluginPermissionsApi {
+  has(permission: string): boolean;
+  /** Granted permissions, sorted. */
+  list(): string[];
+  /** Why a permission is or isn't available, so the plugin can point
+   *  the user at the right fix: `denied` → Settings → Plugins (the
+   *  user declined or revoked it), `unsupported` → update CardMirror,
+   *  `undeclared` → the plugin's own definition never asked for it. */
+  status(permission: string): PermissionStatus;
+  /** Ask the user for a permission this plugin declared but doesn't
+   *  hold, at the moment a feature needs it. CardMirror shows a prompt
+   *  (Allow / Not now / Don't ask again) only shortly after the user
+   *  acted on the plugin (ran its command, clicked its menu item or
+   *  notice button, used its panel) or a permission-gated event reached
+   *  it (a file it can read opened, the focused document changed), one
+   *  prompt at a time, and never for a permission the user blocked;
+   *  otherwise it resolves at once without asking. `reason` (one line,
+   *  ≤ 200 chars) is shown as the plugin's own words, in place of its
+   *  `permissionReasons` entry.
+   *
+   *  Resolves the permission's status after the answer and the plugin's
+   *  CURRENT api: an api object never gains namespaces, so on `granted`
+   *  carry on with `result.api` (`activate` also re-runs with it). A
+   *  permission that is already granted, unsupported or undeclared
+   *  resolves right away with that status. */
+  request(permission: string, opts?: { reason?: string }): Promise<PluginPermissionRequestResult>;
+}
+
+/** What `api.permissions.request` resolves. */
+export interface PluginPermissionRequestResult {
+  status: PermissionStatus;
+  /** The plugin's current api — use it after a grant. */
+  api: CardMirrorPluginApi;
+}
+
+/**
+ * The api object handed to every command's `run`, and to the
+ * definition's `activate` (the place to register long-lived hooks —
+ * `files.onOpen`, `events.on*` — since it runs at load and again with a
+ * fresh api whenever the grant changes).
+ *
+ * Growing the API: optional namespaces appear only when the plugin
+ * declared the matching permission (`permissions: ['ui.dialogs']` in
+ * both `cardmirror-plugin.json` and the registered definition) AND the
+ * user granted it. Always feature-detect — `api.ui?.choose(...)` — since
+ * a user can revoke a permission at any time, and older CardMirror
+ * builds have neither `permissions` nor the optional namespaces. Use
+ * `api.permissions?.status(p)` to tell the user why something is
+ * missing. Don't gate on `minAppVersion` or `appVersion` for these:
+ * fork, upstream and federation (`-f`) version numbers aren't
+ * comparable (see PLUGINS.md, "About `minAppVersion`").
+ */
 export interface CardMirrorPluginApi {
   readonly appVersion: string;
   extractSelection(): ExtractResult | ExtractError;
@@ -444,8 +554,35 @@ export interface CardMirrorPluginApi {
   showToast(message: string): void;
   storage: PluginStorage;
   settings: PluginSettingsApi;
+  /** Present on permission-aware builds (optional in the type because
+   *  older hosts lack it). */
+  readonly permissions?: PluginPermissionsApi;
+  /** `ui.dialogs`. */
+  readonly ui?: PluginUiApi;
+  /** `files.data`. */
+  readonly files?: PluginFilesApi;
+  /** Any `collab.*` (methods per permission). Sessions are named by
+   *  ADDRESS (`code@server`), the same on federated and non-federated
+   *  builds. */
+  readonly collab?: PluginCollabApi;
+  /** `doc.read` / `doc.edit` (methods per permission). */
+  readonly doc?: PluginDocApi;
+  /** `doc.events`. */
+  readonly events?: PluginEventsApi;
+  /** `ui.panel`. */
+  readonly panel?: PluginPanelApi;
+  /** `ui.contextMenu`. */
+  readonly menu?: PluginMenuApi;
+  /** `ui.notices`. */
+  readonly notices?: PluginNoticesApi;
+  /** `doc.annotate`. */
+  readonly annotations?: PluginAnnotationsApi;
+  /** `net.fetch` (to the hosts in the plugin's `networkHosts`). */
+  readonly net?: PluginNetApi;
 }
 ```
+
+<!-- api-surface:end -->
 
 ### Methods
 
@@ -547,6 +684,158 @@ if (r.status === 'granted') await r.api.collab?.join(address);
 - `request` exists on every build that has `api.permissions`. Older
   builds have neither, so feature-detect with
   `api.permissions?.request`.
+
+#### Documents: `docUid` and `docId`
+
+Two ids name a document, and they are not interchangeable:
+
+- `docUid` is the handle of a document **open in this window**. Every namespace method that takes a document takes a `docUid` (the focused document when you leave it out). It is stable while the document stays open, but means nothing after it closes or in another run. Don't store it.
+- `docId` is the document's **persistent** id, saved in the file. It is `null` for a document that has never been stamped (`extractSelection` stamps one). Store this one, and compare it across runs.
+
+`files.focusedDoc()`, `doc.read()` and the `files` hooks give you both.
+
+#### Lifecycle (`activate`)
+
+`activate(api)` runs when the plugin registers, and **again** with a fresh `api` every time that api is re-minted: when the user grants or revokes a permission, or the bundle re-registers. Register long-lived hooks here, and feature-detect each namespace:
+
+```ts
+activate(api) {
+  const offs = [
+    api.events?.onDocChange((e) => recheck(api, e.docUid)),
+    api.files?.onOpen((data, ctx) => restore(data, ctx)),
+  ];
+  return () => offs.forEach((off) => off?.());
+},
+```
+
+- Return a cleanup function. It runs before the next activation and when the plugin is unregistered. Only a cleanup returned **synchronously** counts: if `activate` is `async`, the cleanup it resolves is ignored, so keep the hook registration synchronous. A throw or a rejection is logged, and the plugin stays registered.
+- Unsubscribe in the cleanup, or a re-activation registers your listeners twice. (`files.onSave` / `files.onOpen` keep one hook per plugin, so registering again replaces them.)
+- Keep using the newest `api`. An old reference keeps its methods, but a call to one whose permission was revoked throws `PluginPermissionError` (or rejects with it, for a method that returns a promise).
+
+#### Dialogs (`ui.dialogs` → `api.ui`)
+
+```ts
+const picked = await api.ui?.choose({
+  message: 'Which session?',
+  detail: 'Optional second line',
+  choices: [{ value: 'a', label: 'Session A', description: 'Started 5 min ago' }],
+}); // the picked `value`, or null on Cancel / Esc
+const ok = await api.ui?.confirm('Replace your local copy?', { okLabel: 'Replace' });
+```
+
+`choose` shows up to 9 two-line buttons, and the number keys 1 to 9 pick them. Each `value` is unique and at most 64 characters. Every dialog is labeled with your plugin's name.
+
+#### Notices (`ui.notices` → `api.notices`)
+
+```ts
+const n = api.notices?.post({
+  key: 'verify-done',            // ≤ 64 chars, unique within your plugin
+  title: 'Sources checked',
+  body: '3 problems found',
+  severity: 'info',              // 'info' (default) | 'warning'
+  toast: true,                   // default true; first post of a key only
+  actions: [{ label: 'Show', run: () => panel.show() }], // ≤ 2
+});
+n?.clear();
+```
+
+A notice lands under the status-bar ⓘ chip. Posting the same `key` again updates that notice (shown ×N) instead of adding another, and never toasts a second time. A button's `run` fires after the notice is dismissed, and only if the plugin still holds `ui.notices` then.
+
+#### Data in the file (`files.data` → `api.files`)
+
+```ts
+api.files?.onSave((ctx) => ({ data: { v: 1, ignored }, summary: 'Cite Check: 2 ignored' }));
+api.files?.onOpen((data, ctx) => restore(data, ctx.docUid));
+api.files?.get(docUid);   // your stored data for an open doc, or null
+api.files?.focusedDoc();  // { docUid, docId, title } | null
+```
+
+- The save hook runs synchronously on every **working-copy** save: Save, Save As, autosave and the crash journal. It never runs for exports. Return `{ data, summary? }` to write, `null` to remove your entry, or `undefined` to keep the stored entry unchanged. It must be fast and must not throw.
+- `onOpen` fires once for each opened document that carries your entry, including documents already open when the hook registers.
+- `data` is any JSON, at most 64 KB serialized. An oversized or non-JSON answer is ignored, with a console warning. Version your shape (`{ v: 1, … }`): files outlive builds of your plugin.
+- `summary` is optional, at most 200 characters of printable ASCII. CardMirror also writes it into the file's gzip header, where tools such as `exiftool` show it without opening the file. Never put secrets in it.
+- Entries are kept across every save, including saves on machines where your plugin isn't installed. Other plugins' entries are never visible to you.
+
+#### Co-editing (`collab.*` → `api.collab`)
+
+Each method exists only with its own permission (see the table above). Sessions are named two ways:
+
+- A **code** (`shareCode()`, `viewCode()`) is what a person pastes into this build's join box. Show codes to people.
+- An **address**, `<code>@<server URL>` (`shareAddress()`, `viewAddress()`), is the portable machine form. Store addresses, and hand them back to the API.
+
+Every method that takes a code also takes an address, and a plain code means "on your server". The surface is the same on federated and non-federated builds. What differs is only which servers `reach()` reports as reachable and each session's `crossServer` value.
+
+```ts
+const s = api.collab?.current?.();          // { roomId, role, title, server, crossServer } | null
+const addr = api.collab?.shareAddress?.();  // sync: usable inside a files.onSave hook
+const live = await api.collab?.probe?.(addr!);               // 'live' | 'ended' | 'unknown' | 'unreachable'
+const out = await api.collab?.join?.(addr!, { intoDoc: docUid }); // PluginJoinOutcome
+```
+
+- `current().server` is filled only with `collab.server`. The session key is never exposed.
+- `localRecord(roomId)` says whether this machine was in the room before. When its `docId` matches an opened file's, CardMirror itself offers Rejoin / Leave, so don't prompt as well.
+- `probe` never joins or shows the user as present. Results are cached per session for a minute.
+- `join(…, { intoDoc })` replaces a clean open document with the session while keeping its file, so saving writes the live copy back. One join per plugin at a time.
+- Result types are growing unions. Read a `PluginJoinOutcome` you don't know as a failure, a `PluginCrossServer` you don't know as `'off'`, and `'unknown'` as "can't tell".
+
+#### Reading documents (`doc.read` → `api.doc.read`)
+
+```ts
+const snap = api.doc?.read?.(docUid); // null when no such doc is open
+snap?.outline;   // [{ id, type: 'pocket'|'hat'|'block'|'tag'|'analytic', level: 1-4, text }]
+snap?.cards;     // [{ headingId, kind: 'card'|'analytic', heading, cite, citeParagraphs, body, bodyRead, undertags }]
+snap?.stats;     // word counts, incl. readAloudWords { body, other }
+```
+
+All text is plain. `cite` is the short cite (cite-formatted text), and `citeParagraphs` are the full cite paragraphs. Live views and linked copies are skipped, because their content lives elsewhere. The call is cheap enough to make on every `events.onDocChange`. Heading ids are what `doc.insert({ at: { after } })`, `doc.jumpTo` and `annotations.set` take. An id is `null` on a heading that doesn't have one yet.
+
+#### Adding content (`doc.edit` → `api.doc.insert`)
+
+```ts
+const r = await api.doc?.insert?.({
+  text: 'Line one\nLine two',   // lines become paragraphs / headings; ≤ 100,000 chars
+  role: 'card',                 // 'pocket'|'hat'|'block'|'tag'|'analytic'|'body'|'card'|'cite'|'inline'
+  at: { after: headingId },     // 'cursor' (default) | 'end' | { after: headingId }
+  newParagraph: true,           // default true
+  docUid,
+});
+// { ok: true } | { ok: false, error: 'no-doc'|'read-only'|'spectator'|'not-found'|'mirrored'|'locked'|'bad-request' }
+```
+
+Each call is one undo step, and Repeat (Mod-Y) never replays it. An insert is refused, never silently dropped, in read mode, for spectators, inside live views and linked copies, and in AI-locked regions. `{ after: id }` inserts at the end of that heading's section or card.
+
+#### Events (`doc.events` → `api.events`)
+
+```ts
+const off = api.events?.onDocChange((e) => {/* e.docUid, e.fromCollaborator */}); // debounced ~250 ms per doc
+api.events?.onSelectionChange((e) => {/* e.docUid */});                          // debounced ~150 ms per doc
+api.events?.onFocusChange((e) => {/* e.docUid, or null (e.g. the home screen) */});
+```
+
+Events say **that** something happened, never what changed. Read the document again (with `doc.read`) if you need the content. `fromCollaborator` is true only when every change in the batch came from a co-editing partner. Each `on*` returns an unsubscribe. Call it in your `activate` cleanup.
+
+#### Side panel (`ui.panel` → `api.panel`)
+
+```ts
+const panel = api.panel?.get({ title: 'Cite problems' }); // same handle on every call
+panel?.el.replaceChildren(render());
+panel?.show();                    // open the panel column on your tab
+panel?.onVisibilityChange((v) => { if (v) refresh(); });
+```
+
+`get` creates the panel hidden on the first call and returns the same handle after that. Render into `el`, which CardMirror empties when the plugin loses `ui.panel`. `hide()` closes the column only if your tab is the one showing. `isVisible()` means the column is open **and** your tab is active. The tab always shows your plugin's name next to `setTitle`'s text.
+
+#### Right-click items (`ui.contextMenu` → `api.menu`)
+
+```ts
+const remove = api.menu?.add({
+  label: 'Verify this cite',
+  when: 'heading',   // 'always' (default) | 'selection' | 'heading'
+  run: (t) => verify(t.docUid, t.headingId), // t: { surface: 'text'|'outline', docUid, headingId, headingType, selectionText }
+});
+```
+
+At most 5 items per plugin, each labeled with your plugin's name. On the text surface, `headingId` is the heading governing the selection, which inside a card is the card's tag. On the outline surface, it is the row the user clicked.
 
 #### What gets read aloud (`PluginCard.bodyRead`, with `doc.read`)
 

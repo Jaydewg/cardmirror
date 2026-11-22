@@ -10,7 +10,7 @@ import {
 } from '../plugin-file-data.js';
 import { targetDocUid, type CapabilityContext } from './context.js';
 
-export type { PluginDocContext, PluginSaveResult } from '../plugin-file-data.js';
+export type { PluginDocContext, PluginOpenHook, PluginSaveHook, PluginSaveResult } from '../plugin-file-data.js';
 
 /** `files.data` permission: keep the plugin's own JSON inside `.cmir`
  *  working-copy saves (Save, Save As, autosave, crash journal — never

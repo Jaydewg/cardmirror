@@ -32,7 +32,13 @@ import { CALL_TIME_PERMISSIONS, PluginPermissionError, type PluginNamespaceKey }
 
 export type { PluginApiDeps } from './plugin-caps/context.js';
 export type { PluginChoiceOption, PluginUiApi } from './plugin-caps/ui.js';
-export type { PluginDocContext, PluginFilesApi, PluginSaveResult } from './plugin-caps/files.js';
+export type {
+  PluginDocContext,
+  PluginFilesApi,
+  PluginOpenHook,
+  PluginSaveHook,
+  PluginSaveResult,
+} from './plugin-caps/files.js';
 export type {
   PluginCollabApi,
   PluginCrossServer,
@@ -52,6 +58,7 @@ export type {
   PluginDocApi,
   PluginDocSnapshot,
   PluginDocStats,
+  PluginDocStructure,
   PluginEditError,
   PluginEditResult,
   PluginHeadingType,

@@ -66,7 +66,13 @@ export type {
   PluginNoticeOptions,
   PluginNoticesApi,
 } from '../editor/plugin-api.js';
-export type { PluginDocContext, PluginFilesApi, PluginSaveResult } from '../editor/plugin-api.js';
+export type {
+  PluginDocContext,
+  PluginFilesApi,
+  PluginOpenHook,
+  PluginSaveHook,
+  PluginSaveResult,
+} from '../editor/plugin-api.js';
 export type {
   PluginCollabApi,
   PluginCrossServer,
@@ -85,6 +91,7 @@ export type {
   PluginDocApi,
   PluginDocSnapshot,
   PluginDocStats,
+  PluginDocStructure,
   PluginEditError,
   PluginEditResult,
   PluginHeadingType,
