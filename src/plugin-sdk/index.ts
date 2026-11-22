@@ -81,6 +81,7 @@ export type {
 } from '../editor/plugin-api.js';
 export type {
   PluginCard,
+  PluginCardFormatting,
   PluginDocApi,
   PluginDocSnapshot,
   PluginDocStats,
@@ -91,6 +92,9 @@ export type {
   PluginInsertRole,
   PluginJumpTarget,
   PluginOutlineItem,
+  PluginReadOptions,
+  PluginTextSpan,
+  PluginTextStyle,
 } from '../editor/plugin-api.js';
 export type {
   PluginDocChangeEvent,

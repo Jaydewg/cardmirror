@@ -48,6 +48,7 @@ export type {
 } from './plugin-caps/collab.js';
 export type {
   PluginCard,
+  PluginCardFormatting,
   PluginDocApi,
   PluginDocSnapshot,
   PluginDocStats,
@@ -58,6 +59,9 @@ export type {
   PluginInsertRole,
   PluginJumpTarget,
   PluginOutlineItem,
+  PluginReadOptions,
+  PluginTextSpan,
+  PluginTextStyle,
 } from './plugin-caps/doc.js';
 export type {
   PluginDocChangeEvent,

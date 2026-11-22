@@ -558,6 +558,26 @@ const read = card?.bodyRead?.[0]?.map(([from, to]) => card.body[0]!.slice(from, 
 
 Each card carries `bodyRead` next to `body`: for every body paragraph, the `[start, end)` character ranges of its text that are read aloud. That is highlighted text that isn't shaded, the same rule the read-aloud word count uses. Ranges are sorted, never overlap, and adjacent runs are merged, so a highlight color change mid-word stays one range. An empty list means nothing in that paragraph is read. Builds before it existed leave it out, so check `card.bodyRead !== undefined` and explain that the user needs a newer CardMirror. To mark a range with `annotations.set`, pass the paragraph's index and the exact text as `match`, with `occurrence` counted the way `String.indexOf` finds it (each search starts one character after the last hit).
 
+#### Formatting (`read(docUid, { formatting: true })`, with `doc.read`)
+
+```ts
+const snap = api.doc?.read?.(undefined, { formatting: true });
+const card = snap?.cards[0];
+card?.formatting?.body[0];
+// e.g. [{ from: 0, to: 12, style: 'underline' },
+//       { from: 4, to: 12, style: 'highlight', color: 'yellow' },
+//       { from: 6, to: 9,  style: 'emphasis' }]
+```
+
+With the option, every outline item gets `formatting: PluginTextSpan[]` and every card gets `formatting: { heading, citeParagraphs, body, undertags }`, span lists parallel to the card's text fields (one list per paragraph). A span is `{ from, to, style, color? }`: `[from, to)` character offsets into that paragraph's plain text, as with `bodyRead`.
+
+- `style` is `highlight`, `shading`, `underline`, `emphasis`, `cite`, `bold` or `italic`. It is a growing union, so skip values you don't know.
+- `color` is set on `highlight` (Word's color name: `yellow`, `cyan`, `green`, `magenta`, `blue`, `red`, `darkBlue`, `darkCyan`, `darkGreen`, `darkMagenta`, `darkRed`, `darkYellow`, `darkGray`, `lightGray`, `black`; treat an unknown name as yellow) and on `shading` (`#rrggbb`).
+- Spans of different styles overlap freely. Spans with the same style and color never overlap, and adjacent ones are merged. Lists are sorted by `from`.
+- Only direct formatting is reported. What a paragraph's own style implies (tags are bold, cite paragraphs are small) is not, so render each part with its usual look and apply spans on top.
+- The option costs a pass over every text run. Ask for it when you need it (an export, an analysis), not on every `events.onDocChange`.
+- Builds before it existed ignore the option. Check `card.formatting !== undefined`.
+
 <!-- permission-table:start -->
 <!-- Generated from src/editor/plugin-permissions.ts and src/editor/plugin-call-rules.ts. Do not edit by hand: run `npm run docs:permissions`. -->
 

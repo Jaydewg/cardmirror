@@ -117,6 +117,83 @@ describe('doc.read bodyRead', () => {
   });
 });
 
+describe('doc.read formatting', () => {
+  const m = (name: string, attrs?: Record<string, unknown>) => marks[name]!.create(attrs ?? null);
+  const card = (...paras: PMNode[]): PMNode =>
+    nodes['doc']!.createChecked(null, [
+      nodes['hat']!.create({ id: 'h' }, [schema.text('Hat '), schema.text('one', [m('italic')])]),
+      nodes['card']!.create(null, [
+        nodes['tag']!.create({ id: 't' }, [schema.text('Tag '), schema.text('X', [m('highlight', { color: 'cyan' })])]),
+        ...paras,
+      ]),
+    ]);
+
+  it('is absent unless asked for', () => {
+    const r = readDocStructure(card(nodes['card_body']!.create(null, schema.text('x'))));
+    expect(r.cards[0]!.formatting).toBeUndefined();
+    expect(r.outline[0]!.formatting).toBeUndefined();
+  });
+
+  it('reports spans per part, parallel to the text fields', () => {
+    const doc = card(
+      nodes['cite_paragraph']!.create(null, [
+        schema.text('Smith 24', [m('cite_mark')]),
+        schema.text(' (prof)'),
+      ]),
+      nodes['card_body']!.create(null, [
+        schema.text('ab', [m('underline_mark'), m('highlight', { color: 'yellow' })]),
+        schema.text('cd', [m('underline_mark'), m('highlight', { color: 'green' })]),
+        schema.text('ef', [m('emphasis_mark'), m('highlight', { color: 'green' })]),
+        schema.text('gh', [m('highlight', { color: 'none' }), m('shading', { color: 'A0B1C2' })]),
+        schema.text('ij', [m('bold')]),
+      ]),
+      nodes['undertag']!.create(null, schema.text('u')),
+    );
+    const r = readDocStructure(doc, { formatting: true });
+    expect(r.outline.map((o) => o.formatting)).toEqual([
+      [{ from: 4, to: 7, style: 'italic' }],
+      [{ from: 4, to: 5, style: 'highlight', color: 'cyan' }],
+    ]);
+    const f = r.cards[0]!.formatting!;
+    expect(f.heading).toEqual([{ from: 4, to: 5, style: 'highlight', color: 'cyan' }]);
+    expect(f.citeParagraphs).toEqual([[{ from: 0, to: 8, style: 'cite' }]]);
+    expect(f.undertags).toEqual([[]]);
+    expect(f.body).toHaveLength(1);
+    expect(f.body[0]).toEqual([
+      { from: 0, to: 4, style: 'underline' }, // merged across the color change
+      { from: 0, to: 2, style: 'highlight', color: 'yellow' },
+      { from: 2, to: 6, style: 'highlight', color: 'green' }, // same color merged
+      { from: 4, to: 6, style: 'emphasis' },
+      { from: 6, to: 8, style: 'shading', color: '#a0b1c2' }, // 'none' highlight dropped
+      { from: 8, to: 10, style: 'bold' },
+    ]);
+  });
+
+  it('counts underline_direct (structural paragraphs) as underline', () => {
+    const doc = nodes['doc']!.createChecked(null, [
+      nodes['card']!.create(null, [
+        nodes['tag']!.create({ id: 't' }, schema.text('Tag', [m('underline_direct')])),
+      ]),
+    ]);
+    expect(readDocStructure(doc, { formatting: true }).cards[0]!.formatting!.heading).toEqual([
+      { from: 0, to: 3, style: 'underline' },
+    ]);
+  });
+
+  it('offsets match textContent across inline atoms', () => {
+    const doc = card(
+      nodes['card_body']!.create(null, [
+        schema.text('one'),
+        nodes['image']!.create(),
+        schema.text('two', [m('italic')]),
+      ]),
+    );
+    const c = readDocStructure(doc, { formatting: true }).cards[0]!;
+    const [span] = c.formatting!.body[0]!;
+    expect(c.body[0]!.slice(span!.from, span!.to)).toBe('two');
+  });
+});
+
 describe('doc.edit engine', () => {
   const state = (): EditorState => EditorState.create({ doc: sampleDoc(), plugins: [history()] });
 
@@ -184,6 +261,15 @@ describe('api.doc', () => {
     expect(snap).toMatchObject({ docUid: 'd1', docId: 'id-d1', title: 'd1.cmir' });
     expect(snap.cards).toHaveLength(2);
     expect(h.api().doc!.read!('missing')).toBeNull();
+  });
+
+  it('read passes { formatting: true } through and ignores junk options', () => {
+    const h = makeHarness({ d1: mount() });
+    h.register('demo', ['doc.read']);
+    expect(h.api().doc!.read!(undefined, { formatting: true })!.cards[0]!.formatting).toBeDefined();
+    expect(h.api().doc!.read!()!.cards[0]!.formatting).toBeUndefined();
+    expect(h.api().doc!.read!(undefined, { formatting: 'yes' } as never)!.cards[0]!.formatting).toBeUndefined();
+    expect(h.api().doc!.read!(undefined, 'formatting' as never)!.cards[0]!.formatting).toBeUndefined();
   });
 
   it('insert dispatches (deferred) and reports read mode instead of dropping silently', async () => {

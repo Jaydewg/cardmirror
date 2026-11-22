@@ -1,15 +1,19 @@
 /** `doc.read` / `doc.edit` → `api.doc` (methods per permission). */
 import { targetDocUid, targetView, type CapabilityContext } from './context.js';
-import { readDocStructure, type PluginDocStructure } from './doc-read.js';
+import { readDocStructure, type PluginDocStructure, type PluginReadOptions } from './doc-read.js';
 import { runPluginInsert, type PluginEditResult, type PluginInsertRequest } from './doc-edit.js';
 import { jumpToHeadingInView } from '../plugin-jump.js';
 import type { JumpResult } from '../plugin-api.js';
 
 export type {
   PluginCard,
+  PluginCardFormatting,
   PluginDocStats,
   PluginHeadingType,
   PluginOutlineItem,
+  PluginReadOptions,
+  PluginTextSpan,
+  PluginTextStyle,
 } from './doc-read.js';
 export type { PluginEditError, PluginEditResult, PluginInsertRequest, PluginInsertRole } from './doc-edit.js';
 
@@ -24,8 +28,12 @@ export interface PluginDocSnapshot extends PluginDocStructure {
 export interface PluginDocApi {
   /** Outline, cards and stats of a doc, or null when no such doc is open.
    *  Live views and linked copies are skipped (their content lives
-   *  elsewhere). Cheap enough to call on every `events.onDocChange`. */
-  read?(docUid?: string): PluginDocSnapshot | null;
+   *  elsewhere). Cheap enough to call on every `events.onDocChange`.
+   *  `{ formatting: true }` adds each item's and card's direct formatting
+   *  (highlight, underline, emphasis, cite, shading, bold, italic) as
+   *  character spans — costlier, so ask only when you need it. Builds
+   *  before it existed ignore the option: check `formatting !== undefined`. */
+  read?(docUid?: string, opts?: PluginReadOptions): PluginDocSnapshot | null;
   /** Insert text as cards / headings / body. One undo step per call;
    *  refused (never silently dropped) in read mode, for spectators, in
    *  live views / linked copies, and in AI-locked regions. */
@@ -54,7 +62,7 @@ export function buildDocApi(ctx: CapabilityContext): PluginDocApi | undefined {
   if (!read && !edit) return undefined;
   const api: PluginDocApi = {};
   if (read) {
-    api.read = (docUid) => {
+    api.read = (docUid, opts) => {
       const hit = targetView(deps, docUid);
       if (!hit) return null;
       const ident =
@@ -63,7 +71,9 @@ export function buildDocApi(ctx: CapabilityContext): PluginDocApi | undefined {
         docUid: hit.uid,
         docId: ident?.docId ?? null,
         title: ident?.docTitle ?? 'Untitled',
-        ...readDocStructure(hit.view.state.doc),
+        ...readDocStructure(hit.view.state.doc, {
+          formatting: opts != null && typeof opts === 'object' && opts.formatting === true,
+        }),
       };
     };
     api.jumpTo = async (target) => {
