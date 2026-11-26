@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  CardReflex MSIX package manifest template (build.appx.customManifestPath).
+
+  The package is an MSIX. MSIX keeps AppX's names on purpose: the manifest
+  file is still called AppxManifest.xml and the schema namespaces are still
+  http://schemas.microsoft.com/appx/manifest/..., and electron-builder still
+  calls its target `appx`. The features below (desktop6, rescap
+  unvirtualizedResources) are MSIX-era and need Windows 10 1903 or later.
+
+  electron-builder 26.8.1's own template
+  (node_modules/app-builder-lib/templates/appx/appxmanifest.xml) with:
+    - xmlns:uap3 + xmlns:desktop6 for the extensions and properties below;
+    - desktop6 write virtualization disabled (see Properties).
+  ${...} placeholders are filled by electron-builder; identity, capabilities
+  and display name come from electron-builder.config.cjs. Re-diff against
+  the upstream template when upgrading electron-builder.
+-->
+<!--suppress XmlUnusedNamespaceDeclaration -->
+<Package
+   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+   xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+   xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
+   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities">
+  <!-- use single quotes to avoid double quotes escaping in the publisher value  -->
+  <Identity Name="${identityName}"
+    ProcessorArchitecture="${arch}"
+    Publisher='${publisher}'
+    Version="${version}" />
+  <Properties>
+    <DisplayName>${displayName}</DisplayName>
+    <PublisherDisplayName>${publisherDisplayName}</PublisherDisplayName>
+    <Description>${description}</Description>
+    <Logo>${logo}</Logo>
+    <!-- Write virtualization OFF (needs rescap:unvirtualizedResources,
+         declared via appx.capabilities): the app's %APPDATA% files must be
+         the REAL ones, shared with the NSIS build (same settings/plugins)
+         and visible to other apps: Verbatim reads fast-paste-bridge.json,
+         flow apps read %APPDATA%\cardmirror-bridge. -->
+    <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
+    <desktop6:RegistryWriteVirtualization>disabled</desktop6:RegistryWriteVirtualization>
+  </Properties>
+  <Resources>
+    ${resourceLanguages}
+  </Resources>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="${minVersion}" MaxVersionTested="${maxVersionTested}" />
+  </Dependencies>
+  ${capabilities}
+  <Applications>
+    <Application Id="${applicationId}" Executable="${executable}" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+       BackgroundColor="${backgroundColor}"
+       DisplayName="${displayName}"
+       Square150x150Logo="${square150x150Logo}"
+       Square44x44Logo="${square44x44Logo}"
+       Description="${description}">
+        ${lockScreen}
+        ${defaultTile}
+        ${splashScreen}
+      </uap:VisualElements>
+      ${extensions}
+    </Application>
+  </Applications>
+</Package>

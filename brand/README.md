@@ -24,6 +24,13 @@ brand/<id>/generated/      committed icon outputs (CI never renders images)
   `pmd-*` storage keys, plugin IDs/SDK names, `appId`, the `userData` folder
   (pinned to `CardMirror`), and the PolyForm Required Notice / credits.
 
+**Microsoft Store:** the package is an **MSIX** (`npm run desktop:dist:store`;
+electron-builder names its MSIX target `appx`, hence `build.appx` in
+`apps/desktop/package.json`). Its identity (`JaydenWang.CardReflex`, Store ID
+9PNNWSF2BC1T) is tied to the name reserved in Partner Center, and the
+package's display name (`storeDisplayName`) must match a reserved name. Building the Store package
+under another profile needs that name reserved for the same product first.
+
 `brand/cardmirror/` is upstream's current identity, kept so a build can switch
 back (for example with upstream's blessing) and so upstream merges stay easy.
 Its `generated/` folder is a snapshot of the icons as they were before the

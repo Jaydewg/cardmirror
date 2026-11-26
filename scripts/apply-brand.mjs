@@ -91,7 +91,9 @@ export function applyBrand(id = process.env.BRAND || DEFAULT_BRAND) {
   changed = 0;
 
   copyTree(join(gen, 'desktop'), build);
-  copyTree(join(gen, 'appx'), join(build, 'appx'), { exact: true });
+  // MSIX (Microsoft Store) tiles. electron-builder reads them from the
+  // fixed folder build/appx/ (its target for MSIX is named `appx`).
+  copyTree(join(gen, 'msix-tiles'), join(build, 'appx'), { exact: true });
   copyTree(join(gen, 'public'), join(ROOT, 'public'));
 
   const mark = readFileSync(join(gen, 'file-mark-48.png')).toString('base64');

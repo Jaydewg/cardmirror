@@ -1,0 +1,27 @@
+<!--
+  Extra MSIX extensions (build.appx.customExtensionsPath), inserted inside
+  <Extensions> after electron-builder's own (the .cmir association comes from
+  `fileAssociations`).
+
+  - .docx: listed under "Open with" only. A packaged app can never make
+    itself the default handler, which is exactly what installer.nsh does by
+    hand for NSIS (Word keeps .docx).
+  - Execution aliases: `cardreflex` and `cardmirror` launch the app from
+    Win+R or a terminal, so the CardMirror -> CardReflex rename doesn't
+    break typed muscle memory (no visible launcher carries the old name).
+    `Executable` must match the brand profile's executableName (cardmirror).
+-->
+<uap:Extension Category="windows.fileTypeAssociation">
+  <uap:FileTypeAssociation Name="docx">
+    <uap:DisplayName>Word document</uap:DisplayName>
+    <uap:SupportedFileTypes>
+      <uap:FileType>.docx</uap:FileType>
+    </uap:SupportedFileTypes>
+  </uap:FileTypeAssociation>
+</uap:Extension>
+<uap3:Extension Category="windows.appExecutionAlias" Executable="app\cardmirror.exe" EntryPoint="Windows.FullTrustApplication">
+  <uap3:AppExecutionAlias>
+    <desktop:ExecutionAlias Alias="cardreflex.exe" />
+    <desktop:ExecutionAlias Alias="cardmirror.exe" />
+  </uap3:AppExecutionAlias>
+</uap3:Extension>

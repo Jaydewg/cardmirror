@@ -18,6 +18,7 @@
     "build:native": "node scripts/build-ax-suppress.cjs",
     "pack": "node ../../scripts/apply-brand.mjs && npm run fetch:koffi-cross && npm run build:native && npm run build:renderer && npm run build:main && npm run build:service && electron-builder --config electron-builder.config.cjs --dir",
     "dist": "node ../../scripts/apply-brand.mjs && npm run fetch:koffi-cross && npm run build:native && npm run build:renderer && npm run build:main && npm run build:service && electron-builder --config electron-builder.config.cjs",
+    "dist:store": "node ../../scripts/apply-brand.mjs && npm run fetch:koffi-cross && npm run build:native && npm run build:renderer && npm run build:main && npm run build:service && electron-builder --config electron-builder.config.cjs --win appx --publish never",
     "release": "node ../../scripts/apply-brand.mjs && npm run fetch:koffi-cross && npm run build:native && npm run build:renderer && npm run build:main && npm run build:service && electron-builder --config electron-builder.config.cjs --publish always",
     "fetch:koffi-cross": "bash scripts/fetch-koffi-cross.sh",
     "pack:lite": "node scripts/inject-lite-build.cjs 1 && VITE_LITE=1 npm run pack; node scripts/inject-lite-build.cjs 0",
@@ -108,6 +109,27 @@
           ]
         }
       ]
+    },
+    "appx": {
+      "artifactName": "${productName}-${version}.msix",
+      "identityName": "JaydenWang.CardReflex",
+      "publisher": "CN=D3D74B55-0B45-4B0A-8926-C0B692382F8D",
+      "publisherDisplayName": "Jayden Wang",
+      "applicationId": "CardReflex",
+      "languages": [
+        "en-US"
+      ],
+      "showNameOnTiles": true,
+      "minVersion": "10.0.19041.0",
+      "maxVersionTested": "10.0.26100.0",
+      "capabilities": [
+        "runFullTrust",
+        "internetClient",
+        "microphone",
+        "unvirtualizedResources"
+      ],
+      "customManifestPath": "msix-config/AppxManifest.xml",
+      "customExtensionsPath": "build/msix-config/extensions.xml"
     },
     "linux": {
       "category": "Office",

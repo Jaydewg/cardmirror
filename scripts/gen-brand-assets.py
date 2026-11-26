@@ -19,7 +19,9 @@ Outputs (paths under generated/):
   desktop/icons/NxN.png       Linux icon set (16 ... 1024)
   desktop/{cmir,docx}.{ico,icns}   document icons (apps/desktop/scripts/
                               generate-doc-icons.py, with this mark)
-  appx/*.png                  Microsoft Store package tiles
+  msix-tiles/*.png            Microsoft Store (MSIX) package tiles; apply-brand
+                              copies them to apps/desktop/build/appx/, the
+                              folder electron-builder reads MSIX tiles from
   public/*.png                web favicon, apple-touch, PWA icons
   file-mark-48.png            status-bar file drag handle / drag image
 """
@@ -117,11 +119,11 @@ def main() -> None:
             check=True,
         )
 
-        # ── Microsoft Store (AppX) tiles ──
+        # ── Microsoft Store (MSIX) tiles ──
         # The mark carries its own rounded signal tile; Windows plates the
         # tiles on `tileBackground` (appx.backgroundColor), so the larger
         # tiles centre the mark with breathing room.
-        appx = out / "appx"
+        appx = out / "msix-tiles"
         appx.mkdir(parents=True, exist_ok=True)
         r.image(50).save(appx / "StoreLogo.png")
         r.image(44).save(appx / "Square44x44Logo.png")

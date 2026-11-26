@@ -10,5 +10,5 @@
   "description": "A debate-card editor that interoperates with Advanced Verbatim — cut, format, and organize evidence offline.",
   "tileBackground": "#2563EB",
   "themeColor": "#2563eb",
-  "appxDisplayName": "CardMirror"
+  "storeDisplayName": "CardMirror"
 }

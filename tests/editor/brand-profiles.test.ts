@@ -30,7 +30,7 @@ const REQUIRED = [
   'description',
   'tileBackground',
   'themeColor',
-  'appxDisplayName',
+  'storeDisplayName',
 ];
 const GENERATED = [
   'desktop/icon.png',

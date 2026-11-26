@@ -4,7 +4,7 @@
  * cardreflex — see brand/README.md).
  *
  * Every build script passes `--config electron-builder.config.cjs`, so the
- * product name, shortcut name, document type name and Store tile colour all
+ * product name, shortcut name, document type name and MSIX tile colour all
  * come from the profile instead of being hard-coded. `appId` stays
  * com.cardmirror.app on purpose: it keys NSIS's install registry and the
  * update path, and nobody sees it.
@@ -48,9 +48,13 @@ const config = {
     artifactName: `${brand.id}${lite ? '-lite' : ''}-\${version}.\${ext}`,
     ...(lite ? { executableName: `${brand.id}-lite` } : {}),
   },
+  // Microsoft Store package. It is an MSIX: electron-builder just calls its
+  // MSIX-capable target `appx` (config key, `--win appx`, and the fixed
+  // tile folder build/appx/). `build.appx.artifactName` in package.json
+  // gives the output a .msix extension, which makes makeappx write MSIX.
   appx: {
     ...(base.appx || {}),
-    displayName: brand.appxDisplayName,
+    displayName: brand.storeDisplayName,
     backgroundColor: brand.tileBackground,
   },
 };
