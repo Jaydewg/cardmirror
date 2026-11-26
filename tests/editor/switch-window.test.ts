@@ -53,11 +53,12 @@ import {
   formatKeyForDisplay,
 } from '../../src/editor/ribbon-commands.js';
 import { showToast } from '../../src/editor/toast.js';
+import { BRAND } from '../../src/brand-build.js';
 
 function win(id: number, over: Partial<WindowListEntry> = {}): WindowListEntry {
   return {
     windowId: id,
-    title: 'CardMirror',
+    title: `${BRAND.productName}`,
     docNames: [],
     isSpeech: false,
     isOwnWindow: false,
@@ -98,10 +99,10 @@ beforeEach(() => {
   hostState.focused = [];
   hostState.focusResult = true;
   hostState.windows = [
-    win(1, { title: 'Speech 1AC.cmir — CardMirror', docNames: ['Speech 1AC.cmir'], isOwnWindow: true }),
-    win(2, { title: 'Warming Aff.cmir — CardMirror', docNames: ['Warming Aff.cmir'] }),
-    win(3, { title: 'Politics DA.cmir — CardMirror', docNames: ['Politics DA.cmir'], isSpeech: true }),
-    win(4, { title: 'CardMirror', isMinimized: true }),
+    win(1, { title: `Speech 1AC.cmir — ${BRAND.productName}`, docNames: ['Speech 1AC.cmir'], isOwnWindow: true }),
+    win(2, { title: `Warming Aff.cmir — ${BRAND.productName}`, docNames: ['Warming Aff.cmir'] }),
+    win(3, { title: `Politics DA.cmir — ${BRAND.productName}`, docNames: ['Politics DA.cmir'], isSpeech: true }),
+    win(4, { title: `${BRAND.productName}`, isMinimized: true }),
   ];
 });
 
@@ -115,7 +116,7 @@ describe('windowLabel', () => {
     expect(windowLabel(win(1, { docNames: ['A.cmir', 'B.cmir'] }))).toBe('A.cmir · B.cmir');
   });
   it('falls back to the title minus the app suffix', () => {
-    expect(windowLabel(win(1, { title: 'Draft — CardMirror' }))).toBe('Draft');
+    expect(windowLabel(win(1, { title: `Draft — ${BRAND.productName}` }))).toBe('Draft');
   });
   it('names a home-screen / untitled window', () => {
     expect(windowLabel(win(1))).toBe('Untitled window');
@@ -178,7 +179,7 @@ describe('Switch Window palette (`w `)', () => {
     await settle();
     expect(rowNames()).toEqual([]);
     expect(document.querySelector('.pmd-qcs-empty')!.textContent).toBe(
-      'No other CardMirror windows are open.',
+      `No other ${BRAND.productName} windows are open.`,
     );
   });
 

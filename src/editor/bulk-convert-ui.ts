@@ -20,6 +20,7 @@ import { settings } from './settings.js';
 import { runWebFileTool } from './web-file-tools.js';
 import { setIcon } from './icons';
 import { isBackdropClick } from './backdrop-click.js';
+import { BRAND } from '../brand-build.js';
 
 type Direction = 'docx2cmir' | 'cmir2docx';
 type Output = 'files' | 'zip';
@@ -402,7 +403,7 @@ export function runConvertSingleFileWeb(): Promise<void> {
         bytes: await convertBytes(bytes, dir),
         outputName: swapExt(name, dir),
         filter: {
-          name: ext === 'cmir' ? 'CardMirror document' : 'Word document',
+          name: ext === 'cmir' ? `${BRAND.productName} document` : 'Word document',
           extensions: [ext],
         },
       };

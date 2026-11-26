@@ -19,6 +19,7 @@
 
 import { getElectronHost } from './host/index.js';
 import { promptForRouteChoice } from './text-prompt.js';
+import { BRAND } from '../brand-build.js';
 
 const REPO_URL = 'https://github.com/Jaydewg/cardmirror';
 // The LIST endpoint, newest first — NOT `/releases/latest`, which only
@@ -123,7 +124,7 @@ async function readBrowserSignals(): Promise<PlatformSignals> {
 
 async function pickTargetViaDialog(): Promise<InstallerTarget | null> {
   return promptForRouteChoice<InstallerTarget>({
-    message: 'Download the CardMirror desktop app — pick your platform:',
+    message: `Download the ${BRAND.productName} desktop app — pick your platform:`,
     choices: [
       { value: 'win-x64', label: 'Windows', description: 'Installer (.exe), 64-bit.' },
       {

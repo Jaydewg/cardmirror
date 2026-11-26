@@ -23,6 +23,7 @@ import { settings } from '../settings.js';
 import { ANTHROPIC_MESSAGES_URL, OPENROUTER_CHAT_URL } from './llm-endpoints.js';
 import { showToast } from '../toast.js';
 import { postNotice } from '../status-notices.js';
+import { BRAND } from '../../brand-build.js';
 
 /** Anthropic multipart content blocks (vision support). A text-only
  *  message can be a plain string; messages with images use the
@@ -396,7 +397,7 @@ function throwAnthropicHttpError(
   if (looksLikeModelError) {
     throw new LlmError(
       `The AI model "${requestedModel}" was rejected by Anthropic — it may have been retired. ` +
-        `Update CardMirror to the latest version, or, if you'd rather not update the whole app, ` +
+        `Update ${BRAND.productName} to the latest version, or, if you'd rather not update the whole app, ` +
         `set a newer model under Settings → Comments & AI → AI model.`,
       status,
       'model',

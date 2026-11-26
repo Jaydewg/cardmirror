@@ -48,6 +48,7 @@ import {
   type SnapshotStats,
 } from '../version-history.js';
 import { isBackdropClick } from '../backdrop-click.js';
+import { BRAND } from '../../brand-build.js';
 
 /** How a recovered copy gets opened. index.ts supplies a mode-aware
  *  opener: multi-pane mounts it into a slot of THIS window (via the
@@ -105,7 +106,7 @@ async function pickEnvelopeFromFile(): Promise<HistoryEnvelope | null> {
   if (!path) return null;
   const envelope = await host.readHistory({ path });
   if (!envelope) {
-    showToast('That file could not be read as CardMirror session history.');
+    showToast(`That file could not be read as ${BRAND.productName} session history.`);
     return null;
   }
   return envelope;

@@ -1,0 +1,14 @@
+{
+  "id": "cardreflex",
+  "productName": "CardReflex",
+  "liteName": "CardReflex Lite",
+  "executableName": "cardmirror",
+  "shortcutName": "CardReflex (a CardMirror fork)",
+  "docTypeName": "CardReflex Document",
+  "lineage": "A CardMirror fork",
+  "renamedFrom": "CardMirror",
+  "description": "Fast, Verbatim-compatible evidence editing for policy debate.",
+  "tileBackground": "#F26B3A",
+  "themeColor": "#F26B3A",
+  "appxDisplayName": "CardReflex"
+}

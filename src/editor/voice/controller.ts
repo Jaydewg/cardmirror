@@ -19,6 +19,7 @@ import { patchVoiceState, voicePluginKey } from './plugin.js';
 import { VoicePill } from './ui.js';
 import type { VoiceEndedEvent, VoiceEvent, VoiceLevel } from './types';
 import type { VoiceProfile } from './vocabulary.js';
+import { BRAND } from '../../brand-build.js';
 
 /** The preload voice surface (subset of window.electronAPI). */
 export interface VoiceHostApi {
@@ -235,7 +236,7 @@ export class VoiceController {
   /** First-run flow when the models aren't downloaded yet. */
   private async offerModelDownload(host: VoiceHostApi): Promise<void> {
     if (!host.voiceDownloadModel || !host.voiceModelInfo) {
-      showToast("Voice model not downloaded, and this install can't fetch it — update CardMirror", { durationMs: 3200 });
+      showToast(`Voice model not downloaded, and this install can't fetch it — update ${BRAND.productName}`, { durationMs: 3200 });
       return;
     }
     const info = await host.voiceModelInfo();

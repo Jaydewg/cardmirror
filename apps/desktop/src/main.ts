@@ -15,6 +15,8 @@
  *     journals, and auto-update.
  */
 
+// FIRST: pins userData before any other module can read it.
+import './user-data-pin.js';
 import { arrangementRects, type ArrangeOptions } from './arrange-windows.js';
 import {
   app,
@@ -40,13 +42,6 @@ import { registerVoiceIpc } from './voice/ipc';
 import { registerFlowIpc } from './flow-bridge.js';
 import { registerPairingIpc, relayUrl } from './pairing-ipc.js';
 import { LITE_BUILD } from './lite-build.js';
-
-/** Running from a Microsoft Store (AppX/MSIX) package. Electron sets
- *  `process.windowsStore` at runtime, so one build serves both channels:
- *  the Store delivers updates itself, so this build never runs
- *  electron-updater (which would also fail: the package directory is
- *  read-only). */
-const STORE_BUILD = process.windowsStore === true;
 import {
   readAccessibilityTreeEnabled,
   writeAccessibilityTreeEnabled,
@@ -126,6 +121,14 @@ import {
   flowPost,
 } from './bridge-handshake.js';
 import { hardenStdio } from './stdio-harden.js';
+import { BRAND } from './brand-build.js';
+
+/** Running from a Microsoft Store (AppX/MSIX) package. Electron sets
+ *  `process.windowsStore` at runtime, so one build serves both channels:
+ *  the Store delivers updates itself, so this build never runs
+ *  electron-updater (which would also fail: the package directory is
+ *  read-only). */
+const STORE_BUILD = process.windowsStore === true;
 
 // FIRST executable statement: once stdio's far end can be a closed
 // pipe (Linux launches), any console call — ours or Electron's own
@@ -197,8 +200,8 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 // pull the dump from there manually and attach it to a bug report.
 // No telemetry, no remote endpoint, no third-party SDK.
 crashReporter.start({
-  productName: 'CardMirror',
-  companyName: 'CardMirror',
+  productName: `${BRAND.productName}`,
+  companyName: `${BRAND.productName}`,
   submitURL: '',
   uploadToServer: false,
 });
@@ -471,7 +474,7 @@ function createWindow(initialDoc?: InitialDocPayload): BrowserWindow {
     // degradation from there.
     minWidth: 0,
     minHeight: 0,
-    title: 'CardMirror',
+    title: `${BRAND.productName}`,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -540,9 +543,9 @@ function createWindow(initialDoc?: InitialDocPayload): BrowserWindow {
     recentReloads.push(now);
     if (recentReloads.length > 3) {
       dialog.showErrorBox(
-        'CardMirror kept crashing',
+        `${BRAND.productName} kept crashing`,
         'The editor window crashed several times in a row. Your unsaved work is preserved ' +
-          'in the recovery journal — please quit and reopen CardMirror.',
+          `in the recovery journal — please quit and reopen ${BRAND.productName}.`,
       );
       return;
     }
@@ -582,7 +585,7 @@ function createWindow(initialDoc?: InitialDocPayload): BrowserWindow {
         type: 'warning',
         message: 'This window has stopped responding.',
         detail:
-          'CardMirror can keep waiting, or restart this window. Restarting reloads the ' +
+          `${BRAND.productName} can keep waiting, or restart this window. Restarting reloads the ` +
           'document and restores unsaved work from the recovery journal. Your other ' +
           'windows are not affected.',
         buttons: ['Wait', 'Restart Window', 'Close Window'],
@@ -1986,7 +1989,7 @@ ipcMain.handle('host:pick-history-file', async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   const result = await dialog.showOpenDialog(win ?? BrowserWindow.getAllWindows()[0]!, {
     defaultPath: journalsDir(),
-    filters: [{ name: 'CardMirror session history', extensions: ['cmir-history'] }],
+    filters: [{ name: `${BRAND.productName} session history`, extensions: ['cmir-history'] }],
     properties: ['openFile'],
   });
   return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]!;
@@ -3354,7 +3357,7 @@ function showUpdateAvailableDialog(info: { version: string }): void {
       defaultId: 0,
       cancelId: macManual ? 1 : 0,
       title: 'Update available',
-      message: `CardMirror ${info.version} is available.`,
+      message: `${BRAND.productName} ${info.version} is available.`,
       detail: macManual
         ? "Open the release page to download the new .dmg and reinstall — this install can't update itself automatically."
         : 'Downloading in the background. When it finishes, a chip appears in the status bar — click it to restart into the update.',
@@ -3437,7 +3440,7 @@ function runUpdateCheck(opts: UpdateCheckOpts): void {
       type: 'info',
       title: 'No updates',
       message: "You're on the latest version.",
-      detail: `CardMirror ${app.getVersion()}`,
+      detail: `${BRAND.productName} ${app.getVersion()}`,
     });
   };
 
@@ -3612,7 +3615,7 @@ function openTimerWindow(popoutOpts?: TimerPopoutOpts): void {
     skipTaskbar: true,
     alwaysOnTop: true,
     show: false,
-    title: 'Timer — CardMirror',
+    title: `Timer — ${BRAND.productName}`,
     webPreferences: {
       // Minimal dedicated preload: exposes ONLY a resize call (see
       // timer-popout-preload.ts). Everything else the pop-out does

@@ -18,6 +18,8 @@
  * outside the index.ts app shell.
  */
 
+import { BRAND } from '../brand-build.js';
+
 export type UpdateChipState =
   | { state: 'available' | 'ready'; version: string }
   | { state: 'downloading'; version: string; percent: number };
@@ -37,7 +39,7 @@ export function renderUpdateChip(el: HTMLButtonElement, s: UpdateChipState | nul
   el.hidden = false;
   if (s.state === 'ready') {
     el.textContent = `Update ${s.version} ready — restart to install`;
-    el.title = 'Restart CardMirror now to finish installing the update';
+    el.title = `Restart ${BRAND.productName} now to finish installing the update`;
   } else if (s.state === 'downloading') {
     el.textContent = `Downloading update ${s.version}… ${s.percent}%`;
     el.title = 'The update is downloading in the background; keep working';

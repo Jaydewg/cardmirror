@@ -19,6 +19,7 @@ import { settings } from './settings.js';
 import { showToast } from './toast.js';
 import { getFileIndexClient, type FileIndexClient } from './file-search-client.js';
 import type { FileIndexRefreshResult } from './file-index-protocol.js';
+import { BRAND } from '../brand-build.js';
 
 export interface RefreshFileSearchIndexDeps {
   getClient: () => Promise<FileIndexClient | null>;
@@ -65,7 +66,7 @@ async function run(deps: RefreshFileSearchIndexDeps): Promise<void> {
   try {
     result = await client.refresh(roots);
   } catch {
-    deps.toast('File search index refresh failed — try again, or restart CardMirror.');
+    deps.toast(`File search index refresh failed — try again, or restart ${BRAND.productName}.`);
     return;
   }
   deps.toast(refreshSummary(result));

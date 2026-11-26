@@ -40,6 +40,10 @@ import {
 import { preciseScrollIntoView } from './precise-scroll.js';
 import { aiConfigured } from './ai/llm.js';
 import { showToast } from './toast.js';
+import { BRAND } from '../brand-build.js';
+
+/** " — <product>" (or " - <product>") at the end of a window title. */
+const TITLE_SUFFIX = new RegExp(`\\s*[—-]\\s*${BRAND.productName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`);
 
 const ZOOM_MIN = ZOOM_MIN_PCT;
 const ZOOM_MAX = ZOOM_MAX_PCT;
@@ -124,7 +128,7 @@ function buildAppBar(): HTMLElement {
  *  open/save/dirty change; observing it avoids new exports. */
 function syncTitle(el: HTMLSpanElement): void {
   const apply = (): void => {
-    el.textContent = document.title.replace(/\s*[—-]\s*CardMirror\s*$/, '') || 'CardMirror';
+    el.textContent = document.title.replace(TITLE_SUFFIX, '') || BRAND.productName;
   };
   apply();
   const titleEl = document.querySelector('title');

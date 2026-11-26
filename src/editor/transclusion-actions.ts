@@ -26,6 +26,7 @@ import { flattenSelfRefsInFragment } from './self-transclusion.js';
 import { resolveTransclusion, type ResolveOutcome } from './transclusion-resolve.js';
 import { ZONE_REFRESHED_META } from './transclusion-divergence-plugin.js';
 import { showConfirm } from './confirm-dialog.js';
+import { BRAND } from '../brand-build.js';
 
 /** " › " with explicit code points (space, U+203A, space). */
 const CRUMB_SEP = ' › ';
@@ -144,7 +145,7 @@ export function buildInDocCopyAttrs(doc: PMNode, headingId: string): BuildZoneOu
 export function buildZoneErrorMessage(reason: BuildZoneReason | undefined): string {
   switch (reason) {
     case 'no-heading-id':
-      return 'That heading has no stable id — open and save the source in CardMirror, then retry.';
+      return `That heading has no stable id — open and save the source in ${BRAND.productName}, then retry.`;
     case 'no-section':
       return 'Could not read that section from the source.';
     case 'empty-section':

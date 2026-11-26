@@ -46,6 +46,7 @@ import { normalizeReadingMarkers } from '../schema/reading-marker.js';
 import type { Thread } from '../editor/comments-plugin.js';
 import { gzip, gzipAsync, gunzip, isGzip, withGzipComment } from './codec.js';
 import { gzipCommentForBag, sanitizePluginBag, type PluginFileBag } from './plugin-data.js';
+import { BRAND } from '../brand-build.js';
 
 /** Magic identifier present in every CardMirror native file. Rejects
  *  arbitrary JSON files. */
@@ -321,28 +322,28 @@ function parseNativeImpl(
     parsed = JSON.parse(text);
   } catch (err) {
     throw new Error(
-      `Not a CardMirror file: failed to parse JSON (${err instanceof Error ? err.message : err}).`,
+      `Not a ${BRAND.productName} file: failed to parse JSON (${err instanceof Error ? err.message : err}).`,
     );
   }
   if (typeof parsed !== 'object' || parsed === null) {
-    throw new Error('Not a CardMirror file: expected a JSON object.');
+    throw new Error(`Not a ${BRAND.productName} file: expected a JSON object.`);
   }
   const file = parsed as Partial<NativeFile>;
   if (file.format !== FORMAT_ID) {
     throw new Error(
-      `Not a CardMirror file: missing or unrecognized format identifier (${String(file.format)}).`,
+      `Not a ${BRAND.productName} file: missing or unrecognized format identifier (${String(file.format)}).`,
     );
   }
   if (typeof file.formatVersion !== 'number') {
-    throw new Error('CardMirror file is missing formatVersion.');
+    throw new Error(`${BRAND.productName} file is missing formatVersion.`);
   }
   if (file.formatVersion > FORMAT_VERSION) {
     throw new Error(
-      `CardMirror file uses formatVersion ${file.formatVersion}, which is newer than this build supports (max ${FORMAT_VERSION}). Update CardMirror to read this file.`,
+      `${BRAND.productName} file uses formatVersion ${file.formatVersion}, which is newer than this build supports (max ${FORMAT_VERSION}). Update ${BRAND.productName} to read this file.`,
     );
   }
   if (file.doc === undefined) {
-    throw new Error('CardMirror file is missing its doc field.');
+    throw new Error(`${BRAND.productName} file is missing its doc field.`);
   }
   // Defensive: stamp any heading whose `id` came in null. Old
   // files written before the alpha.6 F2 fix can contain
@@ -403,7 +404,7 @@ function parseNativeImpl(
     }
   } catch (err) {
     throw new NativeDamagedError(
-      `This CardMirror file is damaged and can’t be opened (${
+      `This ${BRAND.productName} file is damaged and can’t be opened (${
         err instanceof Error ? err.message : String(err)
       }).`,
     );

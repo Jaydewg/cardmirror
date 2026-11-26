@@ -18,6 +18,7 @@ import { runWebFileTool } from './web-file-tools.js';
 import type { BulkCompressProgress } from './host/electron-host.js';
 import { setIcon } from './icons';
 import { isBackdropClick } from './backdrop-click.js';
+import { BRAND } from '../brand-build.js';
 
 function baseName(p: string): string {
   const parts = p.split(/[\\/]/).filter(Boolean);
@@ -242,7 +243,7 @@ export function runCompressSingleFileWeb(): Promise<void> {
       return {
         bytes: out,
         outputName: name,
-        filter: { name: 'CardMirror document', extensions: ['cmir'] },
+        filter: { name: `${BRAND.productName} document`, extensions: ['cmir'] },
         resultNote:
           after < before
             ? `Compressed: ${formatBytes(before)} → ${formatBytes(after)} (${pct}% smaller).`

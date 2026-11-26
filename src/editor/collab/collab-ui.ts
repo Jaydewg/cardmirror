@@ -88,6 +88,7 @@ import { canonRelayUrl, parseSessionAddress, relayHost, type ParsedSessionAddres
 import { CollabSession } from './collab-session.js';
 import { compareAppVersions } from '../relay-protocol.js';
 import { appVersion } from '../install-info.js';
+import { BRAND } from '../../brand-build.js';
 
 export interface CollabUiDeps {
   getView(): EditorView | null;
@@ -1302,7 +1303,7 @@ function noteWriterFailure(key: string, what: string, consecutive: number): void
     severity: 'warning',
     title: `Session ${what} isn\u2019t being saved`,
     body:
-      `CardMirror could not write the ${what} ${consecutive} times in a row (disk full or ` +
+      `${BRAND.productName} could not write the ${what} ${consecutive} times in a row (disk full or ` +
       'storage denied?). Your live session still works; save the document to be safe.',
     key,
   });
@@ -1413,7 +1414,7 @@ async function joinSessionWithCodeInner(
   // is for FUTURE floors above the running version.)
   if (decoded.minVersion && compareAppVersions(appVersion, decoded.minVersion) < 0) {
     showToast(
-      `This session needs CardMirror ${decoded.minVersion} or newer — update to join.`,
+      `This session needs ${BRAND.productName} ${decoded.minVersion} or newer — update to join.`,
     );
     report('needs-update');
     return false;
@@ -1594,7 +1595,7 @@ async function resumeSessionFlowInner(
   // synthetic key in the duplicate-open registry; probing it also focuses
   // that window (so the user lands on the live session, not an error).
   if (await roomLiveElsewhere(roomId)) {
-    showToast('That session is already open in another CardMirror window.');
+    showToast(`That session is already open in another ${BRAND.productName} window.`);
     return true; // live elsewhere — an invite/row for it is redundant here
   }
   const record = await loadSessionRecord(roomId);
@@ -1794,9 +1795,9 @@ function sessionDocTitle(ownerUid: string | null | undefined): string {
   const byUid = ownerUid ? docTitleResolver?.(ownerUid) : null;
   if (byUid != null) return byUid.trim();
   const t = document.title;
-  const cut = t.lastIndexOf(' — CardMirror');
+  const cut = t.lastIndexOf(` — ${BRAND.productName}`);
   if (cut > 0) return t.slice(0, cut);
-  return t === 'CardMirror' ? '' : t;
+  return t === `${BRAND.productName}` ? '' : t;
 }
 
 /** Shared invite-send tail: sealed pairing message, version-floored so

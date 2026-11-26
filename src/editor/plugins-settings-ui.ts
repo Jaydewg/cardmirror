@@ -27,6 +27,7 @@ import { settings } from './settings.js';
 import { captureFocusForDialog, confirmDialog } from './text-prompt.js';
 import { showToast } from './toast.js';
 import { isBackdropClick } from './backdrop-click.js';
+import { BRAND } from '../brand-build.js';
 
 interface InstalledPlugin {
   id: string;
@@ -80,13 +81,13 @@ export function renderPluginsPanel(container: HTMLElement): void {
   // (webFrame.executeJavaScript), so they must be unreachable while the
   // master switch that promises to gate plugins is off.
   if (!settings.get('pluginsEnabled')) {
-    placeholder(container, 'Enable plugins above, then restart CardMirror.');
+    placeholder(container, `Enable plugins above, then restart ${BRAND.productName}.`);
     return;
   }
   // Switch is on but boot ran with it off — the window registry was never
   // installed, so a loaded bundle's registration would silently no-op.
   if (typeof window.__registerCardMirrorPlugin !== 'function') {
-    placeholder(container, 'Restart CardMirror to activate plugins.');
+    placeholder(container, `Restart ${BRAND.productName} to activate plugins.`);
     return;
   }
 
@@ -171,7 +172,7 @@ export function renderPluginsPanel(container: HTMLElement): void {
         // Listed but inert: main refuses to serve its bundle, so the
         // toggle would lie. The row stays so the user can see it and
         // uninstall it (hidden reads as data loss).
-        label.textContent += ` — needs CardMirror ${p.incompatible} or newer`;
+        label.textContent += ` — needs ${BRAND.productName} ${p.incompatible} or newer`;
         row.classList.add('pmd-plugins-row-incompatible');
       }
       const enable = document.createElement('input');
@@ -434,7 +435,7 @@ export function renderPluginsPanel(container: HTMLElement): void {
         ? (await confirmDialog(
             `Install ${p.name} v${p.version} by ${p.author ?? 'an unknown author'} ` +
               `from github.com/${res.ownerRepo}? ` +
-              'This plugin runs with full access to CardMirror and your documents.',
+              `This plugin runs with full access to ${BRAND.productName} and your documents.`,
           ))
           ? []
           : null

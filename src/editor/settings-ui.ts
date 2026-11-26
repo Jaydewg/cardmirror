@@ -119,6 +119,7 @@ import {
   renderSpeechFilename,
 } from './speech-filename.js';
 import { isBackdropClick } from './backdrop-click.js';
+import { BRAND } from '../brand-build.js';
 
 interface SeatCandidateUi {
   routingCode: string;
@@ -2170,7 +2171,7 @@ function buildInstallInfoSection(): HTMLElement {
     const liteNote = document.createElement('div');
     liteNote.className = 'pmd-update-pause-desc';
     liteNote.textContent =
-      'CardMirror Lite never checks for updates or connects to the ' +
+      `${BRAND.liteName} never checks for updates or connects to the ` +
       'internet. To upgrade, install a newer Lite build from the ' +
       'releases page.';
     wrap.appendChild(liteNote);
@@ -2196,7 +2197,7 @@ function buildCrashDumpsSection(): HTMLElement | null {
   const desc = document.createElement('div');
   desc.className = 'pmd-settings-row-desc';
   desc.textContent =
-    'If CardMirror ever crashes, the system saves a diagnostic dump in this ' +
+    `If ${BRAND.productName} ever crashes, the system saves a diagnostic dump in this ` +
     'folder. Attaching the newest file to a bug report helps pin down the ' +
     'cause — nothing is sent anywhere unless you share it yourself.';
   section.appendChild(desc);
@@ -4765,7 +4766,7 @@ function buildSpeechDocFormatEditor(): HTMLElement {
   wrap.className = 'pmd-multi-doc-layout-mode-editor';
   const options: { value: 'docx' | 'cmir'; label: string }[] = [
     { value: 'docx', label: '.docx — Verbatim-compatible (default)' },
-    { value: 'cmir', label: '.cmir — CardMirror native (enables autosave)' },
+    { value: 'cmir', label: `.cmir — ${BRAND.productName} native (enables autosave)` },
   ];
   const groupName = `pmd-speech-doc-format-${Math.random().toString(36).slice(2, 8)}`;
   for (const o of options) {
@@ -5908,14 +5909,14 @@ function buildAccessibilityRendererEditor(): HTMLElement {
       // The Chromium switch only applies at process start, so this needs a full
       // app restart. Offer to do it now; otherwise it applies next launch.
       const restartNow = await confirmDialog(
-        `Screen reader support will turn ${enabled ? 'on' : 'off'} after CardMirror restarts. Restart now?`,
+        `Screen reader support will turn ${enabled ? 'on' : 'off'} after ${BRAND.productName} restarts. Restart now?`,
         { okLabel: 'Restart' },
       );
       if (restartNow) {
         void electron.relaunchApp();
       } else {
         showToast(
-          `Restart CardMirror to ${enabled ? 'enable' : 'disable'} screen reader support.`,
+          `Restart ${BRAND.productName} to ${enabled ? 'enable' : 'disable'} screen reader support.`,
         );
       }
     });
@@ -5956,8 +5957,8 @@ function buildAccessibilityRendererEditor(): HTMLElement {
     status.textContent =
       appliedState !== null && appliedState !== cur
         ? cur
-          ? 'Restart CardMirror to turn screen reader support on.'
-          : 'Restart CardMirror to turn screen reader support off.'
+          ? `Restart ${BRAND.productName} to turn screen reader support on.`
+          : `Restart ${BRAND.productName} to turn screen reader support off.`
         : '';
   }
 
@@ -6429,7 +6430,7 @@ function buildSaveFormatEditor(): HTMLElement {
   wrap.className = 'pmd-multi-doc-layout-mode-editor';
   const options: { value: 'docx' | 'cmir'; label: string }[] = [
     { value: 'docx', label: '.docx — Word / Verbatim-compatible (default)' },
-    { value: 'cmir', label: '.cmir — CardMirror native (enables autosave)' },
+    { value: 'cmir', label: `.cmir — ${BRAND.productName} native (enables autosave)` },
   ];
   const groupName = `pmd-save-format-${Math.random().toString(36).slice(2, 8)}`;
   for (const o of options) {
@@ -6461,7 +6462,7 @@ function buildDocTypeFormatEditor(key: 'sendDocFormat' | 'readDocFormat' | 'mark
   wrap.className = 'pmd-multi-doc-layout-mode-editor pmd-doc-type-format-editor';
   const options: { value: 'default' | 'docx' | 'cmir'; label: string }[] = [
     { value: 'docx', label: '.docx — Word / Verbatim-compatible (default)' },
-    { value: 'cmir', label: '.cmir — CardMirror native' },
+    { value: 'cmir', label: `.cmir — ${BRAND.productName} native` },
     { value: 'default', label: 'Same as new documents' },
   ];
   const groupName = `pmd-doc-type-format-${key}-${Math.random().toString(36).slice(2, 8)}`;

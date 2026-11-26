@@ -9,6 +9,7 @@ import { app } from 'electron';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { BRAND } from './brand-build.js';
 
 export const MANIFEST_NAME = 'cardmirror-plugin.json';
 export const BUNDLE_NAME = 'plugin.js';
@@ -138,7 +139,7 @@ export function validateManifest(
   if (typeof m.name !== 'string' || !m.name) return { ok: false, error: 'missing name' };
   if (typeof m.version !== 'string' || !m.version) return { ok: false, error: 'missing version' };
   if (m.apiVersion !== PLUGIN_API_VERSION) {
-    return { ok: false, error: `plugin needs apiVersion ${String(m.apiVersion)}; this CardMirror supports ${PLUGIN_API_VERSION}` };
+    return { ok: false, error: `plugin needs apiVersion ${String(m.apiVersion)}; this ${BRAND.productName} supports ${PLUGIN_API_VERSION}` };
   }
   // Permission lists are additive: they sanitize, never reject (a manifest
   // from a newer plugin must still install on this build).
@@ -466,7 +467,7 @@ export async function inspectFromGithub(
   const v = validateManifest(manifestObj);
   if (!v.ok) return { ok: false, error: v.error };
   if (v.manifest.minAppVersion && compareVersions(app.getVersion(), v.manifest.minAppVersion) < 0) {
-    return { ok: false, error: `This plugin needs CardMirror ${v.manifest.minAppVersion} or newer.` };
+    return { ok: false, error: `This plugin needs ${BRAND.productName} ${v.manifest.minAppVersion} or newer.` };
   }
   const existing = await readInstalledManifest(v.manifest.id);
   const collision = checkInstallCollision(existing, ownerRepo);

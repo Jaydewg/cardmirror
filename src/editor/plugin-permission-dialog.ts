@@ -10,12 +10,13 @@ import { isBackdropClick } from './backdrop-click.js';
 import { popOverlay, pushOverlay } from './overlay-stack.js';
 import { PLUGIN_PERMISSIONS, type PluginPermissionInfo } from './plugin-permissions.js';
 import { armDialogFocus, captureFocusForDialog, installModalKeys } from './text-prompt.js';
+import { BRAND } from '../brand-build.js';
 
 /** The honesty line every consent surface carries: permissions gate the
  *  supported API, not what the bundle's code can reach. */
 export const FULL_ACCESS_NOTE =
-  'This plugin runs with full access to CardMirror and your documents. ' +
-  'Permissions control which CardMirror features it is allowed to use.';
+  `This plugin runs with full access to ${BRAND.productName} and your documents. ` +
+  `Permissions control which ${BRAND.productName} features it is allowed to use.`;
 
 function infoFor(permission: string): PluginPermissionInfo {
   return (
@@ -68,7 +69,7 @@ function unsupportedBlock(unknown: readonly string[]): HTMLElement | null {
   if (unknown.length === 0) return null;
   const wrap = el('div', 'pmd-plugin-perm-unsupported');
   wrap.append(
-    el('div', 'pmd-plugin-perm-subhead', 'Not supported by this version of CardMirror (won’t be granted):'),
+    el('div', 'pmd-plugin-perm-subhead', `Not supported by this version of ${BRAND.productName} (won’t be granted):`),
   );
   const ul = el('ul', 'pmd-plugin-perm-list');
   for (const p of unknown) ul.append(el('li', 'pmd-plugin-perm-unknown', p));
@@ -201,7 +202,7 @@ export function permissionConsentDialog(opts: PermissionConsentOptions): Promise
       ? `Install ${opts.name}${v}?`
       : opts.mode === 'update'
         ? `Update ${opts.name} to${v}?`
-        : `Allow ${opts.name} (loaded from file) to use CardMirror features?`;
+        : `Allow ${opts.name} (loaded from file) to use ${BRAND.productName} features?`;
   const okLabel =
     opts.mode === 'install' ? 'Install' : opts.mode === 'update' ? 'Update' : 'Allow for this session';
   const cancelLabel = opts.mode === 'dev' ? 'Don’t allow' : 'Cancel';
@@ -240,7 +241,7 @@ export function permissionConsentDialog(opts: PermissionConsentOptions): Promise
             'p',
             'pmd-text-prompt-detail',
             opts.mode === 'dev'
-              ? 'Untick anything you don’t want to allow. Your answer lasts until CardMirror restarts.'
+              ? `Untick anything you don’t want to allow. Your answer lasts until ${BRAND.productName} restarts.`
               : opts.mode === 'update'
                 ? 'Untick anything you don’t want to allow. Anything unticked stays off. ' +
                   'Review everything it can use with the shield button in Settings → Plugins.'

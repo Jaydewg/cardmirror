@@ -19,6 +19,7 @@ import { settings } from './settings.js';
 import type { ExternalAppConsent } from './settings.js';
 import { alertDialog, promptForRouteChoice } from './text-prompt.js';
 import { showToast } from './toast.js';
+import { BRAND } from '../brand-build.js';
 
 interface ConsentPromptRequest {
   requestId: string;
@@ -78,8 +79,8 @@ function stampLastSeen(appId: string, when: string): void {
 
 const UNIDENTIFIED_EXPLANATION =
   'An external app tried to insert content into your documents, but it did not ' +
-  'identify itself, so CardMirror turned it away. This usually means the app ' +
-  'predates CardMirror’s app permissions — update the app you were ' +
+  `identify itself, so ${BRAND.productName} turned it away. This usually means the app ` +
+  `predates ${BRAND.productName}’s app permissions — update the app you were ` +
   'sending from, then try again.';
 
 /** Mount the consent bridge. Returns an unsubscribe for tests. */

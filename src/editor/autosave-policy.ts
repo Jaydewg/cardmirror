@@ -17,6 +17,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { isSelfRef } from './self-transclusion.js';
 import { isTransclusionNode } from './transclusion.js';
 import { promptForRouteChoice } from './text-prompt.js';
+import { BRAND } from '../brand-build.js';
 
 export type AutosaveFormat = 'cmir' | 'docx' | null;
 
@@ -110,7 +111,7 @@ const WHY =
   'Word (.docx) files can’t hold live links. Saving to .docx turns them into plain cards, ' +
   'and the link to the source is gone for good when the .docx is reopened. Autosave never makes ' +
   'that decision for you, so it won’t save this document while it has live links. ' +
-  'Save it as CardMirror (.cmir) to keep the links and autosave.';
+  `Save it as ${BRAND.productName} (.cmir) to keep the links and autosave.`;
 
 /** Modal: the user is turning autosave ON for a `.docx` doc that has live
  *  links. Resolves 'saveAsCmir' or null (leave autosave off). */

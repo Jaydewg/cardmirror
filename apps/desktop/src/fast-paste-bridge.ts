@@ -45,6 +45,7 @@ import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { readAppIdentity } from './bridge-handshake.js';
 import { ConsentGate, parseAppId, type ConsentMirror, type PromptOutcome } from './external-consent.js';
+import { BRAND } from './brand-build.js';
 
 const PREFERRED_PORT = 17699;
 const SCHEMA_VERSION = 2;
@@ -584,7 +585,7 @@ async function handleRequest(
         ok: false,
         error: 'unidentified',
         message:
-          'This CardMirror requires apps to identify themselves with an X-App-Id header. Update the sending app.',
+          `This ${BRAND.productName} requires apps to identify themselves with an X-App-Id header. Update the sending app.`,
       });
       return;
     }
@@ -643,7 +644,7 @@ async function handleRequest(
         ok: false,
         error: 'unidentified',
         message:
-          'This CardMirror requires apps to identify themselves with an X-App-Id header. Update the sending app.',
+          `This ${BRAND.productName} requires apps to identify themselves with an X-App-Id header. Update the sending app.`,
       });
       return;
     }
@@ -727,7 +728,7 @@ async function handleRequest(
         ok: false,
         error: 'unidentified',
         message:
-          'This CardMirror requires apps to identify themselves with an X-App-Id header. Update the sending app.',
+          `This ${BRAND.productName} requires apps to identify themselves with an X-App-Id header. Update the sending app.`,
       });
       return;
     }

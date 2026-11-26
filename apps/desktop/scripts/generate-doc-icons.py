@@ -13,11 +13,18 @@ extension. Regenerate after changing build/icon.png:
 
     python3 scripts/generate-doc-icons.py
 
+The brand pipeline (scripts/gen-brand-assets.py at the repo root) calls it
+with an explicit mark and output folder:
+
+    python3 scripts/generate-doc-icons.py --mark <mark.png> --out <dir>
+
 Design: standard macOS document-icon language — white portrait page
-with a folded corner, the CardMirror mark centered, extension label
+with a folded corner, the app mark centered, extension label
 beneath.
 """
 
+import argparse
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -29,7 +36,7 @@ BUILD = Path(__file__).resolve().parent.parent / "build"
 MARK = BUILD / "icon.png"
 CANVAS = 1024
 
-def make_doc_icon(label: str) -> Image.Image:
+def make_doc_icon(label: str, mark_path: Path = MARK) -> Image.Image:
     img = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
 
@@ -51,14 +58,17 @@ def make_doc_icon(label: str) -> Image.Image:
     d.line([(right - fold, top + fold), (right, top + fold)], fill=border, width=6)
 
     # App mark, centered on the upper page body.
-    mark = Image.open(MARK).convert("RGBA").resize((430, 430), Image.LANCZOS)
+    mark = Image.open(mark_path).convert("RGBA").resize((430, 430), Image.LANCZOS)
     img.alpha_composite(mark, (int((CANVAS - 430) / 2), 270))
 
     # Extension label.
     font = None
     for cand in ("/System/Library/Fonts/Supplemental/Arial Bold.ttf",
                  "/System/Library/Fonts/Supplemental/Arial.ttf",
-                 "/System/Library/Fonts/Helvetica.ttc"):
+                 "/System/Library/Fonts/Helvetica.ttc",
+                 # Linux: Inter (the CardReflex text face), then DejaVu.
+                 "/usr/share/fonts/opentype/inter/Inter-Bold.otf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"):
         try:
             font = ImageFont.truetype(cand, 108)
             break
@@ -70,6 +80,10 @@ def make_doc_icon(label: str) -> Image.Image:
     return img
 
 def write_icns(img: Image.Image, out: Path) -> None:
+    if shutil.which("iconutil") is None:
+        # Not on macOS: Pillow writes the same icon sizes natively.
+        img.resize((1024, 1024), Image.LANCZOS).save(out, format="ICNS")
+        return
     with tempfile.TemporaryDirectory() as td:
         iconset = Path(td) / "doc.iconset"
         iconset.mkdir()
@@ -83,11 +97,16 @@ def write_ico(img: Image.Image, out: Path) -> None:
     img.save(out, sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
 
 def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--mark", type=Path, default=MARK, help="square app mark PNG")
+    ap.add_argument("--out", type=Path, default=BUILD, help="output folder")
+    args = ap.parse_args()
+    args.out.mkdir(parents=True, exist_ok=True)
     for ext, label in (("docx", "DOCX"), ("cmir", "CMIR")):
-        icon = make_doc_icon(label)
-        write_icns(icon, BUILD / f"{ext}.icns")
-        write_ico(icon, BUILD / f"{ext}.ico")
-        print(f"generated build/{ext}.icns + .ico")
+        icon = make_doc_icon(label, args.mark)
+        write_icns(icon, args.out / f"{ext}.icns")
+        write_ico(icon, args.out / f"{ext}.ico")
+        print(f"generated {args.out / ext}.icns + .ico")
 
 if __name__ == "__main__":
     sys.exit(main())

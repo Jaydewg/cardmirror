@@ -4560,6 +4560,16 @@ html.pmd-home-active #speech-doc-banner {
   font-weight: 700;
   letter-spacing: -0.01em;
 }
+.pmd-home-lineage {
+  /* About 37% of the 2rem title, light italic, muted: it describes the
+   * product, it is not part of its name (brand lockup rule). */
+  margin: 0.15rem 0 0;
+  font-size: 0.75rem;
+  font-style: italic;
+  font-weight: 300;
+  letter-spacing: 0.01em;
+  color: var(--pmd-c-text-muted);
+}
 .pmd-home-tagline {
   margin: 0.35rem 0 0;
   color: var(--pmd-c-text-muted);

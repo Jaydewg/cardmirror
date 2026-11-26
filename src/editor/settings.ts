@@ -15,6 +15,7 @@ import type { IconName } from './icons.js';
 import { getHost } from './host/index.js';
 import { isLiteBuild } from './lite.js';
 import { DEFAULT_SPEECH_FILENAME_TEMPLATE } from './speech-filename-default.js';
+import { BRAND } from '../brand-build.js';
 
 /** Body-text zoom bounds (percent). The live per-window / per-pane zoom AND the
  *  default-open zoom setting all clamp to these — one source of truth so
@@ -44,6 +45,17 @@ function workspaceLayoutDescription(): string {
 }
 
 const STORAGE_KEY = 'pmd-settings';
+
+/** Whether this install already had stored settings when the app started,
+ *  i.e. an earlier version has run here. Captured at module load, before
+ *  anything this session persists. Read by `migrateBrandRename`. */
+const HAD_STORED_SETTINGS = ((): boolean => {
+  try {
+    return localStorage.getItem(STORAGE_KEY) !== null;
+  } catch {
+    return false;
+  }
+})();
 
 /** Keys whose values are per-window/per-session: never written to
  *  localStorage, never synced via storage events, and reset to
@@ -2484,7 +2496,7 @@ export const SETTING_METADATA: SettingMeta[] = [
     key: 'lastWorkspaceEnabled',
     label: 'Remember my last workspace',
     description:
-      'Off by default. On, CardMirror remembers the documents open when you quit and lists them on the Home screen under Last workspace with a tick box each, so a whole working set comes back in one click; Save Workspace and Reopen Last Workspace work from the command bar too. Off, nothing is recorded and the section never appears. Desktop only.',
+      `Off by default. On, ${BRAND.productName} remembers the documents open when you quit and lists them on the Home screen under Last workspace with a tick box each, so a whole working set comes back in one click; Save Workspace and Reopen Last Workspace work from the command bar too. Off, nothing is recorded and the section never appears. Desktop only.`,
     kind: 'toggle',
     category: 'general',
     section: 'Workspace',
@@ -2850,7 +2862,7 @@ export const SETTING_METADATA: SettingMeta[] = [
     key: 'showOnboardingStarter',
     label: 'Onboarding doc for new documents',
     description:
-      'When on (default), New Document opens the CardMirror welcome doc — the same starter you get the first time you launch. When off, New opens a blank doc with a single empty paragraph. Affects every freshly created doc, including newly spawned windows.',
+      `When on (default), New Document opens the ${BRAND.productName} welcome doc — the same starter you get the first time you launch. When off, New opens a blank doc with a single empty paragraph. Affects every freshly created doc, including newly spawned windows.`,
     kind: 'toggle',
     category: 'files',
     section: 'New documents',
@@ -2902,7 +2914,7 @@ export const SETTING_METADATA: SettingMeta[] = [
     key: 'defaultSaveFormat',
     label: 'Default file format for new documents',
     description:
-      'Sets the format the Save-As dialog defaults to for a doc you haven\'t saved before. .docx is the default — Word- and Verbatim-compatible. Pick .cmir to make every new doc save in CardMirror\'s native format (lossless, and autosaves without limits). Doesn\'t affect existing files on disk — those always re-save in whatever format they were opened from.',
+      `Sets the format the Save-As dialog defaults to for a doc you haven't saved before. .docx is the default — Word- and Verbatim-compatible. Pick .cmir to make every new doc save in ${BRAND.productName}'s native format (lossless, and autosaves without limits). Doesn't affect existing files on disk — those always re-save in whatever format they were opened from.`,
     kind: 'saveFormat',
     category: 'files',
     section: 'New documents',
@@ -3190,7 +3202,7 @@ export const SETTING_METADATA: SettingMeta[] = [
     key: 'colorVisionFriendly',
     label: 'Color-vision friendly palette',
     description:
-      "Remaps the colors that carry meaning — annotation accents, voice-mode dots, prep-timer Aff/Neg, search-match highlights, category chips — onto a palette engineered to stay distinguishable under red-green and blue-yellow color-vision deficiencies (Okabe-Ito). Works with both light and dark themes. Any colors you set under Color overrides below still win. Note: this preset changes CardMirror's interface colors only — it does not recolor highlights or background colors stored in documents. For those, use 'Override highlight/background color in display' and 'Show highlight & background color names in the status bar' below.",
+      `Remaps the colors that carry meaning — annotation accents, voice-mode dots, prep-timer Aff/Neg, search-match highlights, category chips — onto a palette engineered to stay distinguishable under red-green and blue-yellow color-vision deficiencies (Okabe-Ito). Works with both light and dark themes. Any colors you set under Color overrides below still win. Note: this preset changes ${BRAND.productName}'s interface colors only — it does not recolor highlights or background colors stored in documents. For those, use 'Override highlight/background color in display' and 'Show highlight & background color names in the status bar' below.`,
     kind: 'toggle',
     category: 'accessibility',
     aliases: ['colorblind', 'color blind', 'cvd', 'deuteranopia', 'protanopia', 'tritanopia'],
@@ -3254,7 +3266,7 @@ export const SETTING_METADATA: SettingMeta[] = [
     key: 'accessibilityTreeEnabled',
     label: 'Screen reader support',
     description:
-      'Let screen readers and other assistive technology read CardMirror. OFF by default: a current Chromium bug crashes the whole window (white screen, lost work) while building the accessibility tree, so we disable it to keep CardMirror stable. Turn this on only if you rely on a screen reader — it re-activates the known crash. Takes effect after restarting CardMirror.',
+      `Let screen readers and other assistive technology read ${BRAND.productName}. OFF by default: a current Chromium bug crashes the whole window (white screen, lost work) while building the accessibility tree, so we disable it to keep ${BRAND.productName} stable. Turn this on only if you rely on a screen reader — it re-activates the known crash. Takes effect after restarting ${BRAND.productName}.`,
     kind: 'accessibilityRenderer',
     category: 'accessibility',
     electronOnly: true,
@@ -3439,7 +3451,7 @@ export const SETTING_METADATA: SettingMeta[] = [
     key: 'themeAccent',
     label: 'Accent color',
     description:
-      'The color of primary buttons, focus rings, selected toggles, and drag indicators. "Palette" uses the color the palette comes with. "Custom" takes any color; if it is too light or too faint to read against, CardMirror uses the nearest shade that passes, and dark mode gets a lighter shade of it. While the color-vision friendly preset is on, it sets the accent instead.',
+      `The color of primary buttons, focus rings, selected toggles, and drag indicators. "Palette" uses the color the palette comes with. "Custom" takes any color; if it is too light or too faint to read against, ${BRAND.productName} uses the nearest shade that passes, and dark mode gets a lighter shade of it. While the color-vision friendly preset is on, it sets the accent instead.`,
     kind: 'themeAccent',
     category: 'appearance',
     section: 'Theme & chrome',
@@ -3928,7 +3940,7 @@ export const SETTING_METADATA: SettingMeta[] = [
     key: 'smartPasteConversion',
     label: 'Smart paste conversion',
     description:
-      'Recognize content copied from Microsoft Word or haku.cards and convert it into CardMirror structure on paste — tags, cites, headings, underlining, and highlighting instead of unformatted text. Best effort: for full fidelity, open the .docx in CardMirror and copy from there. When off, or when the pasted content has no recognizable structure, pasting works exactly as before. Paste Text (F2) always pastes plain.',
+      `Recognize content copied from Microsoft Word or haku.cards and convert it into ${BRAND.productName} structure on paste — tags, cites, headings, underlining, and highlighting instead of unformatted text. Best effort: for full fidelity, open the .docx in ${BRAND.productName} and copy from there. When off, or when the pasted content has no recognizable structure, pasting works exactly as before. Paste Text (F2) always pastes plain.`,
     kind: 'toggle',
     category: 'editing',
     section: 'Paste',
@@ -4565,7 +4577,7 @@ export const SETTING_METADATA: SettingMeta[] = [
     key: 'pluginsEnabled',
     label: 'Enable plugins',
     description:
-      'Load installed third-party plugins at startup. Plugins run with full access to CardMirror and your documents - install only plugins whose author you trust. Takes effect on the next launch.',
+      `Load installed third-party plugins at startup. Plugins run with full access to ${BRAND.productName} and your documents - install only plugins whose author you trust. Takes effect on the next launch.`,
     kind: 'toggle',
     category: 'plugins',
     electronOnly: true,
@@ -4577,7 +4589,7 @@ export const SETTING_METADATA: SettingMeta[] = [
     key: 'externalInsertPolicy',
     label: 'Inserts from external apps',
     description:
-      'Local companion apps (like ebb or Fast Debate Paste) can insert text and jump to sources over the local bridge. "Ask for each app" (default) prompts the first time an app sends and remembers your answer below. "Allow all" accepts every sender — including older apps that don\u2019t identify themselves. "Block all" turns the whole surface off. This does not affect plugins running inside CardMirror.',
+      `Local companion apps (like ebb or Fast Debate Paste) can insert text and jump to sources over the local bridge. "Ask for each app" (default) prompts the first time an app sends and remembers your answer below. "Allow all" accepts every sender — including older apps that don\u2019t identify themselves. "Block all" turns the whole surface off. This does not affect plugins running inside ${BRAND.productName}.`,
     kind: 'externalInsertPolicy',
     category: 'plugins',
     section: 'External apps',
@@ -4591,7 +4603,7 @@ export const SETTING_METADATA: SettingMeta[] = [
     key: 'flowHostOnLaunch',
     label: 'Keep a Verbatim Flow connection warm',
     description:
-      'Start the background connection to Excel when CardMirror launches, so your first Send to Flow is fast instead of waiting a second or two for it to spin up. Leave off to start it on demand the first time you use a Flow command (every send after that is fast either way). You can also start it any time with the "Start Flow Connection" command.',
+      `Start the background connection to Excel when ${BRAND.productName} launches, so your first Send to Flow is fast instead of waiting a second or two for it to spin up. Leave off to start it on demand the first time you use a Flow command (every send after that is fast either way). You can also start it any time with the "Start Flow Connection" command.`,
     kind: 'toggle',
     category: 'plugins',
     section: 'Verbatim Flow',
@@ -6449,6 +6461,27 @@ export function migrateAutoUpdateOptOut(onMigrated: () => void): void {
     settings.set('checkForUpdatesOnLaunch', true);
     onMigrated();
   }
+}
+
+/** One-time notice for a product rename (brand profile `renamedFrom`,
+ *  e.g. CardMirror → CardReflex; see brand/README.md). Fires `onNotice`
+ *  at most once per install and rename, and only on an install that an
+ *  earlier version had already used: a fresh install never knew the old
+ *  name. Marker outside the settings blob, like the migrations below. */
+export function migrateBrandRename(
+  from: string | null,
+  to: string,
+  onNotice: () => void,
+): void {
+  if (!from || from === to) return;
+  const MARKER = `cm-brand-rename-noticed:${from}->${to}`;
+  try {
+    if (localStorage.getItem(MARKER) !== null) return;
+    localStorage.setItem(MARKER, '1');
+  } catch {
+    return; // storage unavailable: skip rather than repeat every launch
+  }
+  if (HAD_STORED_SETTINGS) onNotice();
 }
 
 /** One-shot migration for the 2026-09-21 default flip: "Distinguish

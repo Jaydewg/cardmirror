@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 // The dev server (`npm run dev`) serves from `/`, and production builds
@@ -17,6 +17,16 @@ import path from 'node:path';
 // sibling is absent the alias just never resolves — harmless.
 const cardCutterEntry = path.resolve(__dirname, '../card-cutter/src/browser.ts');
 const cardCutterStub = path.resolve(__dirname, 'src/editor/card-cutter-stub.ts');
+
+// The active brand profile (brand/<id>/brand.json; BRAND env, default
+// cardreflex — see brand/README.md). HTML pages carry `__BRAND_NAME__`
+// tokens and the PWA manifest reads the same profile, so the product name
+// is never hard-coded in the web shell. (The renderer's TS reads the same
+// profile through the generated src/brand-build.ts.)
+const brandId = process.env.BRAND || 'cardreflex';
+const brand = JSON.parse(
+  readFileSync(path.resolve(__dirname, 'brand', brandId, 'brand.json'), 'utf8'),
+) as { productName: string; description: string; themeColor: string };
 
 export default defineConfig(({ command }) => {
   // The card-cutter engine is experimental and NOT shipped: a
@@ -100,6 +110,14 @@ export default defineConfig(({ command }) => {
     },
     plugins: [
       liteHeadersPlugin,
+      {
+        // index.html / timer.html: `__BRAND_NAME__` → the profile's name.
+        name: 'cardmirror:brand-html',
+        transformIndexHtml: {
+          order: 'pre',
+          handler: (html: string) => html.replaceAll('__BRAND_NAME__', brand.productName),
+        },
+      },
       // Dev-only: loro-crdt's loader statically imports its .wasm as an
       // ES module, which the dev server rejects ("ESM integration
       // proposal for Wasm" unsupported). The PRODUCTION build already
@@ -135,11 +153,10 @@ export default defineConfig(({ command }) => {
             injectRegister: 'auto',
             includeAssets: ['favicon.png', 'apple-touch-icon.png'],
             manifest: {
-              name: 'CardMirror',
-              short_name: 'CardMirror',
-              description:
-                'A debate-card editor that interoperates with Advanced Verbatim — cut, format, and organize evidence offline.',
-              theme_color: '#2563eb',
+              name: brand.productName,
+              short_name: brand.productName,
+              description: brand.description,
+              theme_color: brand.themeColor,
               background_color: '#ffffff',
               display: 'standalone',
               categories: ['productivity', 'education'],

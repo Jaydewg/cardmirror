@@ -28,6 +28,7 @@
 
 import { postNotice } from './status-notices.js';
 import { promptForRouteChoice } from './text-prompt.js';
+import { BRAND } from '../brand-build.js';
 
 export const SAVE_WARN_MS = 10_000;
 export const SAVE_DIALOG_MS = 30_000;
@@ -62,7 +63,7 @@ export function warnIfSlow<T>(
       body:
         `Preparing "${name}" to be saved is taking unusually long. ` +
         `The save will continue — if this happens repeatedly, restart ` +
-        `CardMirror and report it.`,
+        `${BRAND.productName} and report it.`,
       key: `slow-save:${name}`,
     });
   }, warnMs);

@@ -50,6 +50,7 @@ import {
 import { endRoomOnRelay } from './collab/collab-relay.js';
 import { promptForRouteChoice } from './text-prompt.js';
 import { showToast } from './toast.js';
+import { BRAND } from '../brand-build.js';
 
 export interface HomeScreenCallbacks {
   newDoc: () => void;
@@ -162,8 +163,17 @@ class HomeScreen {
     header.appendChild(this.backBtn);
     const title = document.createElement('h1');
     title.className = 'pmd-home-title';
-    title.textContent = 'CardMirror';
+    title.textContent = `${BRAND.productName}`;
     header.appendChild(title);
+    // Lineage under the name, like the brand lockup: "A CardMirror fork".
+    // Descriptive, smaller and lighter than the name; absent when the
+    // active brand profile has none (the CardMirror profile).
+    if (BRAND.lineage) {
+      const lineage = document.createElement('p');
+      lineage.className = 'pmd-home-lineage';
+      lineage.textContent = BRAND.lineage;
+      header.appendChild(lineage);
+    }
     const tagline = document.createElement('p');
     tagline.className = 'pmd-home-tagline';
     tagline.textContent = 'Open a document to start, or pick up where you left off.';

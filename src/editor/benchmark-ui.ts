@@ -8,6 +8,7 @@
 import type { EditorState } from 'prosemirror-state';
 import { getActiveView, beginBenchmark, endBenchmark } from './index.js';
 import { runBenchmark, type BenchmarkResults } from './benchmark.js';
+import { BRAND } from '../brand-build.js';
 
 let running = false;
 
@@ -283,7 +284,7 @@ function notesSection(): HTMLElement {
   const meth = document.createElement('p');
   meth.className = 'pmd-bench-note-meth';
   meth.textContent =
-    "Self-reported by CardMirror's own renderer; frame rate is capped by your display's " +
+    `Self-reported by ${BRAND.productName}'s own renderer; frame rate is capped by your display's ` +
     'refresh rate.';
   sec.appendChild(meth);
   return sec;

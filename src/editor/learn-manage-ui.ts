@@ -23,6 +23,7 @@ import { icon } from './icons.js';
 import { showToast } from './toast.js';
 import { readDocIdFromBytes, stampDocId } from '../index.js';
 import { isBackdropClick } from './backdrop-click.js';
+import { BRAND } from '../brand-build.js';
 
 let openOverlay: HTMLElement | null = null;
 
@@ -488,8 +489,8 @@ async function linkCardToFile(cardId: string): Promise<void> {
   const host = getHost();
   const opened = await host.openFile({
     filters: [
-      { name: 'CardMirror & Word documents', extensions: ['cmir', 'docx'] },
-      { name: 'CardMirror', extensions: ['cmir'] },
+      { name: `${BRAND.productName} & Word documents`, extensions: ['cmir', 'docx'] },
+      { name: `${BRAND.productName}`, extensions: ['cmir'] },
       { name: 'Word', extensions: ['docx'] },
     ],
   });

@@ -26,6 +26,7 @@ import { setIcon } from './icons';
 import { pushOverlay, popOverlay } from './overlay-stack.js';
 import { installModalKeys, captureFocusForDialog } from './text-prompt.js';
 import { isBackdropClick } from './backdrop-click.js';
+import { BRAND } from '../brand-build.js';
 
 export type SaveAsFormat = 'cmir' | 'docx';
 
@@ -78,12 +79,12 @@ export function openSaveAs(opts: OpenSaveAsOptions): Promise<SaveAsResult | null
 }
 
 const FORMAT_LABELS: Record<SaveAsFormat, string> = {
-  cmir: 'CardMirror native (.cmir)',
+  cmir: `${BRAND.productName} native (.cmir)`,
   docx: 'Microsoft Word (.docx)',
 };
 
 const FORMAT_BLURBS: Record<SaveAsFormat, string> = {
-  cmir: 'Lossless. No conversion. Best for docs that stay in CardMirror.',
+  cmir: `Lossless. No conversion. Best for docs that stay in ${BRAND.productName}.`,
   docx: 'For sharing with Verbatim users or any Word-based workflow.',
 };
 

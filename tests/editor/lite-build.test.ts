@@ -7,6 +7,7 @@
  * force-disables the network-touching masters.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { BRAND } from '../../src/brand-build.js';
 
 async function withLite<T>(fn: () => Promise<T>): Promise<T> {
   vi.resetModules();
@@ -71,7 +72,7 @@ describe('CardMirror Lite', () => {
     await withLite(async () => {
       const { getInstallInfo, appVersion } = await import('../../src/editor/install-info.js');
       const version = getInstallInfo().find((e) => e.label === 'Version');
-      expect(version?.value).toBe(`${appVersion} (CardMirror Lite)`);
+      expect(version?.value).toBe(`${appVersion} (${BRAND.liteName})`);
     });
     // Standard builds keep the bare version — no edition suffix.
     vi.resetModules();

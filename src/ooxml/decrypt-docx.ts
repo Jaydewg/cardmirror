@@ -24,6 +24,7 @@
 import { XMLParser } from 'fast-xml-parser';
 import { sha512 } from './sha512.js';
 import { aesCbcDecrypt } from './aes.js';
+import { BRAND } from '../brand-build.js';
 
 /** Base class for every failure this module raises, so callers can
  *  distinguish "encrypted-file problem" (surface the message, offer
@@ -51,10 +52,10 @@ const CFB_MAGIC = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
 // Shared so the pre-open classifier and the decryptor speak with one
 // voice (the classifier decides whether to even prompt for a password).
 const MSG_LEGACY_BINARY =
-  'This looks like an old binary Office file (.doc / .xls), which CardMirror can’t open. Open it in Word and re-save as .docx first.';
+  `This looks like an old binary Office file (.doc / .xls), which ${BRAND.productName} can’t open. Open it in Word and re-save as .docx first.`;
 const MSG_STANDARD =
-  'This file uses an older Office password scheme (Standard encryption) that CardMirror can’t open yet. Re-save it in a current version of Word, or remove the password.';
-const MSG_CORRUPT = 'This file looks like a damaged Office document — CardMirror couldn’t read its structure.';
+  `This file uses an older Office password scheme (Standard encryption) that ${BRAND.productName} can’t open yet. Re-save it in a current version of Word, or remove the password.`;
+const MSG_CORRUPT = `This file looks like a damaged Office document — ${BRAND.productName} couldn’t read its structure.`;
 
 /** True if `bytes` is an OLE/CFB compound file — the container Office
  *  uses for password-encrypted documents (and, historically, for
@@ -240,16 +241,16 @@ function parseAgile(infoXml: string): AgileDescriptor {
   if (Array.isArray(keyEncryptor)) keyEncryptor = keyEncryptor.find((k) => (k as Record<string, unknown>)['p:encryptedKey']);
   const enc = (keyEncryptor as Record<string, unknown> | undefined)?.['p:encryptedKey'] as Record<string, string> | undefined;
   if (!keyData || !enc) {
-    throw new UnsupportedEncryptionError('This file uses an Office encryption scheme CardMirror can’t open (no password key found).');
+    throw new UnsupportedEncryptionError(`This file uses an Office encryption scheme ${BRAND.productName} can’t open (no password key found).`);
   }
   const alg = keyData['cipherAlgorithm'] ?? '';
   const chain = keyData['cipherChaining'] ?? '';
   const hash = keyData['hashAlgorithm'] ?? '';
   if (alg !== 'AES' || chain !== 'ChainingModeCBC') {
-    throw new UnsupportedEncryptionError(`This file uses ${alg || 'an unknown'} ${chain || ''} encryption, which CardMirror can’t open.`.replace(/\s+/g, ' ').trim() + '.');
+    throw new UnsupportedEncryptionError(`This file uses ${alg || 'an unknown'} ${chain || ''} encryption, which ${BRAND.productName} can’t open.`.replace(/\s+/g, ' ').trim() + '.');
   }
   if (!/^SHA-?512$/i.test(hash)) {
-    throw new UnsupportedEncryptionError(`This file uses ${hash || 'an unsupported'} password hashing, which CardMirror can’t open.`);
+    throw new UnsupportedEncryptionError(`This file uses ${hash || 'an unsupported'} password hashing, which ${BRAND.productName} can’t open.`);
   }
   return {
     keyDataSalt: b64(keyData['saltValue']!),

@@ -25,6 +25,7 @@ import {
   parsePackument,
   verifyIntegrity,
 } from './runtime.js';
+import { BRAND } from '../brand-build.js';
 
 let worker: ChildProcess | null = null;
 let ownerWebContentsId: number | null = null;
@@ -347,7 +348,7 @@ export function registerVoiceIpc(): void {
   }));
 
   ipcMain.handle('host:voice-download-model', async (event) =>
-    LITE_BUILD ? { ok: false, error: 'Model downloads are disabled in CardMirror Lite.' } : downloadModel(event.sender),
+    LITE_BUILD ? { ok: false, error: `Model downloads are disabled in ${BRAND.liteName}.` } : downloadModel(event.sender),
   );
 
   ipcMain.handle('host:voice-delete-model', async () => {

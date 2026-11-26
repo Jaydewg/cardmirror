@@ -57,6 +57,7 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
+import { BRAND } from './brand-build.js';
 
 /** Marker embedded in the changed-on-disk error MESSAGE — the renderer
  *  classifies IPC failures by message text (Electron only preserves the
@@ -393,7 +394,7 @@ export function saveExistingDoc(
           }
         }
         if (!identicalContent) {
-          throw changedOnDiskError(filePath, 'changed on disk after CardMirror last read or wrote it');
+          throw changedOnDiskError(filePath, `changed on disk after ${BRAND.productName} last read or wrote it`);
         }
       }
     }
@@ -403,7 +404,7 @@ export function saveExistingDoc(
       if (opts?.force) return;
       const again = await fs.stat(filePath);
       if (again.mtimeMs !== st.mtimeMs || again.size !== st.size) {
-        throw changedOnDiskError(filePath, 'changed on disk while CardMirror was writing it');
+        throw changedOnDiskError(filePath, `changed on disk while ${BRAND.productName} was writing it`);
       }
     });
     await recordDiskStateFromDisk(filePath, buf);

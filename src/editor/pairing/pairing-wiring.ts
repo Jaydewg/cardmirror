@@ -24,6 +24,7 @@ import { postNotice } from '../status-notices.js';
 import { inboxStore } from './inbox-store.js';
 import { SendPillController } from './send-pill-ui.js';
 import { ReceivePillController } from './receive-pill-ui.js';
+import { BRAND } from '../../brand-build.js';
 
 /** Build + mount the Send and Receive pills into the tray (after the
  *  dropzone, so they sit to its right). */
@@ -113,7 +114,7 @@ export function initPairingWiring(): void {
         ? ` (${info.requiredVersion} or newer)`
         : '';
       showToast(
-        `A shared card needs a newer CardMirror version${need} — ` +
+        `A shared card needs a newer ${BRAND.productName} version${need} — ` +
           `update to receive it.`,
       );
     });
@@ -162,7 +163,7 @@ export function initPairingWiring(): void {
         lastMismatchToast = now;
         const need = info.requiredVersion ? ` (${info.requiredVersion} or newer)` : '';
         showToast(
-          `A shared card needs a newer CardMirror version${need} — update to receive it.`,
+          `A shared card needs a newer ${BRAND.productName} version${need} — update to receive it.`,
         );
       });
       m.onWebPairingAccountRequired(() => {

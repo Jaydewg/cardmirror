@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { refreshFileSearchIndex, refreshSummary } from '../../src/editor/file-index-refresh.js';
 import type { FileIndexClient } from '../../src/editor/file-search-client.js';
 import type { FileIndexRefreshResult } from '../../src/editor/file-index-protocol.js';
+import { BRAND } from '../../src/brand-build.js';
 
 function fakeClient(refresh: FileIndexClient['refresh']): FileIndexClient {
   const nope = () => Promise.reject(new Error('not used'));
@@ -71,7 +72,7 @@ describe('refreshFileSearchIndex', () => {
   it('reports a failed walk instead of throwing', async () => {
     const h = harness(fakeClient(() => Promise.reject(new Error('file-index request timeout'))));
     await expect(refreshFileSearchIndex(h.deps)).resolves.toBeUndefined();
-    expect(h.toasts.at(-1)).toBe('File search index refresh failed — try again, or restart CardMirror.');
+    expect(h.toasts.at(-1)).toBe(`File search index refresh failed — try again, or restart ${BRAND.productName}.`);
   });
 
   it('runs one walk at a time; a second call joins the first', async () => {

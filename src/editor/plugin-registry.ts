@@ -24,6 +24,7 @@ import {
   quietEventPrompts,
   withPromptSlot,
 } from './plugin-permission-requests.js';
+import { BRAND } from '../brand-build.js';
 
 export const PLUGIN_API_VERSION = 1;
 
@@ -209,7 +210,7 @@ export function registerPluginDefinition(
   if (def.apiVersion !== PLUGIN_API_VERSION) {
     return {
       ok: false,
-      error: `unsupported apiVersion ${String(def.apiVersion)} (this CardMirror supports ${PLUGIN_API_VERSION})`,
+      error: `unsupported apiVersion ${String(def.apiVersion)} (this ${BRAND.productName} supports ${PLUGIN_API_VERSION})`,
     };
   }
   // Ids this plugin already owns — so a re-registration (e.g. re-enable

@@ -3,9 +3,9 @@
 ; ${buildResources}/installer.nsh — i.e. this file — when building the
 ; NSIS target, and recognizes the customInstall / customUnInstall macros.
 ;
-; TWO jobs live here:
+; THREE jobs live here:
 ;
-; 1. "New > CardMirror Document" in Explorer's right-click menu via the
+; 1. "New > <product> Document" in Explorer's right-click menu via the
 ;    classic ShellNew mechanism: a registry value under .cmir points
 ;    Explorer at a template file the installer ships (extraResources →
 ;    $INSTDIR\resources\new-template.cmir; regenerate with
@@ -41,6 +41,17 @@
 ; per-user install, so every write lands in the hive the old installer
 ; wrote (and broke) for that install mode.
 ;
+;
+; 3. Run-box aliases (App Paths): typing `cardreflex` or `cardmirror` in
+;    Win+R launches the app, whatever its shortcut is called. Debaters'
+;    muscle memory survives the CardMirror → CardReflex rename without a
+;    visible launcher carrying the old name (brand/README.md). Per-user
+;    installs write HKCU, per-machine HKLM, both via SHCTX.
+;
+; User-facing strings use ${PRODUCT_NAME} (the active brand profile's
+; name, from electron-builder.config.cjs). The ProgId `CardMirror.docx`
+; is an internal identifier and stays fixed across brands.
+;
 ; ⚠ Registry work is verified by inspection + a real Windows install
 ; test; Explorer caches ShellNew and association data, so menu changes
 ; may need an Explorer restart or sign-out to appear.
@@ -49,14 +60,14 @@
 !include "LogicLib.nsh"
 
 !macro customInstall
-  ; ── 1. New > CardMirror Document ──
+  ; ── 1. New > <product> Document ──
   WriteRegStr SHCTX "Software\Classes\.cmir\ShellNew" "FileName" "$INSTDIR\resources\new-template.cmir"
 
   ; ── 2. .docx: Open-With only, never the default ──
   WriteRegStr SHCTX "Software\Classes\CardMirror.docx" "" "Microsoft Word document"
   WriteRegStr SHCTX "Software\Classes\CardMirror.docx\DefaultIcon" "" "$INSTDIR\resources\docx.ico"
   WriteRegStr SHCTX "Software\Classes\CardMirror.docx\shell" "" "open"
-  WriteRegStr SHCTX "Software\Classes\CardMirror.docx\shell\open" "" "Open with CardMirror"
+  WriteRegStr SHCTX "Software\Classes\CardMirror.docx\shell\open" "" "Open with ${PRODUCT_NAME}"
   WriteRegStr SHCTX "Software\Classes\CardMirror.docx\shell\open\command" "" `"$INSTDIR\${APP_EXECUTABLE_FILENAME}" "%1"`
   WriteRegNone SHCTX "Software\Classes\.docx\OpenWithProgids" "CardMirror.docx"
 
@@ -76,11 +87,24 @@
     ${EndIf}
   ${EndIf}
 
+  ; ── 3. Run-box aliases (standard app only: Lite must not take them) ──
+  !if "${APP_ID}" == "com.cardmirror.app"
+    WriteRegStr SHCTX "Software\Microsoft\Windows\CurrentVersion\App Paths\cardreflex.exe" "" "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
+    WriteRegStr SHCTX "Software\Microsoft\Windows\CurrentVersion\App Paths\cardreflex.exe" "Path" "$INSTDIR"
+    WriteRegStr SHCTX "Software\Microsoft\Windows\CurrentVersion\App Paths\cardmirror.exe" "" "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
+    WriteRegStr SHCTX "Software\Microsoft\Windows\CurrentVersion\App Paths\cardmirror.exe" "Path" "$INSTDIR"
+  !endif
+
   ; Tell Explorer associations changed (SHCNE_ASSOCCHANGED, SHCNF_IDLIST).
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 !macroend
 
 !macro customUnInstall
+  !if "${APP_ID}" == "com.cardmirror.app"
+    DeleteRegKey SHCTX "Software\Microsoft\Windows\CurrentVersion\App Paths\cardreflex.exe"
+    DeleteRegKey SHCTX "Software\Microsoft\Windows\CurrentVersion\App Paths\cardmirror.exe"
+  !endif
+
   DeleteRegKey SHCTX "Software\Classes\.cmir\ShellNew"
 
   DeleteRegValue SHCTX "Software\Classes\.docx\OpenWithProgids" "CardMirror.docx"

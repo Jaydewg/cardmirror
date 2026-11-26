@@ -16,6 +16,7 @@
 import { settings, type ChromeTextureTones } from './settings.js';
 import { WebSharedStore } from './web-shared-store.js';
 import { toHex } from './color-math.js';
+import { BRAND } from '../brand-build.js';
 
 /** Longest side, in px, of a stored image. Small images are never upscaled. */
 export const CUSTOM_TEXTURE_MAX_SIDE = 1600;
@@ -136,7 +137,7 @@ export async function importChromeTexture(file: Blob): Promise<ImportResult> {
         // reload.
         const stored = await store.load();
         if (stored !== dataUrl) {
-          return { ok: false, reason: 'This browser didn\'t let CardMirror save the image.' };
+          return { ok: false, reason: `This browser didn't let ${BRAND.productName} save the image.` };
         }
         const rev = Date.now().toString(36);
         cached = { rev, url: dataUrl };

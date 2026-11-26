@@ -144,6 +144,7 @@ import {
 import { availableRibbonCommandIds } from './ribbon-availability.js';
 import { checkedSliceFromJSON } from '../schema/slice-check.js';
 import { isRightClickContextMenu } from './context-menu-gate.js';
+import { BRAND } from '../brand-build.js';
 
 // ── Warm-cache machinery (module-level, shared by the open palette and
 //    the proactive idle pre-warm) ────────────────────────────────────
@@ -749,8 +750,10 @@ const categoryLabel = (id: SettingsCategory): string =>
  *  the app suffix (a home-screen or untitled window is just "CardMirror"). */
 export function windowLabel(w: WindowListEntry): string {
   if (w.docNames.length > 0) return w.docNames.join(' · ');
-  const title = w.title.replace(/\s+—\s+CardMirror$/, '').trim();
-  return title && title !== 'CardMirror' ? title : 'Untitled window';
+  const title = w.title.endsWith(` — ${BRAND.productName}`)
+    ? w.title.slice(0, -` — ${BRAND.productName}`.length).trim()
+    : w.title.trim();
+  return title && title !== `${BRAND.productName}` ? title : 'Untitled window';
 }
 
 /** Window source (`w `) — every OTHER CardMirror window, in the
@@ -806,7 +809,7 @@ function searchSettingsSource(query: string): PaletteResult[] {
   if (q.length > 0 && aboutKeys.some((k) => k.startsWith(q) || q.startsWith(k))) {
     results.unshift({
       source: 'settings',
-      name: `CardMirror ${appVersion}`,
+      name: `${BRAND.productName} ${appVersion}`,
       meta: 'About this install',
       matchedName: true,
       snippet: null,
@@ -1564,7 +1567,7 @@ class QuickCardSearchUI {
     this.results = searchWindowSource(this.windowList, query);
     this.emptyText = this.windowList.some((w) => !w.isOwnWindow)
       ? 'No matching windows.'
-      : 'No other CardMirror windows are open.';
+      : `No other ${BRAND.productName} windows are open.`;
     this.finishSearch();
   }
 

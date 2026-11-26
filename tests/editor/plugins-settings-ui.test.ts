@@ -40,6 +40,7 @@ import {
 import { renderPluginsPanel } from '../../src/editor/plugins-settings-ui.js';
 import { confirmDialog } from '../../src/editor/text-prompt.js';
 import type { CardMirrorPluginApi } from '../../src/editor/plugin-api.js';
+import { BRAND } from '../../src/brand-build.js';
 
 /** Wait out the panel's initial `refresh()` microtask. */
 const settled = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
@@ -76,7 +77,7 @@ describe('plugins settings panel styling', () => {
     const el = document.createElement('div');
     renderPluginsPanel(el);
     expect(el.querySelector('.pmd-settings-empty')!.textContent).toBe(
-      'Restart CardMirror to activate plugins.',
+      `Restart ${BRAND.productName} to activate plugins.`,
     );
   });
 });

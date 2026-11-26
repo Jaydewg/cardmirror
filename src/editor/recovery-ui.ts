@@ -20,6 +20,7 @@
 import type { JournalEntry } from './host/index.js';
 import { setIcon } from './icons';
 import { isAnyOverlayOpen } from './overlay-stack.js';
+import { BRAND } from '../brand-build.js';
 
 export interface RecoverySidebarCallbacks {
   /** Called when the user clicks Save on a row. Should write the
@@ -103,7 +104,7 @@ class RecoverySidebar {
     closeBtn.type = 'button';
     closeBtn.className = 'pmd-recovery-sidebar-close';
     setIcon(closeBtn, 'close');
-    closeBtn.title = 'Close — drafts left here will reappear next time you launch CardMirror';
+    closeBtn.title = `Close — drafts left here will reappear next time you launch ${BRAND.productName}`;
     closeBtn.addEventListener('click', () => this.close());
     header.appendChild(closeBtn);
     this.root.appendChild(header);

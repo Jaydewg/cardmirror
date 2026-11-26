@@ -1,0 +1,14 @@
+{
+  "id": "cardmirror",
+  "productName": "CardMirror",
+  "liteName": "CardMirror Lite",
+  "executableName": "cardmirror",
+  "shortcutName": "CardMirror",
+  "docTypeName": "CardMirror Document",
+  "lineage": "",
+  "renamedFrom": null,
+  "description": "A debate-card editor that interoperates with Advanced Verbatim — cut, format, and organize evidence offline.",
+  "tileBackground": "#2563EB",
+  "themeColor": "#2563eb",
+  "appxDisplayName": "CardMirror"
+}

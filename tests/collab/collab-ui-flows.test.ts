@@ -35,6 +35,7 @@ import { decodeShareCode, viewCodeFromShareCode } from '../../src/editor/collab/
 import { RoomsClient } from '../../src/editor/collab/room-client.js';
 import { startRoomsMock, type RoomsMock } from './_rooms-mock.js';
 import { settle, sleep, simpleDoc, docText, typeAfter, mkView } from './_loro-helpers.js';
+import { BRAND } from '../../src/brand-build.js';
 
 let mock: RoomsMock;
 
@@ -129,7 +130,7 @@ describe('collab UI flows through the editor seams', () => {
 
     // Start a session on the host's current doc (window titled like a
     // real host: the flow publishes the doc name to the room's meta map).
-    document.title = 'Aff Updates — CardMirror';
+    document.title = `Aff Updates — ${BRAND.productName}`;
     await startSession(deps);
     expect(collabUi.activeSession()).not.toBeNull();
     // Joiners name their unsaved copy from this (field bug: windows and
@@ -236,7 +237,7 @@ describe('collab UI flows through the editor seams', () => {
       },
     });
     collabUi.setCollabDocTitleResolver(() => null); // untitled: no name to resolve
-    document.title = 'CardMirror';
+    document.title = `${BRAND.productName}`;
     await startSession(hostDeps);
     const hostSess = collabUi.activeSession()!;
     expect((hostSess.loroDoc.getMap('meta').get('title') as string | undefined) ?? '').toBe('');

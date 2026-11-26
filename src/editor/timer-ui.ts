@@ -41,6 +41,7 @@ import {
   togglePrepShownSide,
   isStopwatch,
 } from './timer-state.js';
+import { BRAND } from '../brand-build.js';
 
 /** Format ms as MM:SS, clamping to 0 and rounding upward to whole
  *  seconds so a running clock doesn't visually flash 0:00 a half-
@@ -143,7 +144,7 @@ export function mountTimerUI(opts?: { popout?: boolean }): void {
     btn.className = 'pmd-timer-popout-btn';
     btn.type = 'button';
     const label = isPopout
-      ? 'Pop timer back into CardMirror'
+      ? `Pop timer back into ${BRAND.productName}`
       : 'Pop timer out into a floating window';
     btn.title = label;
     btn.setAttribute('aria-label', label);

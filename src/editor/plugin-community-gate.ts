@@ -20,6 +20,7 @@
 import { settings } from './settings.js';
 import { getElectronHost } from './host/index.js';
 import { isPermissionDemoRegistered, syncPermissionDemo } from './plugin-permission-demo.js';
+import { BRAND } from '../brand-build.js';
 
 export type PluginsConsoleCommand =
   | 'community-on'
@@ -65,7 +66,7 @@ export function installPluginCommunityGate(): void {
         ? "permission demo ENABLED — answer the consent prompt, then run 'Permission Demo: Ask' " +
             "from the command palette. Disable with __plugins('perm-demo-off')."
         : 'permission demo flag set, but the plugin system is not running — ' +
-            'turn on Plugins in Settings and restart CardMirror.';
+            `turn on Plugins in Settings and restart ${BRAND.productName}.`;
     }
     if (cmd !== 'community-on' && cmd !== 'community-off') return USAGE;
     const on = cmd === 'community-on';
@@ -73,7 +74,7 @@ export function installPluginCommunityGate(): void {
     arm();
     return on
       ? 'community plugin installs ENABLED — the installer now accepts any GitHub repo. ' +
-          'Plugins run with full access to CardMirror and your documents; only install sources you trust. ' +
+          `Plugins run with full access to ${BRAND.productName} and your documents; only install sources you trust. ` +
           "Disable with __plugins('community-off')."
       : 'community plugin installs disabled (curated list only).';
   };

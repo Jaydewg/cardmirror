@@ -29,6 +29,7 @@
 import { settings, hasCustomizedSettings } from './settings.js';
 import { formatKeyForDisplay } from './ribbon-commands.js';
 import { quickCardSearchUI, onQuickCardSearchOpen } from './quick-card-search-ui.js';
+import { BRAND } from '../brand-build.js';
 
 export interface TourStep {
   id: string;
@@ -68,7 +69,7 @@ function buildSteps(opts: { includeCreateDoc: boolean }): TourStep[] {
   const steps: TourStep[] = [
     {
       id: 'welcome',
-      title: 'Welcome to CardMirror',
+      title: `Welcome to ${BRAND.productName}`,
       body:
         'A quick tour of the interface — about a minute. Use the buttons or ← → to move, ' +
         'and Esc to skip. You can rerun it any time: it lives in the command bar as ' +
@@ -144,7 +145,7 @@ function buildSteps(opts: { includeCreateDoc: boolean }): TourStep[] {
       id: 'files',
       title: 'Open, new, save',
       body:
-        'CardMirror reads and writes the same .docx files as Verbatim. Open a real file, ' +
+        `${BRAND.productName} reads and writes the same .docx files as Verbatim. Open a real file, ` +
         'start a new one, save — and the fourth button toggles autosave.',
       target: el('file-stack'),
     },

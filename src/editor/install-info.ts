@@ -13,6 +13,7 @@
 import pkg from '../../package.json';
 import { getHost } from './host/index.js';
 import { isLiteBuild } from './lite.js';
+import { BRAND } from '../brand-build.js';
 
 /** The running app's version string (from `package.json`). Exported so
  *  the command palette can surface it without re-importing the manifest. */
@@ -52,7 +53,7 @@ export function getInstallInfo(): InstallInfoEntry[] {
   const entries: InstallInfoEntry[] = [
     // Edition rides on the Version row: "which build is this?" is the
     // first triage question on any bug report from a Lite install.
-    { label: 'Version', value: isLiteBuild() ? `${appVersion} (CardMirror Lite)` : appVersion },
+    { label: 'Version', value: isLiteBuild() ? `${appVersion} (${BRAND.liteName})` : appVersion },
     {
       label: 'Host',
       value: hostKind === 'electron' ? 'Desktop (Electron)' : 'Web browser',

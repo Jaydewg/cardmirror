@@ -12,6 +12,7 @@ import {
   type SaveHealReport,
 } from '../../src/native/index.js';
 import type { Thread } from '../../src/editor/comments-plugin.js';
+import { BRAND } from '../../src/brand-build.js';
 
 const { nodes, marks } = schema;
 
@@ -169,7 +170,7 @@ describe('native format (.cmir)', () => {
 
   it('refuses non-CardMirror JSON', () => {
     const bytes = new TextEncoder().encode('{"hello": "world"}');
-    expect(() => parseNative(bytes)).toThrow(/not a cardmirror file/i);
+    expect(() => parseNative(bytes)).toThrow(new RegExp(`not a ${BRAND.productName} file`, 'i'));
   });
 
   it('gives an actionable message for an empty read (undownloaded cloud file)', () => {
@@ -181,7 +182,7 @@ describe('native format (.cmir)', () => {
 
   it('refuses non-JSON bytes', () => {
     const bytes = new TextEncoder().encode('plain text, no JSON');
-    expect(() => parseNative(bytes)).toThrow(/cardmirror/i);
+    expect(() => parseNative(bytes)).toThrow(new RegExp(BRAND.productName, 'i'));
   });
 
   it('refuses files from a newer format version', () => {

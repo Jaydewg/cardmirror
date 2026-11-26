@@ -36,6 +36,7 @@ import {
   getPluginPermissionPrefs,
   setPluginPermissionPrefs,
 } from '../../src/editor/plugin-permission-requests.js';
+import { BRAND } from '../../src/brand-build.js';
 
 const settled = async (): Promise<void> => {
   for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
@@ -129,7 +130,7 @@ describe('install with permissions', () => {
     await clickInstall(mountPanel());
     expect(permissionConsentDialog).not.toHaveBeenCalled();
     expect(vi.mocked(confirmDialog).mock.calls[0]![0]).toBe(
-      'Install Thing v1.0.0 by A from github.com/owner/thing? This plugin runs with full access to CardMirror and your documents.',
+      `Install Thing v1.0.0 by A from github.com/owner/thing? This plugin runs with full access to ${BRAND.productName} and your documents.`,
     );
     expect(calls).toContain('commit:tok:[]');
   });

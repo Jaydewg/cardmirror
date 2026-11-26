@@ -208,7 +208,7 @@ import {
   ZOOM_MAX_PCT,
   CHROME_SCALE_MIN_PCT,
   CHROME_SCALE_MAX_PCT,
-  migrateAutoUpdateOptOut, migrateDistinguishShadingDefault, effectiveDocTypeFormat } from './settings.js';
+  migrateAutoUpdateOptOut, migrateBrandRename, migrateDistinguishShadingDefault, effectiveDocTypeFormat } from './settings.js';
 import { applyAppearance } from './theme-apply.js';
 import { initChromeTexture } from './chrome-texture-store.js';
 import { openSaveAs } from './save-as-ui.js';
@@ -415,6 +415,7 @@ import { wireWebEditionHeaderButtons } from './web-download.js';
 import { computeSelectionChrome, type SelectionChrome } from './selection-chrome.js';
 import { formatSpeechFilename } from './speech-filename.js';
 import { isBackdropClick } from './backdrop-click.js';
+import { BRAND } from '../brand-build.js';
 
 // Install the last-resort error hooks before ANY app wiring — an exception
 // during boot or in a fire-and-forget flow must never be invisible again.
@@ -444,8 +445,8 @@ setSaveHealListener(({ error, healed }) => {
     severity: healed ? 'warning' : 'error',
     title: healed ? 'Document repaired while saving' : 'Document damaged — repair failed',
     body: healed
-      ? 'CardMirror repaired invalid document structure while saving. Please report this — it means a bug corrupted the document in memory. Reopening the document clears the condition.'
-      : 'CardMirror found invalid document structure it could not repair while saving. Please report this.',
+      ? `${BRAND.productName} repaired invalid document structure while saving. Please report this — it means a bug corrupted the document in memory. Reopening the document clears the condition.`
+      : `${BRAND.productName} found invalid document structure it could not repair while saving. Please report this.`,
     key: `save-heal:${healed}`,
   });
 });
@@ -1043,7 +1044,7 @@ const syncFileDragMark = installFileDragMark(
 );
 /** Provenance stamped into every .docx this app writes (app.xml
  *  Application / AppVersion + the cmirGenerator custom property). */
-const DOCX_GENERATOR = { application: 'CardMirror', version: appVersion } as const;
+const DOCX_GENERATOR = { application: `${BRAND.productName}`, version: appVersion } as const;
 const zoomPct = document.getElementById('zoom-pct')!;
 
 // Module-level state. Declared before the settings subscriber registers
@@ -5598,9 +5599,9 @@ function makeStarterDoc(): PMNode {
   const blank = () => n['paragraph']!.create(null);
 
   return n['doc']!.createChecked(null, [
-    n['pocket']!.create({ id: newHeadingId() }, schema.text('Welcome to CardMirror')),
+    n['pocket']!.create({ id: newHeadingId() }, schema.text(`Welcome to ${BRAND.productName}`)),
     paraText(
-      'CardMirror is an editor for debate evidence that reads and writes the same Word .docx files as Verbatim. The boxed heading above is a Pocket — Verbatim\'s name for a top-level section. Everything below is live: type in it, edit it, and try the shortcuts as you go.',
+      `${BRAND.productName} is an editor for debate evidence that reads and writes the same Word .docx files as Verbatim. The boxed heading above is a Pocket — Verbatim's name for a top-level section. Everything below is live: type in it, edit it, and try the shortcuts as you go.`,
     ),
     blank(),
     paraText(
@@ -5611,18 +5612,18 @@ function makeStarterDoc(): PMNode {
     // Section 1: Try it
     n['hat']!.create({ id: newHeadingId() }, schema.text('1. Open your own files')),
     paraText(
-      'Click 📂 in the ribbon to open a real Verbatim file. CardMirror renders its styles and structure faithfully; Save As (💾, or Mod-Shift-S) writes back a Verbatim-native .docx.',
+      `Click 📂 in the ribbon to open a real Verbatim file. ${BRAND.productName} renders its styles and structure faithfully; Save As (💾, or Mod-Shift-S) writes back a Verbatim-native .docx.`,
     ),
     blank(),
     paraText(
-      'CardMirror keeps crash-recovery journals of unsaved work, but save early anyway — a real .docx on disk is what Verbatim and your teammates can open.',
+      `${BRAND.productName} keeps crash-recovery journals of unsaved work, but save early anyway — a real .docx on disk is what Verbatim and your teammates can open.`,
     ),
     blank(),
 
     // Section 2: Structural styles
     n['hat']!.create({ id: newHeadingId() }, schema.text('2. Structural styles')),
     paraText(
-      'CardMirror uses Verbatim\'s four heading levels — Pocket, Hat, Block, Tag — plus Analytics and Undertags. Each has a function key (rebindable in Settings → Keyboard shortcuts):',
+      `${BRAND.productName} uses Verbatim's four heading levels — Pocket, Hat, Block, Tag — plus Analytics and Undertags. Each has a function key (rebindable in Settings → Keyboard shortcuts):`,
     ),
     blank(),
     paraIndented('F4 = Pocket'),
@@ -5720,18 +5721,18 @@ function makeStarterDoc(): PMNode {
     // Section 6: Learn
     n['hat']!.create({ id: newHeadingId() }, schema.text('6. Study your evidence')),
     paraText(
-      'CardMirror can turn evidence into spaced-repetition flashcards. They live only on your machine — they never travel with a .docx you share. Select some text and use Create Flashcard to anchor a question-and-answer or cloze card to it; anchored cards show up in the comments column beside the text they came from.',
+      `${BRAND.productName} can turn evidence into spaced-repetition flashcards. They live only on your machine — they never travel with a .docx you share. Select some text and use Create Flashcard to anchor a question-and-answer or cloze card to it; anchored cards show up in the comments column beside the text they came from.`,
     ),
     blank(),
     paraText(
-      'The Home screen\'s Learn section runs your due reviews. With AI features on, CardMirror can draft cards for you too.',
+      `The Home screen's Learn section runs your due reviews. With AI features on, ${BRAND.productName} can draft cards for you too.`,
     ),
     blank(),
 
     // Section 7: Collaboration
     n['hat']!.create({ id: newHeadingId() }, schema.text('7. Share and co-edit')),
     paraText(
-      'In the desktop app, CardMirror machines can send cards to each other and co-edit documents live — both end-to-end encrypted. Turn on Enable collaboration in ⚙ → Collaboration to get your pairing code and the Send / Receive pills, then swap codes with teammates to send cards straight to their machines.',
+      `In the desktop app, ${BRAND.productName} machines can send cards to each other and co-edit documents live — both end-to-end encrypted. Turn on Enable collaboration in ⚙ → Collaboration to get your pairing code and the Send / Receive pills, then swap codes with teammates to send cards straight to their machines.`,
     ),
     blank(),
     paraText(
@@ -5782,15 +5783,15 @@ function makeMobileStarterDoc(): PMNode {
   const blank = () => n['paragraph']!.create(null);
 
   return n['doc']!.createChecked(null, [
-    n['pocket']!.create({ id: newHeadingId() }, schema.text('Welcome to CardMirror')),
+    n['pocket']!.create({ id: newHeadingId() }, schema.text(`Welcome to ${BRAND.productName}`)),
     paraText(
-      'This is the mobile view — a quick way to read, navigate, and lightly edit your debate files. It opens and saves the same Word .docx files as Verbatim and the CardMirror desktop app.',
+      `This is the mobile view — a quick way to read, navigate, and lightly edit your debate files. It opens and saves the same Word .docx files as Verbatim and the ${BRAND.productName} desktop app.`,
     ),
     blank(),
 
     n['hat']!.create({ id: newHeadingId() }, schema.text('1. Open a file')),
     paraText(
-      'Tap ⋮ (top-right) to open a Verbatim or CardMirror file, or start a new one. The mobile view is built for reading and light edits, not building a document from scratch — to write a new doc, switch to the desktop layout from the same ⋮ menu ("Use desktop layout"). Saving writes back the same Word format either way.',
+      `Tap ⋮ (top-right) to open a Verbatim or ${BRAND.productName} file, or start a new one. The mobile view is built for reading and light edits, not building a document from scratch — to write a new doc, switch to the desktop layout from the same ⋮ menu ("Use desktop layout"). Saving writes back the same Word format either way.`,
     ),
     blank(),
 
@@ -5809,7 +5810,7 @@ function makeMobileStarterDoc(): PMNode {
 
     n['hat']!.create({ id: newHeadingId() }, schema.text('4. Cutting and full editing live on the desktop')),
     paraText(
-      'The mobile view is built for reading, navigating, and quick fixes. For cutting cards, structural edits, and the full keyboard workflow, open the same file in the CardMirror desktop app — it is the same document.',
+      `The mobile view is built for reading, navigating, and quick fixes. For cutting cards, structural edits, and the full keyboard workflow, open the same file in the ${BRAND.productName} desktop app — it is the same document.`,
     ),
   ]);
 }
@@ -6936,9 +6937,9 @@ function bytesLookLikeDocx(bytes: Uint8Array): boolean {
  *  recognized" or the first filter; users can swap to "Word only"
  *  if they want to narrow). */
 const OPEN_FILE_FILTERS = [
-  { name: 'CardMirror, Word, or recovery journal', extensions: ['cmir', 'cmir-journal', 'docx'] },
-  { name: 'CardMirror native (.cmir)', extensions: ['cmir'] },
-  { name: 'CardMirror recovery journal (.cmir-journal)', extensions: ['cmir-journal'] },
+  { name: `${BRAND.productName}, Word, or recovery journal`, extensions: ['cmir', 'cmir-journal', 'docx'] },
+  { name: `${BRAND.productName} native (.cmir)`, extensions: ['cmir'] },
+  { name: `${BRAND.productName} recovery journal (.cmir-journal)`, extensions: ['cmir-journal'] },
   { name: 'Microsoft Word (.docx)', extensions: ['docx'] },
 ];
 
@@ -7015,7 +7016,7 @@ async function resolveOpenedFile(
  *  format radio the user picked. */
 function saveFiltersForFormat(format: 'cmir' | 'docx'): { name: string; extensions: string[] }[] {
   if (format === 'cmir') {
-    return [{ name: 'CardMirror native (.cmir)', extensions: ['cmir'] }];
+    return [{ name: `${BRAND.productName} native (.cmir)`, extensions: ['cmir'] }];
   }
   return [{ name: 'Microsoft Word (.docx)', extensions: ['docx'] }];
 }
@@ -7430,7 +7431,7 @@ async function resumeSessionFromHome(roomId: string): Promise<void> {
     /* openPath API absent (old preload / web) — skip the cross-window guard */
   }
   if (liveElsewhere) {
-    showToast('That session is already open in another CardMirror window.');
+    showToast(`That session is already open in another ${BRAND.productName} window.`);
     return;
   }
   homeScreen.hide();
@@ -8318,12 +8319,12 @@ function updateWindowTitle(): void {
   if (multiDocActive && multiDocGetAllFilenames) {
     const names = multiDocGetAllFilenames().filter((n): n is string => !!n);
     document.title = names.length > 0
-      ? `${names.join(' · ')} — CardMirror`
-      : 'CardMirror';
+      ? `${names.join(' · ')} — ${BRAND.productName}`
+      : `${BRAND.productName}`;
   } else {
     document.title = focused.filename
-      ? `${focused.filename} — CardMirror`
-      : 'CardMirror';
+      ? `${focused.filename} — ${BRAND.productName}`
+      : `${BRAND.productName}`;
   }
   // In-app filename chip. The chip itself is CSS-hidden in
   // multi-pane mode (each per-pane chip shows the pane's own
@@ -8544,7 +8545,7 @@ async function confirmDocxDropsLiveLinks(): Promise<boolean> {
       `This document contains ${what}. Word (.docx) files can't hold live links, ` +
       `so saving to .docx flattens ${them} to plain cards — the content stays, but the ` +
       `link to the source is dropped and won't come back when you reopen the .docx. ` +
-      `Save as CardMirror (.cmir) instead to keep ${them} live.`,
+      `Save as ${BRAND.productName} (.cmir) instead to keep ${them} live.`,
     confirmLabel: 'Save to Word anyway',
     cancelLabel: 'Cancel',
   });
@@ -10559,7 +10560,7 @@ async function initPlugins(): Promise<void> {
         void permissionConsentDialog({ mode: 'dev', name, known, unknown, reasons }).then((chosen) => {
           const granted = (chosen ?? []).filter((x) => known.includes(x));
           regrantPlugin(pluginId, granted);
-          if (granted.length > 0) showToast(`${name} can use the permissions you allowed until CardMirror restarts.`);
+          if (granted.length > 0) showToast(`${name} can use the permissions you allowed until ${BRAND.productName} restarts.`);
         });
       },
       // api.permissions.request: ask now, for one permission.
@@ -11048,10 +11049,19 @@ async function initSingleDocBoot(): Promise<void> {
     // install's stored `false` default exactly once, with a one-time
     // notice pointing at the toggle. Runs before the launch check so
     // the flipped setting takes effect this very boot.
-    if (electron) {
+    // CardMirror → CardReflex (or any profile's `renamedFrom`): tell
+    // people who used the old name, once, that nothing else changed.
+    migrateBrandRename(BRAND.renamedFrom, BRAND.productName, () => {
+      showToast(
+        `${BRAND.renamedFrom} is now ${BRAND.productName}. Same app, same files, same shortcuts.`,
+        { durationMs: 9000 },
+      );
+    });
+    // Store installs get updates from the Store: no updater, no notice.
+    if (electron && !electron.isStoreBuild()) {
       migrateAutoUpdateOptOut(() => {
         showToast(
-          'CardMirror now checks for updates automatically. You can turn this off — or pause it for a tournament — in Settings → General → About this install.',
+          `${BRAND.productName} now checks for updates automatically. You can turn this off — or pause it for a tournament — in Settings → General → About this install.`,
         );
       });
     }
@@ -11301,8 +11311,8 @@ async function handleModeSwitchInner(newValue: boolean): Promise<void> {
   let message: string;
   if (newValue) {
     message = electron
-      ? 'Any other open CardMirror windows will close, and every open document will reopen as a pane in this window.'
-      : 'Every open document will move into a pane in this window. Your other CardMirror windows will ask you to close them.';
+      ? `Any other open ${BRAND.productName} windows will close, and every open document will reopen as a pane in this window.`
+      : `Every open document will move into a pane in this window. Your other ${BRAND.productName} windows will ask you to close them.`;
   } else {
     message = electron
       ? 'The editor will reload and your open documents will each reopen in their own window.'
@@ -11705,7 +11715,7 @@ async function saveRecoveryEntry(entry: JournalEntry): Promise<boolean> {
     const bytes = await reserializeJournalAs(entry, choice.format);
     const filters =
       choice.format === 'cmir'
-        ? [{ name: 'CardMirror native (.cmir)', extensions: ['cmir'] }]
+        ? [{ name: `${BRAND.productName} native (.cmir)`, extensions: ['cmir'] }]
         : [{ name: 'Microsoft Word (.docx)', extensions: ['docx'] }];
     const result = await host.saveAs(choice.filename, bytes, {
       filters,
