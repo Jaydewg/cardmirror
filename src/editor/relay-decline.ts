@@ -3,10 +3,9 @@
  * surface (mailbox sends, the push stream, session start/join,
  * mid-session rejection). The toast audit found five independently
  * authored ~25-word phrasings of the same 401 — copy edits now
- * happen here once. Deliberately names BOTH paths (account link and
- * self-hosted relay) and never says "subscription": self-hosting is
- * the documented escape from relay gating, and a 401 can't tell a
- * missing membership from a wrong self-host token.
+ * happen here once. This fork ships with no default relay, so the
+ * one fix is configuring one (a missing URL and a wrong token both
+ * land here).
  */
 export const RELAY_FIX_PATH =
-  'In Settings → Collaboration, connect your Debate Decoded account or set up your own relay.';
+  'In Settings → Collaboration, set up a relay (Custom relay URL and token).';

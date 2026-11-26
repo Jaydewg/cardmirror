@@ -1822,7 +1822,7 @@ export interface Settings {
    *  catch-up while streaming). Clamped to [5, 3600]; default 30. */
   pairingPollSeconds: number;
   /** Pairing: self-hosted relay base URL (e.g. https://relay.example.com/relay).
-   *  Empty (default) = the official relay baked into the build. */
+   *  Empty (default) = no relay configured (this fork bakes none in). */
   pairingRelayUrl: string;
   /** Pairing: bearer token for a self-hosted relay (its RELAY_TOKEN).
    *  Empty (default) = the official build token. Stored locally. */
@@ -4474,20 +4474,6 @@ export const SETTING_METADATA: SettingMeta[] = [
     dependsOn: 'pairingEnabled',
   },
   {
-    key: 'pairingConnectedUntil',
-    label: 'Debate Decoded account',
-    description:
-      'Links this machine to your paid Debate Decoded membership, required for card sharing ' +
-      'and co-editing on the official relay. To link, open ' +
-      'debate-decoded.ghost.io/cardmirror-connect, sign in, and paste the code it shows you ' +
-      'here. Each membership covers two machines; linking a third asks before unlinking the ' +
-      'oldest.',
-    kind: 'pairingAccount',
-    category: 'pairing',
-    dependsOn: 'pairingEnabled',
-    aliases: ['account', 'auth', 'authorize', 'debate decoded', 'connect code', 'membership'],
-  },
-  {
     key: 'pairingDisplayName',
     label: 'Your display name',
     // Web too (not electronOnly): co-editing presence cursors carry
@@ -4559,7 +4545,7 @@ export const SETTING_METADATA: SettingMeta[] = [
     key: 'pairingRelayUrl',
     label: 'Custom relay URL',
     description:
-      'Point card sharing at your own relay server instead of the official one — e.g. https://relay.example.com/relay. The relay server ships in the CardMirror repo\'s relay/ folder (see its README); everyone sharing cards must use the same relay. Leave empty for the official relay.',
+      'The relay server card sharing and co-editing go through — e.g. https://relay.example.com/relay. No relay is set by default: run your own (the relay server ships in the repo\'s relay/ folder; see its README) or use one your team or school runs. Everyone sharing cards must use the same relay.',
     kind: 'text',
     category: 'pairing',
     dependsOn: 'pairingEnabled',
@@ -4569,7 +4555,7 @@ export const SETTING_METADATA: SettingMeta[] = [
     key: 'pairingRelayToken',
     label: 'Custom relay token',
     description:
-      "The RELAY_TOKEN configured on your self-hosted relay. Only used when a custom relay URL is set; stored locally on this machine. Leave empty when using the official relay.",
+      "The RELAY_TOKEN configured on the relay above. Only used when a custom relay URL is set; stored locally on this machine.",
     kind: 'password',
     category: 'pairing',
     dependsOn: 'pairingEnabled',

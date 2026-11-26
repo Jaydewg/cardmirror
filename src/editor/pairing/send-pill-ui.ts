@@ -623,13 +623,15 @@ export class SendPillController {
     let ok = 0;
     let fail = 0;
     let authFail = 0;
+    let noRelay = false;
     for (const si of items) {
       const res = await relayClient.send([code], si);
       ok += res.ok;
       fail += res.fail;
       authFail += res.authFail;
+      noRelay ||= !!res.noRelay;
     }
-    showToast(sendOutcomeToast(`…${code.slice(-6)}`, { ok, fail, authFail }));
+    showToast(sendOutcomeToast(`…${code.slice(-6)}`, { ok, fail, authFail, noRelay }));
   }
 
   /** Append the per-contact "invite to collaborate" button. Hidden by CSS
@@ -879,12 +881,14 @@ export class SendPillController {
     let ok = 0;
     let fail = 0;
     let authFail = 0;
+    let noRelay = false;
     for (const si of sendItems) {
       const res = await relayClient.send(target.codes, si, { via: target.via });
       ok += res.ok;
       fail += res.fail;
       authFail += res.authFail;
+      noRelay ||= !!res.noRelay;
     }
-    showToast(sendOutcomeToast(target.label, { ok, fail, authFail }));
+    showToast(sendOutcomeToast(target.label, { ok, fail, authFail, noRelay }));
   }
 }

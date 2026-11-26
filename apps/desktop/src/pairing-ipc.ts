@@ -39,7 +39,6 @@ import * as os from 'node:os';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { createPairingKeystore, routingId, type PairingKeystore, type SealedBundle } from './pairing-crypto.js';
-import { BUILT_IN_RELAY_TOKEN } from './pairing-build.js';
 import { RelayStream } from './relay-stream.js';
 import {
   entitlementIfValid,
@@ -61,24 +60,18 @@ const RELAY_CLIENT_VERSION_HEADER = 'X-CardMirror-Version';
 const RELAY_CLIENT_ROUTING_HEADER = 'X-CardMirror-Routing';
 
 /** Relay endpoint defaults. Resolution order (see relayUrl()/relayToken()):
- *  user settings (self-hosted relay) → env override → baked default. Env
- *  overrides point dev at the local mock, e.g.:
+ *  user settings (Custom relay URL / token) → env override. Env overrides
+ *  point dev at the local mock, e.g.:
  *    PAIRING_RELAY_URL=http://127.0.0.1:3200 PAIRING_TOKEN=dev-pairing-token \
  *      npm run desktop:dev
  *
- *  The URL is not secret and is baked in. The TOKEN is NOT hard-coded here:
- *  this is a PUBLIC repo, so the real relay token is injected at build/run
- *  time via PAIRING_TOKEN (a packaged installer is built with that env set).
- *  It's only light gating anyway — the card payload is end-to-end encrypted,
- *  so the relay host can't read it.
- *
- *  NOTE: a double-clicked packaged app does not inherit shell env, so a
- *  distributed build must have PAIRING_TOKEN present in its BUILD env to bake
- *  the token into the artifact. For `desktop:dev` (launched from a shell) the
- *  env var is read directly at runtime. */
-const DEFAULT_RELAY_URL =
-  process.env.PAIRING_RELAY_URL || 'https://scouting-assistant.up.railway.app/relay';
-const DEFAULT_RELAY_TOKEN = process.env.PAIRING_TOKEN || BUILT_IN_RELAY_TOKEN || 'dev-pairing-token';
+ *  This fork bakes NO relay in: no default URL, and the CI-injected
+ *  BUILT_IN_RELAY_TOKEN (upstream's shared token) is deliberately not
+ *  used — with no default URL it could only ever be sent to whatever
+ *  relay a user typed in. With nothing configured, card sharing stays
+ *  idle and sends fail with the set-up-a-relay message. */
+const DEFAULT_RELAY_URL = process.env.PAIRING_RELAY_URL || '';
+const DEFAULT_RELAY_TOKEN = process.env.PAIRING_TOKEN || 'dev-pairing-token';
 
 interface PairingConfig {
   enabled: boolean;
@@ -88,9 +81,9 @@ interface PairingConfig {
    *  receiver version that can read them. Blank = any version may receive. */
   minReceiverVersion: string;
   pollSeconds: number;
-  /** Self-hosted relay base URL ('' = the official relay). */
+  /** Relay base URL ('' = none configured). */
   relayUrl: string;
-  /** Bearer for a self-hosted relay ('' = the baked official token). */
+  /** Bearer for that relay. */
   relayToken: string;
 }
 
@@ -366,7 +359,7 @@ async function releaseSeat(entitlement: string, routingCode = ks().ownRoutingId(
  *  expired). Code-less renewal — the relay refreshes active bindings
  *  freely; a 409 here means this machine's seat was taken. */
 async function maybeRenewEntitlement(): Promise<void> {
-  if (renewing || config.relayUrl.trim()) return;
+  if (renewing || config.relayUrl.trim() || !DEFAULT_RELAY_URL) return;
   await ensureEntitlementLoaded();
   if (entitlementState === null) return;
   if (!renewalDue(entitlementState, Date.now())) return;
@@ -519,6 +512,7 @@ function authHeaders(extra?: Record<string, string>): Record<string, string> {
 }
 
 function deleteMessage(msgId: string): void {
+  if (!relayUrl()) return;
   const url = `${relayUrl()}/messages/${encodeURIComponent(msgId)}`;
   fetch(url, { method: 'DELETE', headers: authHeaders() }).catch((err) => {
     console.warn(`[pairing] DELETE ${msgId} failed:`, err);
@@ -531,7 +525,7 @@ let lastPollTag = '';
 
 /** One catch-up/poll cycle: pull our mailbox and process it. */
 async function pollOnce(): Promise<void> {
-  if (polling || !config.enabled) return;
+  if (polling || !config.enabled || !relayUrl()) return;
   void maybeRenewEntitlement();
   polling = true;
   try {
@@ -667,6 +661,10 @@ function applyDelivery(): void {
   stopDelivery();
   if (!config.enabled) {
     console.log('[pairing] delivery off');
+    return;
+  }
+  if (!relayUrl()) {
+    console.log('[pairing] no relay configured; delivery idle');
     return;
   }
   if (streamUnsupportedUrl !== null && streamUnsupportedUrl === relayUrl()) {
@@ -864,13 +862,14 @@ export function registerPairingIpc(): void {
         via?: string;
         minReceiverVersion?: string;
       },
-    ): Promise<{ ok: number; fail: number; authFail: number }> => {
+    ): Promise<{ ok: number; fail: number; authFail: number; noRelay?: true }> => {
       const targets = Array.isArray(payload?.recipientCodes)
         ? Array.from(new Set(payload.recipientCodes.filter((c) => typeof c === 'string' && c)))
         : [];
       if (targets.length === 0 || !payload?.item) {
         return { ok: 0, fail: targets.length, authFail: 0 };
       }
+      if (!relayUrl()) return { ok: 0, fail: targets.length, authFail: 0, noRelay: true };
       const senderCode = ks().ownPublicCode();
       let ok = 0;
       let fail = 0;

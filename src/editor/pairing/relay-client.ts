@@ -31,8 +31,10 @@ export interface SendResult {
   /** Recipients that failed (network / relay error). */
   fail: number;
   /** How many of `fail` were credential DECLINES (401/403) rather than
-   *  outages. Zero while the official relay runs ungated. */
+   *  outages. */
   authFail: number;
+  /** No relay is configured, so nothing was attempted. */
+  noRelay?: boolean;
 }
 
 /** The toast for a send's outcome — shared by the send pill and
@@ -42,6 +44,7 @@ export interface SendResult {
  *  "couldn't reach". Exported for tests. */
 export function sendOutcomeToast(label: string, res: SendResult): string {
   if (res.fail === 0) return `Sent to ${label} ✓`;
+  if (res.noRelay) return `No relay set up. ${RELAY_FIX_PATH}`;
   if (res.authFail > 0) {
     const scope = res.ok === 0 && res.authFail === res.fail ? '' : ` for ${res.authFail} recipient(s)`;
     return `The relay declined your credentials${scope}. ${RELAY_FIX_PATH}`;
@@ -100,7 +103,12 @@ class RelayClient {
         minReceiverVersion: opts?.minReceiverVersion,
       });
       // authFail ?? 0 keeps an older main (no decline counting) working.
-      return { ok: res?.ok ?? 0, fail: res?.fail ?? 0, authFail: res?.authFail ?? 0 };
+      return {
+        ok: res?.ok ?? 0,
+        fail: res?.fail ?? 0,
+        authFail: res?.authFail ?? 0,
+        ...(res?.noRelay ? { noRelay: true } : {}),
+      };
     } catch {
       return { ok: 0, fail: targets.length, authFail: 0 };
     }

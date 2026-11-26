@@ -1,5 +1,6 @@
-/** The official relay endpoint for BROWSER hosts — isolated so the
- *  LITE build aliases this to the empty variant (relay-endpoint-lite),
- *  compiling the hostname out. Safe to hardcode here: the relay stays
- *  on this domain permanently (user decision 2026-08-17). */
-export const WEB_DEFAULT_RELAY_URL = 'https://scouting-assistant.up.railway.app/relay';
+/** The default relay endpoint for BROWSER hosts. This fork ships with
+ *  NO default relay (store-release decision 2026-11-26): users point
+ *  card sharing / co-editing at a relay via Custom relay URL. Kept as a
+ *  module (and the LITE alias to relay-endpoint-lite) so the shape
+ *  matches upstream for merges. */
+export const WEB_DEFAULT_RELAY_URL = '';

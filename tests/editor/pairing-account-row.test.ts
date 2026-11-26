@@ -61,7 +61,10 @@ afterEach(() => {
   hostState.host = {};
 });
 
-describe('pairing account row disconnect', () => {
+// The Debate Decoded account row was removed from settings on the store-release
+// branch (no paid relays). Its builder in settings-ui.ts is kept dormant for
+// upstream merges, so this suite is skipped rather than deleted.
+describe.skip('pairing account row disconnect', () => {
   it('Disconnect empties and hides the Connected chip and restores the connect controls', async () => {
     hostState.host = {
       pairingAccountStatus: async () => ({

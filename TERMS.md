@@ -1,3 +1,8 @@
+> **⚠ TODO: this document is temporarily out of date (microsoft_store-release, 2026-11-26).**
+> This build no longer ships a default relay or any paid-relay / Debate Decoded account
+> integration. Anything below about the official relay, Debate Decoded, memberships, or
+> paid collaboration is stale until this document is rewritten for the fork.
+
 # CardMirror Terms of Use
 
 **Effective: July 7, 2026**

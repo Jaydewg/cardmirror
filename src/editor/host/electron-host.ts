@@ -86,7 +86,7 @@ export interface PairingConfigIpc {
   /** Poll cadence in seconds (fallback polling against legacy relays;
    *  floored to 5 min as the catch-up cadence while push-streaming). */
   pollSeconds: number;
-  /** Self-hosted relay base URL ('' = the official relay). */
+  /** Relay base URL ('' = none configured). */
   relayUrl?: string;
   /** Bearer for a self-hosted relay ('' = the baked official token). */
   relayToken?: string;
@@ -386,7 +386,7 @@ interface ElectronAPI {
    *  an older preload (without the pairing build) degrades gracefully. */
   pairingConfigure?(cfg: PairingConfigIpc): Promise<{ ownCode: string }>;
   pairingRegenerateKey?(): Promise<{ ownCode: string }>;
-  pairingSend?(payload: PairingSendIpc): Promise<{ ok: number; fail: number; authFail?: number }>;
+  pairingSend?(payload: PairingSendIpc): Promise<{ ok: number; fail: number; authFail?: number; noRelay?: true }>;
   pairingInboxList?(): Promise<PairingInboxItemIpc[]>;
   pairingInboxRemove?(id: string): Promise<void>;
   pairingInboxClear?(): Promise<void>;
@@ -1211,7 +1211,7 @@ export class ElectronHost implements Host {
 
   async pairingSend(
     payload: PairingSendIpc,
-  ): Promise<{ ok: number; fail: number; authFail?: number }> {
+  ): Promise<{ ok: number; fail: number; authFail?: number; noRelay?: true }> {
     return (
       (await api().pairingSend?.(payload)) ?? { ok: 0, fail: payload.recipientCodes.length }
     );

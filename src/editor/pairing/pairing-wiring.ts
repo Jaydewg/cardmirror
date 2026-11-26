@@ -131,9 +131,7 @@ export function initPairingWiring(): void {
       }
       if (st.evicted) {
         showToast(
-          'This machine was unlinked from your Debate Decoded account ' +
-            '(another machine took the seat). Re-link from the connect page ' +
-            'to keep using collaboration features here.',
+          'This machine was unlinked from its relay account. ' + RELAY_FIX_PATH,
         );
       }
     });
@@ -172,10 +170,9 @@ export function initPairingWiring(): void {
           severity: 'warning',
           title: 'Receiving cards in-browser needs your account',
           body:
-            'Card sharing is turned on, but this browser is not connected ' +
-            'to a Debate Decoded account or private relay — cards sent to ' +
-            'you will not be delivered and will expire after 3 hours. ' +
-            'Connect in Settings → Collaboration to receive them.',
+            'Card sharing is turned on, but this browser has no relay set ' +
+            'up — cards sent to you will not be delivered and will expire ' +
+            'after 3 hours. ' + RELAY_FIX_PATH,
           key: 'pairing-account-required',
         });
       });

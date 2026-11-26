@@ -1,9 +1,9 @@
 /**
  * Send-outcome messaging (relay-client.ts): credential DECLINES (401/403
- * counted by the main process as `authFail`) must name the fix — account
- * or self-hosted relay — instead of the misleading "couldn't reach", and
- * must never read as "subscription required". Inert while the official
- * relay runs ungated (authFail is always 0 during the beta).
+ * counted by the main process as `authFail`) must name the fix (set up a
+ * relay) instead of the misleading "couldn't reach", and must never read
+ * as "subscription required". With no relay configured at all, the main
+ * process reports `noRelay` and the toast says so.
  */
 import { describe, it, expect } from 'vitest';
 import { sendOutcomeToast } from '../../src/editor/pairing/relay-client.js';
@@ -18,13 +18,18 @@ describe('sendOutcomeToast', () => {
     expect(sendOutcomeToast('Aki', { ok: 1, fail: 1, authFail: 0 })).toBe('Sent to Aki (1 failed)');
   });
 
-  it('a credential decline names both fixes and never says subscription', () => {
+  it('a credential decline names the fix and never says subscription', () => {
     const msg = sendOutcomeToast('Aki', { ok: 0, fail: 1, authFail: 1 });
     expect(msg).toMatch(/declined your credentials/);
     expect(msg).toMatch(/Settings → Collaboration/);
-    expect(msg).toMatch(/Debate Decoded account/);
-    expect(msg).toMatch(/your own relay/);
-    expect(msg).not.toMatch(/subscription/i);
+    expect(msg).toMatch(/set up a relay/);
+    expect(msg).not.toMatch(/subscription|Debate Decoded|membership/i);
+  });
+
+  it('no relay configured → says so instead of "couldn\'t reach"', () => {
+    const msg = sendOutcomeToast('Aki', { ok: 0, fail: 2, authFail: 0, noRelay: true });
+    expect(msg).toMatch(/^No relay set up\./);
+    expect(msg).toMatch(/Settings → Collaboration/);
   });
 
   it('a partial decline scopes the count instead of blaming the whole send', () => {

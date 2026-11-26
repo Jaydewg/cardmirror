@@ -55,7 +55,6 @@ describe('Collaboration tab on web', () => {
     expect(webRows).toEqual([
       'pairingEnabled',
       'pairingOwnCode',
-      'pairingConnectedUntil',
       'pairingDisplayName',
       'pairingPartners',
       'pairingGroups',

@@ -19,14 +19,14 @@ describe('relay failure messaging (gating 401 UX)', () => {
     // Must NOT imply a membership is required — self-hosting is valid.
     expect(msg).toMatch(/requires a relay/i);
     expect(msg).not.toMatch(/subscription|membership/i);
-    expect(msg).toMatch(/connect your Debate Decoded account or set up your own relay/i);
+    expect(msg).toMatch(/Settings → Collaboration, set up a relay/i);
     expect(msg).not.toMatch(/401/); // not the raw error
   });
 
   it('a 401 on join/resume gives the credentials message', () => {
     const msg = relayFailureMessage(new RoomsError(401, 'x'), { initiating: false, verb: 'join' });
     expect(msg).toMatch(/rejected your credentials/i);
-    expect(msg).toMatch(/connect your Debate Decoded account or set up your own relay/i);
+    expect(msg).toMatch(/Settings → Collaboration, set up a relay/i);
     expect(msg).not.toMatch(/401/);
   });
 

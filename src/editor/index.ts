@@ -5739,7 +5739,7 @@ function makeStarterDoc(): PMNode {
     ),
     blank(),
     paraText(
-      'On the official relay these features require a linked paid Debate Decoded membership (⚙ → Collaboration).',
+      'Both need a relay server — set Custom relay URL and token in ⚙ → Collaboration to your own relay or one your team runs.',
     ),
     blank(),
 
