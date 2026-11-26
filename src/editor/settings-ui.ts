@@ -2038,7 +2038,8 @@ function buildInstallInfoSection(): HTMLElement {
   // OS (update check via electron-updater, crash-dumps folder via
   // shell.openPath). The web edition has neither capability.
   const electronHost = getElectronHost();
-  if (electronHost && !isLiteBuild()) {
+  const storeBuild = electronHost?.isStoreBuild?.() === true;
+  if (electronHost && !isLiteBuild() && !storeBuild) {
     // "Check for updates automatically" toggle — kept next to the
     // manual Check-for-updates button since both govern updates.
     // When enabled, the app checks at launch AND once a day, staying
@@ -2137,6 +2138,8 @@ function buildInstallInfoSection(): HTMLElement {
           showToast('Update available — downloading in the background; watch for the status-bar chip.');
         } else if (result.status === 'dev') {
           showToast('Update checks are only active in packaged builds.');
+        } else if (result.status === 'store') {
+          showToast('Updates for this version come from the Microsoft Store.');
         } else {
           showToast(`Update check failed: ${result.message ?? 'unknown error'}`);
         }
@@ -2150,6 +2153,15 @@ function buildInstallInfoSection(): HTMLElement {
     // manual Check button, then the tournament-pause area.
     wrap.appendChild(actions);
     wrap.appendChild(pauseWrap);
+  }
+
+  if (electronHost && storeBuild && !isLiteBuild()) {
+    // Store install: the Store owns updates, so no toggle or button here.
+    const storeNote = document.createElement('div');
+    storeNote.className = 'pmd-update-pause-desc';
+    storeNote.textContent =
+      'Updates for this version are delivered by the Microsoft Store.';
+    wrap.appendChild(storeNote);
   }
 
   if (electronHost && isLiteBuild()) {

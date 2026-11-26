@@ -126,7 +126,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
    *  string the UI can use to show a friendly result message
    *  without needing to listen on its own autoUpdater channel. */
   checkForUpdates: () => ipcRenderer.invoke('host:check-for-updates') as Promise<{
-    status: 'latest' | 'updating' | 'error' | 'dev';
+    status: 'latest' | 'updating' | 'error' | 'dev' | 'store';
     message?: string;
   }>,
 
@@ -452,6 +452,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
    *  recover docs already open in OTHER windows of the same
    *  session. */
   isFirstWindow: () => ipcRenderer.invoke('host:is-first-window'),
+  /** Microsoft Store (AppX/MSIX) install: updates come from the Store.
+   *  `process.windowsStore` is among the properties a sandboxed preload
+   *  still sees, so this is synchronous. */
+  isStoreBuild: process.windowsStore === true,
 
   /** Arrange Windows: speech doc on one side of the screen, every other
    *  window on the other. Resolves with whether a speech window was

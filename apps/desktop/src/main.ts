@@ -40,6 +40,13 @@ import { registerVoiceIpc } from './voice/ipc';
 import { registerFlowIpc } from './flow-bridge.js';
 import { registerPairingIpc, relayUrl } from './pairing-ipc.js';
 import { LITE_BUILD } from './lite-build.js';
+
+/** Running from a Microsoft Store (AppX/MSIX) package. Electron sets
+ *  `process.windowsStore` at runtime, so one build serves both channels:
+ *  the Store delivers updates itself, so this build never runs
+ *  electron-updater (which would also fail: the package directory is
+ *  read-only). */
+const STORE_BUILD = process.windowsStore === true;
 import {
   readAccessibilityTreeEnabled,
   writeAccessibilityTreeEnabled,
@@ -753,6 +760,7 @@ ipcMain.handle('host:toggle-devtools', (event) => {
  *  of running; the renderer path returns `'dev'` so the UI can
  *  do the same. */
 ipcMain.handle('host:check-for-updates', async () => {
+  if (STORE_BUILD) return { status: 'store' };
   if (!app.isPackaged) return { status: 'dev' };
   return new Promise<{ status: 'latest' | 'updating' | 'error'; message?: string }>((resolve) => {
     const offNotAvailable = (): void => {
@@ -3149,7 +3157,7 @@ function buildMenu(): Menu {
       { type: 'separator' },
       // Lite never contacts an update server — the menu item goes
       // rather than clicking into silence.
-      ...(LITE_BUILD
+      ...(LITE_BUILD || STORE_BUILD
         ? []
         : [
             {
@@ -3381,6 +3389,20 @@ interface UpdateCheckOpts {
  *  auto-launch path is a complete no-op in dev. */
 function runUpdateCheck(opts: UpdateCheckOpts): void {
   if (LITE_BUILD) return; // Lite never contacts the update host
+  if (STORE_BUILD) {
+    // The Store delivers updates; the Help item is hidden, but answer a
+    // manual check (e.g. a stale renderer) instead of clicking into silence.
+    if (opts.alertOnLatest) {
+      const win = dialogParentWindow();
+      if (win) {
+        void dialog.showMessageBox(win, {
+          type: 'info',
+          message: 'Updates for this version come from the Microsoft Store.',
+        });
+      }
+    }
+    return;
+  }
   if (!app.isPackaged) {
     if (opts.alertOnLatest) {
       const win = dialogParentWindow();
@@ -3782,7 +3804,7 @@ ipcMain.handle('host:update-chip-action', () => {
 });
 
 function startAutoUpdate(): void {
-  if (!app.isPackaged) return;
+  if (!app.isPackaged || STORE_BUILD) return;
   // macOS: Squirrel.Mac can't INSTALL into unsigned/self-signed builds,
   // but electron-updater's download path (zip + sha512 verification
   // against the release metadata) works fine — so we stage manually via

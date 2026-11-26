@@ -489,9 +489,12 @@ interface ElectronAPI {
   /** Run a manual auto-update check (mirrors Help → Check for
    *  Updates…). Resolves with a status the UI can render. */
   checkForUpdates(): Promise<{
-    status: 'latest' | 'updating' | 'error' | 'dev';
+    status: 'latest' | 'updating' | 'error' | 'dev' | 'store';
     message?: string;
   }>;
+  /** Microsoft Store install (updates come from the Store). Optional:
+   *  an older preload lacks it, which reads as "not a Store build". */
+  isStoreBuild?: boolean;
   /** Trigger a silent at-launch update check. Same network call as
    *  `checkForUpdates`, but the main process suppresses the
    *  "you're on the latest" / "couldn't check" dialogs that the
@@ -1435,10 +1438,14 @@ export class ElectronHost implements Host {
   }
 
   async checkForUpdates(): Promise<{
-    status: 'latest' | 'updating' | 'error' | 'dev';
+    status: 'latest' | 'updating' | 'error' | 'dev' | 'store';
     message?: string;
   }> {
     return api().checkForUpdates();
+  }
+
+  isStoreBuild(): boolean {
+    return api().isStoreBuild === true;
   }
 
   async triggerAutoUpdateCheck(): Promise<void> {
