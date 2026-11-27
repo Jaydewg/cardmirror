@@ -1,364 +1,240 @@
-> **⚠ TODO: this document is temporarily out of date (microsoft_store-release, 2026-11-26).**
-> This build no longer ships a default relay or any paid-relay / Debate Decoded account
-> integration. Anything below about the official relay, Debate Decoded, memberships, or
-> paid collaboration is stale until this document is rewritten for the fork.
+# CardReflex Privacy Policy
 
-# CardMirror Privacy Policy
+**Last updated: November 26, 2026**
 
-**Last updated: August 17, 2026**
+CardReflex is a debate evidence editor. This policy explains, in plain
+language, what happens to your data when you use it.
 
-CardMirror is a writing and research tool for debate and academic work. This
-policy explains, in plain language, what happens to your data when you use it.
+**The short version:** CardReflex keeps your work on your own device. Its
+publisher runs **no servers** and has **no accounts**, **no analytics** and
+**no tracking**. A few optional features connect to services that you choose,
+and when they do, this policy says exactly what they send.
 
-The short version: **CardMirror keeps your work on your own device.** There are
-no required accounts or logins, and no advertising or analytics tracking. A few
-optional features connect to the internet — and when they do, the things you
-share are **end‑to‑end encrypted**, meaning our server passes them along
-without being able to read them. This policy spells out exactly what each
-feature sends, what (if anything) is stored, and for how long.
+CardReflex is published by **Jayden Wang** ("I", "me"). It is a fork of
+[CardMirror](https://github.com/ant981228/cardmirror) by Anthony Trufanov and is
+not affiliated with or endorsed by the CardMirror project. CardMirror's own
+services are covered by CardMirror's own policy, not this one.
 
-> CardMirror is open source. If a description here is ever unclear, the code is
-> the ground truth, and you're welcome to read or self‑host it.
+> CardReflex is open source. If anything here is ever unclear, the code is
+> the ground truth: <https://github.com/Jaydewg/cardmirror>.
 
 ---
 
-## 1. What we *don't* do
+## 1. What I don't do
 
-- **No account required.** You don't sign up, create a password, or need any
-  account to use the editor — every editing feature works without one. The
-  one exception: collaboration features on the official relay require
-  linking CardMirror to an existing Debate Decoded membership (see §9).
-  Everything else works without it.
-- **No tracking or analytics.** CardMirror contains no analytics SDKs, no
-  advertising trackers, and no usage telemetry. We do not build a profile of
-  you or sell, rent, or trade anyone's data. We never have.
-- **No reading your documents.** Your cards and documents live on your device.
-  We have no server that stores your readable documents, and no ability to read
-  the content you share through the optional server features (see §3–4).
+- **No servers.** I don't operate any server, relay, or website for
+  CardReflex. Nothing you do in the app is sent to me.
+- **No accounts.** You never sign up or log in to use CardReflex. All core features are completely
+  free and bundled in.
+- **No analytics, tracking or telemetry.** The app contains no analytics or
+  advertising code and sends no usage data. I don't build profiles, and I
+  don't sell, rent or share anyone's data.
 
 ---
-
-## CardMirror Lite
-
-**CardMirror Lite** is a separate edition built for schools and managed
-environments with strict network policies. It is the same editor with
-every network‑dependent feature removed rather than merely switched
-off:
-
-- **No AI features** — the AI settings, commands, and provider
-  endpoints are absent from the build itself, so there is nothing for
-  a student to enable or a filter to miss.
-- **No card sharing, no co‑editing, no accounts, no plugins, and no
-  update checks.**
-- **No network communication.** The web edition at
-  **lite.cardmirror.app** loads only from its own address, and its
-  Content‑Security‑Policy makes the **browser itself refuse** any
-  other network request — this is enforceable machinery an IT
-  department can verify in the page's response headers, not a promise.
-  The desktop Lite app blocks web requests at the application level
-  and never contacts an update server.
-
-When you use Lite, sections 3–7, 9, and 10 of this policy simply do
-not apply: no data leaves your device at all, beyond your browser
-fetching the app itself from lite.cardmirror.app (the desktop Lite
-app fetches nothing). Documents are fully interchangeable between
-Lite and the standard edition — same format, same files.
 
 ## 2. Data stored on your device
 
-Almost everything CardMirror knows about you stays on your own computer:
+Everything CardReflex keeps is stored on your own computer:
 
-- Your documents and cards, and unsaved‑work recovery journals.
-- Your settings and preferences (including any API keys or a display name you
-  enter — see below).
-- Your recent‑files list, pinned items, quick cards, and study annotations.
-- If you use card sharing: a cryptographic key pair generated on your device,
-  and an inbox of cards others have sent you.
-- If you use the **web editor**: the items above live in your browser's site
-  storage for cardmirror.app — and, if you link a membership there, a sign‑in
-  credential plus a **non‑exportable key pair** that identifies your browser
-  to the relay (the private key cannot be read or copied out, even by
-  CardMirror's own code — see §9). Clearing the site's data removes all of it.
-- If you use co‑editing: a local record of your collaboration sessions, and a
-  **session history file** per session — the document's edit history, kept so
-  you can recover an earlier version if a shared document is damaged
-  (**Recover Previous Version**). History files live beside the recovery
-  journals, are readable only on your device, and are deleted automatically
-  after 30 days (or delete them yourself any time — the
-  **Open Crash‑Recovery Journals Folder** command shows you where they are).
+- your documents, plus crash-recovery journals of unsaved work;
+- your settings and preferences, including any API keys or display name you
+  enter;
+- recent files, pinned items, quick cards, study annotations and flashcards;
+- if you use card sharing: a key pair generated on your device, your
+  contacts' pairing codes, and an inbox of cards sent to you;
+- if you use co-editing: a local record of your sessions and a **session
+  history file** per session, so you can recover an earlier version. History
+  files are deleted automatically after 30 days, or whenever you delete them;
+- installed plugins and the data they store;
+- crash logs and crash dumps (see §8).
 
-**Retention:** this data stays on your device until *you* delete it (delete the
-file, clear the item, or uninstall the app — session history files also expire
-on their own after 30 days). We can't reach it and we don't
-retain a copy. Anyone with access to your computer or account may be able to
-read it, so protect your device as you would any folder of personal files.
+**Retention:** this data stays on your device until you delete it or
+uninstall the app (session history files also expire after 30 days). I have
+no copy and no way to reach it. Protect your device as you would any folder
+of personal files.
 
 ---
 
-## 3. Card sharing (optional — off by default)
+## 3. Card sharing and co-editing (optional, off by default)
 
-Card sharing lets you send a card to someone else. It is **off until you turn it
-on** in Settings.
+Card sharing (sending a card to another machine) and co-editing (editing a
+document together live) need a **relay server**. **CardReflex has no default
+relay.** These features do nothing until you enter the address of a relay
+that you, your team or your school runs (Settings → Collaboration).
 
-- **How it's protected.** Before a card leaves your device it is **end‑to‑end
-  encrypted** to the specific recipient (X25519 key exchange + AES‑256‑GCM). Only
-  the intended recipient's device can decrypt it. Our relay server relays the
-  encrypted bundle without the ability to read it.
-- **Your identifier.** Your "pairing code" is your device's public key, which you
-  choose to share with people you want to exchange cards with. You may also set
-  an optional **display name**; it travels *inside the encrypted message* to your
-  recipients and is never visible to the relay.
-- **What the relay can see.** To route a message the relay sees a **recipient
-  routing code** (a one‑way hash of the recipient's public key — not a name or
-  email), a message id, the message's size, and timestamps — plus the version of
-  CardMirror making the request (see §9). It does **not** see
-  the card's content, and it does **not** learn who sent the message (the
-  sender's identity is inside the encryption).
-- **Retention:** an encrypted message is deleted from the relay **as soon as the
-  recipient's device downloads it**, and in any case is **automatically deleted
-  after 3 hours** whether or not it was delivered.
-
----
-
-## 4. Co‑editing / live collaboration (optional)
-
-Co‑editing lets people edit the same document together in real time. It works
-in the desktop app and in the **web editor** at cardmirror.app, and it is
-**used only when you choose to** — nothing is shared until you deliberately
-start or join a session. A session holds up to 10 participants.
-
-- **How it's protected.** Everything exchanged in a session — document edits,
-  comments, and cursor presence — is **end‑to‑end encrypted** with a key that
-  exists only in the invite/share link and on the participants' devices. The
-  relay stores and forwards encrypted data it cannot read.
-- **Invite links.** A session can be shared as a clickable link. The link's
-  payload — the session's encryption key and, when enabled, a room‑scoped
-  **guest pass** that lets the recipient's browser connect without any
-  account — travels in the link's *fragment* (the part after `#`), which
-  browsers do not send to servers, so it stays out of server logs and
-  referrer headers. Treat an invite link the way you'd treat the share code:
-  **anyone holding it can join while the session lasts.** Ending the session
-  invalidates it.
-- **What's stored while a session runs.** So that someone can join or reconnect,
-  the relay temporarily holds the session's **encrypted** edit history and
-  periodic **encrypted** snapshots. **Live presence** (cursors and display names)
-  is only relayed between participants in the moment and is **never stored**.
-- **Retention:**
-  - When the host chooses **"End session,"** the encrypted session data is
-    **deleted from the relay immediately**.
-  - Otherwise, an inactive session's encrypted data is **automatically deleted
-    after 7 days of inactivity**.
-  - Each participant's local record of the session stays on their device until
-    they leave/end the session or clear it.
-  - So that you can rejoin a session you left, the app also remembers that
-    session's **share code** (and guest pass, if you joined with one) **on
-    your device only**. It is removed when the session ends, when you
-    choose **Forget**, or automatically **7 days** after you were last in
-    the session, and at most 25 sessions are remembered. It is never sent
-    anywhere except to rejoin that session.
+- **The relay's operator is responsible for it**, including its logs and how
+  long it keeps data. That operator is not me. CardReflex ships the relay
+  software in its repository so anyone can run their own.
+- **End-to-end encryption.** Cards and co-editing content (edits, comments,
+  cursor positions) are encrypted on your device before they leave it, so a
+  relay passes them along **without being able to read them**. Cards use
+  X25519 key exchange with AES-256-GCM; a co-editing session's key exists
+  only in its invite link or share code and on participants' devices.
+- **What any relay necessarily sees:** your IP address and connection times,
+  routing codes (one-way hashes of pairing keys, not names or emails),
+  message sizes and timestamps, the encrypted data itself, and the version of
+  the app making the request. The encrypted data can't be opened by the relay.
+- **Retention with the relay software as shipped:** a shared card is deleted
+  once delivered and in any case after 3 hours; a co-editing session's
+  encrypted data is deleted when the host ends the session or after 7 days of
+  inactivity. A relay's operator can change these settings.
+- **Your display name**, if you set one, travels inside the encrypted content
+  to the people you share with; a relay can't read it.
+- **Invite links.** A co-editing invite link opens the **CardMirror web app at
+  cardmirror.app**, which is run by the CardMirror project, not by me. The
+  session key and any guest pass are in the part of the link after `#`, which
+  browsers never send to the website's server. Treat an invite link like a
+  key: anyone holding it can join while the session lasts.
+- **If you point CardReflex at CardMirror's official relay**, that relay's
+  operator, terms, privacy policy and membership requirements apply.
 
 ---
 
-## 5. AI features (optional — off by default, your own key)
+## 4. AI features (optional, off by default, your own key)
 
-CardMirror's AI features (such as citation generation, flashcard creation, and
-text cleanup) are **off by default**. To use them you choose an AI provider —
-**Anthropic** (the default) or **OpenRouter** — and enter **your own API key**
-for that provider. The key is stored **locally** on your device and sent only to
-the provider it belongs to.
+AI features (such as citation generation, flashcard drafting, text clean-up
+and dictation clean-up) are off until you choose a provider and enter **your
+own API key**. The key is stored on your device and sent only to that
+provider.
 
-When you invoke an AI feature, the relevant content — the text you selected,
-surrounding document text, any image you ask it to look at, and your prompt — is
-sent directly from your device to your chosen provider to produce the result:
+When you use an AI feature, the content it needs (the text you selected,
+some surrounding document text, any image you ask about, and the prompt) goes
+**directly from your device** to your chosen provider:
 
-- **Anthropic** (`api.anthropic.com`): the content goes to Anthropic and is
-  handled under **Anthropic's** terms and privacy policy.
-- **OpenRouter** (`openrouter.ai`): OpenRouter is a routing service — it
-  receives the content and forwards it to the operator of whichever model you
-  configured (which may be Anthropic, OpenAI, Google, or another provider).
-  The content is handled under **OpenRouter's** terms and privacy policy *and*
-  those of the downstream model operator. Note that some models on OpenRouter —
-  particularly free-tier ones — are offered on terms that allow the model
-  operator to use submitted content for training; review the model's listing
-  on openrouter.ai before sending it anything sensitive.
+- **Anthropic** (`api.anthropic.com`), under Anthropic's terms and privacy
+  policy;
+- **OpenRouter** (`openrouter.ai`), which forwards it to the operator of the
+  model you picked. OpenRouter's terms and the model operator's terms both
+  apply. Some models, especially free ones, may allow the operator to train
+  on what you send; check the model's listing before sending anything
+  sensitive.
 
-In all cases we neither see nor store this content; none of it passes through
-any CardMirror server. If you don't enter a key and don't use these features,
-nothing is ever sent to an AI provider.
+None of this passes through me. If you don't add a key, nothing is ever sent
+to an AI provider.
 
 ---
 
-## 6. Translation (optional, user‑invoked)
+## 5. Translation (optional, when you use it)
 
-If you use the translate action, the text to be translated is sent to a
-translation service:
-
-- **MyMemory** (`api.mymemory.translated.net`) is the default and requires no
-  key; the text you translate is sent to that third‑party service.
-- **Google Cloud Translation** is available if you supply your own Google API
-  key.
-
-Translated text is handled under the chosen provider's terms. If you never use
-the translate action, no text is sent to a translation service.
+The translate action sends the text you're translating to
+**MyMemory** (`api.mymemory.translated.net`, the default, no key) or to
+**Google Cloud Translation** if you supply your own Google API key. That
+provider's terms apply. If you never translate, nothing is sent.
 
 ---
 
-## 7. Software updates and downloads
+## 6. Plugins (optional, off by default)
 
-- **Update checks** are **on by default** in the desktop app (you can turn
-  them off, or pause them for a week, in Settings → General → About this
-  install). At launch and once a day, the app asks **GitHub** whether a newer
-  release exists; this reveals your IP address and the app version to GitHub
-  but sends no document content. Nothing installs without your click. The web
-  edition performs no update checks.
-- **Voice control**, if you enable it, performs a **one‑time download** of its
-  speech engine (about 10 MB, from the npm registry) and its recognition model
-  (about 640 MB, from the sherpa‑onnx project's GitHub releases). Recognition
-  then runs entirely on your device: no audio ever leaves it. If you also turn on **Clean up dictation with AI** and have an AI key
-  configured, each dictated fragment's *text* (plus a little nearby document
-  text and names from the document) is sent to your chosen AI provider for
-  cleanup — never the audio. Calibration profiles (your recognizer's spellings
-  of the command words) are stored in settings on your device.
+Plugins are off until you enable them, and none are installed by default.
+
+- **Installing or updating a plugin** downloads it from GitHub, which sees
+  your IP address.
+- **Plugins run with full access** to the app and your documents. A plugin
+  may store data on your device and may contact services of its own. What a
+  third-party plugin does with your data is its author's responsibility,
+  under that author's terms. Install only plugins whose author you trust.
 
 ---
 
-## 8. Crash handling
+## 7. Updates and downloads
 
-If CardMirror crashes, it writes diagnostic information (a crash dump and a short
-local log) **to your device only**. Crash data is **never uploaded** anywhere. If
-you want to help us fix a bug, you can open your crash‑dumps folder and choose to
-send a file to us yourself.
-
----
-
-## 9. The relay server and connection metadata
-
-The optional card‑sharing and co‑editing features connect to a **relay server**.
-The official relay is operated by us and hosted on **Railway** (a cloud provider
-in the United States). Because the relay only ever handles **end‑to‑end‑encrypted**
-data, it cannot read your cards, documents, comments, or messages.
-
-Linking a membership from a browser works the same way as from the desktop
-app, with one addition: the browser proves it holds its key pair by signing
-each linking request, and the relay stores only the key's fingerprint — never
-the key.
-
-Like any internet service, the relay and its hosting provider necessarily see
-**connection metadata** — most notably your **IP address** and the time and
-duration of your connection — which is inherent to delivering data over the
-internet and may be retained in standard server access logs per the hosting
-provider's practices. The relay's own application logs record only truncated
-routing identifiers and counts, never content.
-
-Each request also tells the relay **which version of CardMirror is making it**
-— a version string like `1.0.0`, sent as an ordinary request header. This lets
-the relay tell old and new clients apart, so that it can keep serving older
-releases, and so that a version can be turned away if it is too old to work
-correctly. It describes the app, not you: it says nothing about your identity,
-your device, or your documents.
-
-A relay access token gates use of the server to limit abuse; it is **not** the
-mechanism that protects your privacy — the end‑to‑end encryption is. CardMirror
-can also be pointed at a **self‑hosted relay**; if you or your organization run
-your own, that server is under your control and this section describes only the
-official relay.
-
-### Account link (Debate Decoded) — required for the hosted relay
-
-You can link CardMirror to a **Debate Decoded membership**
-(Settings → Collaboration). Collaboration features on the **hosted relay
-require** a linked membership; self‑hosted relays never involve it, and
-every other feature works identically without one.
-
-If you choose to link:
-
-- You sign in on the **Debate Decoded website** (their site, their account
-  system, covered by their own privacy policy) and paste a one‑time connect
-  code into CardMirror.
-- The official relay then stores an **association between your pairing
-  routing code and your membership ID**, with its status and timestamps. This
-  is the one place the relay ties your otherwise‑pseudonymous routing code to
-  a membership. The relay does **not** store your email or name; the
-  membership email and expiry the app displays are looked up from the
-  membership system and shown on your device.
-- End‑to‑end encryption is unchanged — linking gives the relay no ability to
-  read any content.
-- A membership covers **two machines**; linking a third asks before unlinking
-  the oldest.
-
-**Unlinking:** the **Disconnect** button in the same settings row unlinks the
-machine. To have the server‑side link record deleted entirely, contact us
-(§14).
+- **Microsoft Store version:** updates are delivered by the Microsoft Store.
+  The app itself makes no update checks.
+- **Versions downloaded from GitHub** check GitHub for a newer release at
+  launch and once a day. This reveals your IP address and app version to
+  GitHub and nothing else. You can turn it off or pause it in Settings →
+  General → About this install.
+- **Voice control**, if you turn it on, downloads its speech engine once (from
+  the npm registry, `registry.npmjs.org`) and its recognition model (from the
+  sherpa-onnx project on GitHub). Speech recognition then runs entirely on your
+  device: **no audio ever leaves it.** If you also turn on AI dictation
+  clean-up, the dictated *text* (never the audio) goes to your AI provider as
+  in §4.
+- **Microphone:** CardReflex uses the microphone only for voice control and
+  dictation, and only while you have one of them turned on. Windows controls
+  whether it may use the microphone at all: Windows Settings → Privacy &
+  security → Microphone.
 
 ---
 
-## 10. Third parties
+## 8. Crashes
 
-We do not share your data with third parties for their own purposes, and we run
-no advertising or analytics. Data reaches an outside service **only** when you use
-a feature that inherently requires it, and only to the extent that feature needs:
+If CardReflex crashes, it writes a crash dump and a short log **to your
+device only**. The app never uploads them. If you want to help fix a bug, you
+can choose to send me a file yourself.
 
-| Service | When it's contacted | What it receives |
+Separately, **Windows Error Reporting** may send crash information to
+Microsoft, depending on your Windows settings. For the Microsoft Store
+version, Microsoft may make aggregate crash and reliability reports available
+to me in Partner Center; these don't include your documents.
+
+---
+
+## 9. Microsoft Store
+
+If you get CardReflex from the Microsoft Store, Microsoft handles the
+download, installation, updates and any reviews you leave, under Microsoft's
+own privacy statement. Microsoft gives me only aggregate statistics (such as
+install counts), not your identity.
+
+---
+
+## 10. Third parties at a glance
+
+I don't share your data with anyone. Data reaches an outside service only
+when you use a feature that needs it:
+
+| Service | When | What it receives |
 |---|---|---|
-| **Railway** (relay host) | Card sharing / co‑editing (opt‑in) | End‑to‑end‑encrypted data it can't read; connection metadata incl. IP |
-| **Anthropic** | AI features (opt‑in, your key, provider set to Anthropic) | The text/images and prompt you submit |
-| **OpenRouter** (+ the model operator it routes to) | AI features (opt‑in, your key, provider set to OpenRouter) | The text/images and prompt you submit |
-| **MyMemory / Google** | Translate action | The text you translate |
-| **GitHub** | Update checks (on by default, desktop only; can be turned off) | Your IP address and app version |
-| **github.com** (k2‑fsa/sherpa‑onnx releases) | First‑time voice‑model download (opt‑in) | Your IP address |
-| **registry.npmjs.org** | First‑time voice speech‑engine download (opt‑in) | Your IP address |
+| A relay you configure (its operator) | Card sharing / co-editing (opt-in) | End-to-end-encrypted data it can't read; IP address and connection metadata |
+| cardmirror.app (CardMirror project) | Opening a co-editing invite link in a browser | A normal page request; the session key stays in the link fragment and isn't sent |
+| Anthropic | AI features (opt-in, your key) | The text, images and prompt you submit |
+| OpenRouter, plus the model operator | AI features (opt-in, your key) | The text, images and prompt you submit |
+| MyMemory or Google | Translate action | The text you translate |
+| GitHub | Update checks (GitHub versions only), plugin installs and updates, voice model download | Your IP address and app version |
+| npm registry | Voice engine download (opt-in) | Your IP address |
+| Microsoft | Microsoft Store install and updates; Windows Error Reporting per your Windows settings | What Microsoft's own privacy statement describes |
 
-Each third party handles what it receives under its own privacy policy.
+Each service handles what it receives under its own privacy policy.
 
 ---
 
 ## 11. Children's privacy
 
-CardMirror is a general‑purpose writing tool intended for a general audience,
-which may include high‑school and college students. It is **not directed to
-children under 13**, and because it requires no accounts and stores work on your
-own device, we generally do not collect personal information from anyone. We do not
-knowingly collect personal information from children under 13 through the server
-features. If you believe a child under 13 has provided personal information
-through the relay, please contact us (§14) and we will help remove it.
-
-If your school or organization deploys CardMirror for students, that
-institution's own policies and agreements also apply.
+CardReflex is a general-purpose writing tool for a general audience, which
+includes high school and college students. It is not directed to children
+under 13. Because it has no accounts and keeps your work on your device, I
+don't collect personal information from anyone. If your school deploys
+CardReflex, its own policies also apply.
 
 ---
 
-## 12. Your controls and how to delete your data
+## 12. Your controls
 
-- **Local data:** delete a document, clear an inbox item, or uninstall the app to
-  remove data from your device.
-- **A shared card:** it self‑deletes from the relay on delivery, and within 3
-  hours regardless. You can also regenerate your pairing code, which invalidates
-  any cards still addressed to your old code.
-- **A collaboration session:** the host's **"End session"** deletes the session's
-  data from the relay immediately; otherwise it expires after 7 days of
-  inactivity. You can also clear a session's local record on your device.
-- **API keys / display name:** clear the corresponding field in Settings.
-- **Account link (optional):** **Disconnect** in Settings → Collaboration
-  unlinks this machine; contact us (§14) to have the server‑side link record
-  deleted entirely.
+- **Local data:** delete the document or item, clear the field in Settings,
+  or uninstall the app.
+- **Card sharing:** turn it off, or regenerate your pairing code to cut off
+  cards addressed to the old one.
+- **Co-editing:** the host's **End session** deletes the session's data from
+  the relay (per the relay's settings); you can clear a session's local
+  record any time.
+- **AI and translation:** remove your API key, or just don't use those
+  features.
+- **Microphone:** Windows Settings → Privacy & security → Microphone.
 
-Because we don't hold a readable copy of your work — and, unless you opted
-into the account link, no account either — there is no central profile for us
-to delete: deletion happens where the data lives (your device) or via the
-automatic relay expiry above, plus the account-link removal path if you used
-that.
+Because I hold no copy of your data and no account, there is nothing for me
+to delete on my side. For data on a relay, contact that relay's operator.
 
 ---
 
 ## 13. Changes to this policy
 
-If we make a material change to how CardMirror handles data, we will update this
-policy and its "Last updated" date, and note significant changes in the app's
-release notes.
+If CardReflex starts handling data differently, I'll update this policy and
+its "Last updated" date and mention the change in the release notes.
 
 ---
 
 ## 14. Contact
 
-Questions about this policy or your data? Contact us at **ant981228@gmail.com**
-or by opening an issue at **https://github.com/ant981228/cardmirror**.
+Questions about this policy or your data: **jayden.t.wang.dev@outlook.com**,
+or open an issue at <https://github.com/Jaydewg/cardmirror/issues>.
