@@ -2036,6 +2036,19 @@ async function pruneHistoryFiles(): Promise<void> {
 }
 
 void app.whenReady().then(() => {
+  // No camera, ever: the app has no video feature, so refuse any media
+  // request or check that involves video (microphone requests for voice
+  // control still go through). Defense in depth for the Store (MSIX)
+  // build, where Windows treats camera access as a privacy event.
+  // Everything else keeps Electron's default (granted).
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback, details) => {
+    const types = (details as { mediaTypes?: string[] }).mediaTypes ?? [];
+    callback(!(permission === 'media' && types.includes('video')));
+  });
+  session.defaultSession.setPermissionCheckHandler((_wc, permission, _origin, details) => {
+    return !(permission === 'media' && (details as { mediaType?: string }).mediaType === 'video');
+  });
+
   // Lite enforcement, desktop edition: the CSP equivalent. Every
   // http(s)/ws request from ANY renderer session is cancelled at the
   // network layer — "does not talk to the internet" as a property of

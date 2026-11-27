@@ -1271,6 +1271,12 @@ button {
 html {
   scroll-padding-top: var(--ribbon-height);
   scroll-padding-bottom: var(--status-bar-height);
+  /* Native checkboxes, radios, sliders and progress bars follow the app's
+     accent (and its theme / custom accent setting), not the OS: Chromium
+     on Windows otherwise paints them in the user's Windows accent colour.
+     Inherited, so one declaration covers every control; a component that
+     needs something else can still set its own. */
+  accent-color: var(--pmd-c-accent);
 }
 html:has(body.pmd-speech-banner-visible) {
   scroll-padding-top: calc(var(--ribbon-height) + var(--speech-banner-height));

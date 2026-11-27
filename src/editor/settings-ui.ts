@@ -4217,9 +4217,28 @@ function buildVoiceInputDeviceEditor(): HTMLElement {
     select.appendChild(opt);
   };
   addOption('', 'System default');
+  // Until the real list loads, a saved choice still shows as selected.
+  const placeholder = current !== '' ? document.createElement('option') : null;
+  if (placeholder) {
+    placeholder.value = current;
+    placeholder.textContent = 'Saved microphone';
+    placeholder.selected = true;
+    select.appendChild(placeholder);
+  }
 
-  if (navigator.mediaDevices?.enumerateDevices) {
+  // List devices LAZILY: Chromium's enumerateDevices() always enumerates
+  // cameras too, and in the Microsoft Store (MSIX) build Windows counts
+  // that as the app accessing the camera. So only enumerate once this
+  // picker is actually on screen (the Voice control section scrolled into
+  // view) or focused, never merely because Settings opened.
+  let populated = false;
+  let observer: IntersectionObserver | null = null;
+  const populate = (): void => {
+    if (populated || !navigator.mediaDevices?.enumerateDevices) return;
+    populated = true;
+    observer?.disconnect();
     void navigator.mediaDevices.enumerateDevices().then((devices) => {
+      placeholder?.remove();
       let n = 0;
       let sawCurrent = current === '';
       for (const d of devices) {
@@ -4232,6 +4251,14 @@ function buildVoiceInputDeviceEditor(): HTMLElement {
       // so the user can see (and clear) a stale selection.
       if (!sawCurrent) addOption(current, 'Saved device (not connected)');
     });
+  };
+  select.addEventListener('focus', populate);
+  select.addEventListener('pointerdown', populate);
+  if (typeof IntersectionObserver !== 'undefined') {
+    observer = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) populate();
+    });
+    observer.observe(select);
   }
 
   select.addEventListener('change', () => {
