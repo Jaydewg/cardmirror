@@ -1,0 +1,58 @@
+name: Microsoft Store build (MSIX)
+
+# Manually triggered build of the Microsoft Store package (.msix) for
+# CardReflex. Uploads it as a workflow artifact; it is NOT attached to a
+# GitHub Release. Submit it in Partner Center (Store ID 9PNNWSF2BC1T), where
+# Microsoft signs it, so it needs no code-signing certificate here.
+#
+# MSIX packaging only runs on Windows (makeappx from the Windows SDK, which
+# windows-latest ships), so this can't be built on the Linux dev machine.
+# electron-builder calls its MSIX target `appx`; the .msix extension comes
+# from build.appx.artifactName in apps/desktop/package.json.
+#
+# Run from the Actions tab → "Microsoft Store build" → "Run workflow", or
+# `gh workflow run win-store-build.yml --ref <branch>`.
+#
+# Differences from win-test-build.yml: no relay-token step (the Store build
+# ships no default relay), and the MSIX (`appx`) target instead of NSIS. The
+# package's identity, capabilities and manifest live in
+# apps/desktop/package.json (`build.appx`) + electron-builder.config.cjs +
+# apps/desktop/build/msix-config/.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Store package (MSIX)
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install desktop dependencies
+        # apps/desktop isn't in the npm workspaces (see release.yml).
+        run: npm --prefix apps/desktop ci
+
+      - name: Build MSIX package
+        # dist:store = apply the brand profile, the usual pre-build chain,
+        # then electron-builder --win appx --publish never (→ .msix).
+        run: npm --prefix apps/desktop run dist:store
+
+      - name: Upload MSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cardreflex-store-msix
+          path: apps/desktop/release/*.msix
+          if-no-files-found: error
+          retention-days: 14
