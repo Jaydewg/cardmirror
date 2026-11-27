@@ -59,6 +59,18 @@ const config = {
   },
 };
 
+// MSIX builds need a current Windows SDK. The default toolset
+// (winCodeSign 0.0.0) bundles an old makeappx whose schema predates
+// Windows 10 1903, so it rejects the manifest's desktop6 elements
+// (FileSystemWriteVirtualization: "unexpected ... content model of
+// Properties"). Toolset 1.1.0 uses Windows Kits 10.0.26100 (pinned,
+// checksummed download). Scoped to the Store build (`--win appx`, see
+// the dist:store script) so the NSIS/GitHub release keeps its proven
+// toolset.
+if (process.argv.includes('appx')) {
+  config.toolsets = { ...(base.toolsets || {}), winCodeSign: '1.1.0' };
+}
+
 if (lite) {
   config.appId = 'com.cardmirror.lite';
   config.mac = { ...base.mac, artifactName: `${stem(brand.liteName)}-\${version}-\${arch}.\${ext}` };
