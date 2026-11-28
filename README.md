@@ -5,22 +5,43 @@
   </picture>
 </p>
 
+## We changed names!
+We are now CardReflex. Same lineage -- reflex and mirror are similar. The Reflex stands for multiple things -- .docx roundtripping, federation, and the dynamic speech timer (coming soon!), with other things as well.
+This change will come incrementally. The README is already updated; other places will remove references to CardMirror.
+
+I'm not going to give you the schpiel about how "this is a major enhancement" -- there will be regressions. The reason that the name is now changed is to comply with trademark -- I can't use upstream's name on Microsoft Store.
+
+What will still work:
+- Nearly everything. After you launch the app, it will behave nearly the same, except that all references to CardMirror are now replaced by CardReflex.
+- CLI invocations. There will still be a `cardmirror` alias.
+- This repo. It will still stay on `jaydewg/cardmirror`.
+
+What won't work:
+- Start Menu / whatever launcher will stop registering CardMirror. Sometimes if you type "cardmirror" Windows will launch the command. This is not intended. You can define an alternative name (such as CReflex) in your operating system for launching convenience, if you needed an excuse to do that.
+
+> *Why do this?* Due to trademark, there must be friction to a different brand. Therefore I can't maintain user-facing seamlessness, because the entire purpose *is* to increase friction.
+
+
+**Did I mention we now have a Microsoft Store version?** Pending approval, CardReflex will have a Microsoft Store listing, with all features in `main` included! Even better, this version is **signed**, which means that on a laptop with Smart App Control, it will now launch! (Unfortunately, this does nothing with the MacOS installation, because Apple's developer program is gated behind a $100 fee.)
+
 ## This is not the original Cardmirror!
 
 The [original Cardmirror](https://github.com/ant981228/cardmirror) is located at the link. This is a modified version of Cardmirror forked to add in new organization-specific features. If there is some issue with an upstream CardMirror, this is not the right place to report it.
 
-There exist some long-lived forks here. `server-federation` is a fork containing code for a *federated* version of Cardmirror,
+There exist some long-lived forks here. `server-federation` is a fork containing code for a *federated* version of CardReflex,
 i.e. one that adds ability for different servers to connect together, eliminating cross-server disconnectivity.
 
 There are also bugfixes hosted here.
 
-To report bugs with a modified Cardmirror sourced from here, report issues [**here**](https://github.com/Jaydewg/cardmirror/issues) first.
+To report bugs with a CardReflex installation, report issues [**here**](https://github.com/Jaydewg/cardmirror/issues) first.
 
-To put feature requests, if I don't know you, report suggestions for enhancements [**upstream**](https://github.com/ant981228/cardmirror/issues) first.
+To put feature requests,  report suggestions for enhancements [**here as well.**](https://github.com/Jaydewg/cardmirror/issues)
 
-# CardMirror
+If your release references "CardMirror", not "CardReflex", and has a version number ≥18, go [**to upstream,**](https://github.com/ant981228/cardmirror/issues) not here.
 
-CardMirror is a debate text editor focused on high school and college
+# CardReflex
+
+CardReflex is a debate text editor focused on high school and college
 policy debate. It's a standalone
 replacement for the editor side of
 **[Verbatim](https://github.com/ashtarcommunications/verbatim)**, the
@@ -30,12 +51,10 @@ workflow, same Word-compatible `.docx` files — but with no Word, no
 macros, and no add-in. That keeps it fast on the multi-megabyte
 evidence files debaters work in, and enables cross-platform feature parity.
 
-Run it as a **desktop app** for tournament-day work, or the *upstream* version as a **web preview** in 
-any browser for trying it out or working from a Chromebook
-or locked-down school machine.
+Run it as a **desktop app** for tournament-day work. Alternatively, use the *upstream* version as a [**web preview**](https://cardmirror.app) in any browser for trying it out or or using it from a locked-down school machine.
 
 
-> **Keep backups.** CardMirror is stable and used daily, but no
+> **Keep backups.** CardReflex is stable and used daily, but no
 > editor is bug-free — keep a copy of anything critical in a second
 > format.
 >
@@ -43,11 +62,11 @@ or locked-down school machine.
 > first time you launch. The one-time workaround for each is in the
 > install steps below.
 >
-> **Be cautious of third-party servers.** Versions of Cardmirror that 
+> **Be cautious of third-party servers.** Versions of CardReflex that 
 > support federation can link to servers that in themselves link many
 > other servers. Trust the server you are linking to.
 See [`MANUAL.md`](./MANUAL.md) for the full user
-manual; [`PRIVACY.md`](./PRIVACY.md) for how CardMirror handles your data;
+manual; [`PRIVACY.md`](./PRIVACY.md) for how CardReflex handles your data;
 [`TERMS.md`](./TERMS.md) for the terms of use;
 [`CHANGELOG.md`](./CHANGELOG.md) for release notes;
 [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design;
@@ -69,7 +88,7 @@ offline and does not depend on it.
 
 ## Support
 
-The core CardMirror editor which this one is built off of is free, and built and maintained by one
+The core CardReflex editor which this one is built off of is free, and built and maintained by one
 person. Please go donate to them: there's two ways to help keep it going:
 
 - **Subscribe at [Debate Decoded](https://debate-decoded.ghost.io/)** —
@@ -86,14 +105,14 @@ person. Please go donate to them: there's two ways to help keep it going:
 Go [here](#run-from-source) for instructions on how to manually build the software.
 Desktop builds now live on the [Releases page](https://github.com/Jaydewg/cardmirror/releases).
 Pick the file for your operating system, run the installer, and
-launch CardMirror like any other app.
+launch CardReflex like any other app.
 
 
 ### macOS
 
-1. Download `CardMirror-x.x.x-universal.dmg` — one download that runs
+1. Download `CardReflex-x.x.x-universal.dmg` — one download that runs
    natively on both Apple Silicon (M1 and later) and Intel Macs.
-2. Open the `.dmg`, drag **CardMirror** to your Applications folder.
+2. Open the `.dmg`, drag **CardReflex** to your Applications folder.
 3. **First launch only.** Gatekeeper refuses to open unsigned apps.
    You'll see one of two messages depending on your macOS version:
 
@@ -106,14 +125,14 @@ launch CardMirror like any other app.
      the app and the right-click workaround doesn't suffice. Open a
      terminal (Spotlight → "Terminal") and run:
      ```sh
-     sudo xattr -cr /Applications/CardMirror.app
+     sudo xattr -cr /Applications/CardReflex.app
      ```
      You'll be asked for your password. After that, normal
      double-click works.
 
 ### Windows
 
-1. Download `CardMirror Setup x.x.x.exe`.
+1. Download `CardReflex Setup x.x.x.exe`.
 2. Run the installer (Next → Install → Finish).
 3. **First launch only.** SmartScreen shows "Windows protected your
    PC." Click **More info** → **Run anyway**.
@@ -123,11 +142,11 @@ launch CardMirror like any other app.
 Two options for installation, depending upon distribution:
 
 - **AppImage** (works on every modern distro): download
-  `cardmirror-x.x.x.AppImage`. In a terminal, in the download
+  `cardreflex-x.x.x.AppImage`. In a terminal, in the download
   folder, run:
   ```sh
-  chmod +x cardmirror-x.x.x.AppImage
-  ./cardmirror-x.x.x.AppImage
+  chmod +x cardreflex-x.x.x.AppImage
+  ./cardreflex-x.x.x.AppImage
   ```
   For most graphical desktop environments with modern file managers, you should
   be able to run the AppImage by double-clicking after the `chmod +x` command.
@@ -137,14 +156,12 @@ Two options for installation, depending upon distribution:
   yay -S cardmirror-bin
   # or with paru: paru -S cardmirror-bin
   ```
-  Or grab `cardmirror-x.x.x.pacman` from the release directly and:
+  Or grab `cardreflex-x.x.x.pacman` from the release directly and:
   ```sh
-  sudo pacman -U cardmirror-x.x.x.pacman
+  sudo pacman -U cardreflex-x.x.x.pacman
   ```
 
-### Web app (Chromebook & browser)
-
-There's no corresponding web-app for this. The original one (that is the one located upstream) is located at [cardmirror.app](https://cardmirror.app)
+### Modern Chromebooks
 
 **On a Chromebook made after 2018?** .AppImage files can be run through the Linux Development Environment, built into most Chromebooks. (Don't worry -- it doesn't change the normal appearance of your system at all!)
 
@@ -156,19 +173,19 @@ There's no corresponding web-app for this. The original one (that is the one loc
 6. After you log back in, first grant Linux permission to your Documents folder by right-clicking Documents and selecting *Share with Linux*.
 7. Open Terminal (which is now avaliable) and run `cp /mnt/chromeos/MyFiles/Downloads/*.AppImage ~; cd ~ && chmod +x *.AppImage`.
 8. Now install MenuLibre: Run `sudo apt update && sudo apt install menulibre -y`.
-9. Launch it, and press the `+` button in the top left corner and select *Add Launcher*. Set the name to "CardMirror", and find the CardMirror AppImage in the Linux Files section for *Command*. Click Save, and you're done!
+9. Launch it, and press the `+` button in the top left corner and select *Add Launcher*. Set the name to "CardReflex", and find the CardMirror AppImage in the Linux Files section for *Command*. Click Save, and you're done!
 
 
 - *My Chromebook doesn't have the Linux Development Environment / has that option greyed out!* This isn't all too uncommon. Either:
 1. You're on a Google Family Share account, which this has completely disabled,
 2. On a enterprise managed device, and typically schools/enterprises tend to disable this, or
-3. You're on a 32-bit Chromebook or a Chromebook with less than 2GB of memory. Alternatively, you don't have Intel VT-x or AMD-V turned on, it will also fail. Lastly, if Intel VT-x or AMD-V have critical security issues, it will refuse to activate.
+3. You're on a 32-bit Chromebook or a Chromebook with less than 2GB of memory. Alternatively, you don't have Intel VT-x or AMD-V turned on, it will also fail. Lastly, if Intel VT-x or AMD-V have critical security issues, it will refuse to activate. It's for a good reason.
 
 ### Updates
 
 Updates now target the version you're on. It will update to this fork, not any others.
 
-CardMirror also checks for updates automatically — silently at launch
+CardReflex also checks for updates automatically — silently at launch
 and once a day, speaking up only when a new version is actually ready.
 Turn this off (or pause it for a week — handy at a tournament) in
 Settings → General → "About this install" → **Check for updates
@@ -217,7 +234,7 @@ Two providers are supported; pick either one:
 To enable them:
 
 1. Get an API key from the provider you picked.
-2. In CardMirror, click the ⚙ gear icon in the ribbon.
+2. In CardReflex, click the ⚙ gear icon in the ribbon.
 3. Toggle **AI features** on, choose your provider under
    **AI provider**, and paste your key into that provider's key
    field (**Anthropic API key** or **OpenRouter API key**).
@@ -238,7 +255,7 @@ download a release above.
 
 ### 1. Install Node.js
 
-CardMirror is built with JavaScript / TypeScript and needs **Node.js**
+CardReflex is built with JavaScript / TypeScript and needs **Node.js**
 to run. Node is a regular desktop installer.
 
 - **macOS** — open [nodejs.org](https://nodejs.org/) in your browser
@@ -257,7 +274,7 @@ is installed.
 ### 2. Download the source
 
 1. Open
-   [the CardMirror page on GitHub](https://github.com/ant981228/cardmirror)
+   [the CardReflex page on GitHub](https://github.com/Jaydewg/cardmirror)
    in your browser.
 2. Click the **green `<> Code` button** near the top of the file list.
 3. Click **"Download ZIP"** at the bottom of the dropdown.
@@ -273,7 +290,7 @@ is installed.
 ### 3. Open a terminal inside that folder
 
 A "terminal" is a window where you type commands. You're going to
-open one already pointing at the CardMirror folder.
+open one already pointing at the CardReflex folder.
 
 - **macOS** — enable Finder → right-click → *Services → New
   Terminal at Folder* once via System Settings → Keyboard →
@@ -297,7 +314,7 @@ folder too high up — verify your current folder with the `pwd` command
 npm install
 ```
 
-Downloads everything CardMirror needs. Takes 30 seconds to a couple
+Downloads everything CardReflex needs. Takes 30 seconds to a couple
 of minutes. Deprecation warnings are normal; only red `error` lines
 indicate trouble.
 
@@ -337,7 +354,7 @@ npm --prefix apps/desktop run dist -- --publish never
 
 ## Other commands
 
-These all run inside the terminal pointed at the CardMirror folder
+These all run inside the terminal pointed at the CardReflex folder
 (same setup as the install steps above):
 
 ```
