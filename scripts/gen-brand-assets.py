@@ -24,6 +24,7 @@ Outputs (paths under generated/):
                               folder electron-builder reads MSIX tiles from
   public/*.png                web favicon, apple-touch, PWA icons
   file-mark-48.png            status-bar file drag handle / drag image
+  readme/lockup-{light,dark}.png   README header (mark + name + lineage)
 """
 
 import json
@@ -87,6 +88,40 @@ def centered(canvas: tuple[int, int], mark: Image.Image, bg=(0, 0, 0, 0)) -> Ima
     return img
 
 
+# README / repo lockup: mark + wordmark + lineage line, one PNG per GitHub
+# colour scheme (README.md switches them with <picture>). The lineage line
+# follows the home screen's rule (.pmd-home-lineage): light italic, ~37% of
+# the wordmark size, muted.
+LOCKUP_SCHEMES = {
+    "light": {"ink": "#15171C", "muted": "#5B606B"},
+    "dark": {"ink": "#F2F3F5", "muted": "#9AA0AA"},
+}
+
+
+def readme_lockups(brand_dir: Path, brand: dict, out: Path, inkscape: str, tmp: Path) -> None:
+    import re
+
+    mark_svg = (brand_dir / "mark.svg").read_text()
+    inner = re.sub(r"^.*?<svg[^>]*>|</svg>\s*$", "", mark_svg, flags=re.S)
+    lineage = brand.get("lineage", "")
+    dest = out / "readme"
+    dest.mkdir(parents=True, exist_ok=True)
+    for scheme, c in LOCKUP_SCHEMES.items():
+        text_y = 66 if lineage else 76
+        svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 120" width="640" height="120">
+  <g transform="translate(0 10)">{inner}</g>
+  <text x="122" y="{text_y}" font-family="Inter" font-weight="700" font-size="56"
+        letter-spacing="-0.56" fill="{c['ink']}">{brand['productName']}</text>
+  {f'<text x="124" y="100" font-family="Inter" font-style="italic" font-weight="300" font-size="21" letter-spacing="0.2" fill="{c["muted"]}">{lineage}</text>' if lineage else ''}
+</svg>"""
+        src = tmp / f"lockup-{scheme}.svg"
+        src.write_text(svg)
+        png = tmp / f"lockup-{scheme}.png"
+        subprocess.run([inkscape, str(src), "-w", "1280", "-o", str(png)], check=True, capture_output=True)
+        img = Image.open(png).convert("RGBA")
+        img.crop(img.getchannel("A").getbbox()).save(dest / f"lockup-{scheme}.png")
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         sys.exit("usage: gen-brand-assets.py <brand-id>")
@@ -147,6 +182,9 @@ def main() -> None:
 
         # ── Status-bar file mark (drag handle + drag image) ──
         r.image(48, "small").save(out / "file-mark-48.png")
+
+        # ── README lockups (light + dark) ──
+        readme_lockups(brand_dir, brand, out, r.inkscape, Path(td))
 
     print(f"gen-brand-assets: wrote {out.relative_to(ROOT)}")
 
