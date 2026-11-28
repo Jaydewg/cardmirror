@@ -1,26 +1,30 @@
 /**
- * Pin the packaged app's userData folder to its pre-rebrand name.
+ * Pin the app's userData folder to the one every earlier release used.
  *
- * Electron derives userData from the product name, so renaming the product
- * (CardMirror → CardReflex, brand/README.md) would otherwise move every
- * user's settings, plugins, journals, history and the Fast Paste discovery
- * file to a new, empty folder, and Verbatim would stop finding the bridge.
- * The folder name is an internal identifier like appId: it never changes
- * with the brand.
+ * Electron names userData after the packaged package.json. electron-builder
+ * keeps `productName` inside the `build` block, so the packaged package.json
+ * has none, and Electron falls back to `name`: "@cardmirror/desktop". Every
+ * release so far (standard and Lite, on every OS, packaged or `electron .`)
+ * has therefore kept its settings, plugins, journals, history and the Fast
+ * Paste discovery file in:
+ *
+ *   Windows  %APPDATA%\@cardmirror\desktop
+ *   macOS    ~/Library/Application Support/@cardmirror/desktop
+ *   Linux    ~/.config/@cardmirror/desktop
+ *
+ * Pinning it here means a future product name or package name change (the
+ * CardReflex rebrand, brand/README.md) can never move users to a new, empty
+ * folder. The path is an internal identifier like appId: it never changes
+ * with the brand. The Microsoft Store build reaches the same real %APPDATA%
+ * folder because its manifest turns file-system write virtualization off.
  *
  * Imported FIRST by main.ts for its side effect, so the path is set before
- * any module (or crashReporter) reads it. Dev runs (`electron .`) keep
- * Electron's default, so development never touches real user data. The
- * Microsoft Store build resolves to the same real %APPDATA% folder because
- * its manifest turns file-system write virtualization off.
+ * any module (or crashReporter) reads it.
  */
 import { app } from 'electron';
 import * as path from 'node:path';
-import { LITE_BUILD } from './lite-build.js';
 
-/** The userData folder names every release has used. */
-export const USER_DATA_DIR_NAME = LITE_BUILD ? 'CardMirror Lite' : 'CardMirror';
+/** The userData path segments (under appData) every release has used. */
+export const USER_DATA_DIR_SEGMENTS = ['@cardmirror', 'desktop'] as const;
 
-if (app.isPackaged) {
-  app.setPath('userData', path.join(app.getPath('appData'), USER_DATA_DIR_NAME));
-}
+app.setPath('userData', path.join(app.getPath('appData'), ...USER_DATA_DIR_SEGMENTS));
