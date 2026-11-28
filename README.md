@@ -9,20 +9,22 @@
 We are now CardReflex. Same lineage -- reflex and mirror are similar. The Reflex stands for multiple things -- .docx roundtripping, federation, and the dynamic speech timer (coming soon!), with other things as well.
 This change will come incrementally. The README is already updated; other places will remove references to CardMirror.
 
-I'm not going to give you the schpiel about how "this is a major enhancement" -- there will be regressions. The reason that the name is now changed is to comply with trademark -- I can't use upstream's name on Microsoft Store.
+I'm not going to give you the schpiel about how "this is a major enhancement" -- name changes can be annoying. The reason that the name is now changed is to comply with trademark -- I can't use upstream's name on Microsoft Store.
 
 What will still work:
 - Nearly everything. After you launch the app, it will behave nearly the same, except that all references to CardMirror are now replaced by CardReflex.
 - CLI invocations. There will still be a `cardmirror` alias.
+- Your saved files, your new files, and the files of others. CardReflex will behave exactly the same way that CardMirror did, just with a different name.
 - This repo. It will still stay on `jaydewg/cardmirror`.
 
+
 What won't work:
-- Start Menu / whatever launcher will stop registering CardMirror. Sometimes if you type "cardmirror" Windows will launch the command. This is not intended. You can define an alternative name (such as CReflex) in your operating system for launching convenience, if you needed an excuse to do that.
+- Start Menu / whatever launcher will stop registering CardMirror. The entry has been renamed "CardReflex". You can define an alternative name (such as CReflex) in your operating system for launching convenience, if you needed an excuse to do that.
 
-> *Why do this?* Due to trademark, there must be friction to a different brand. Therefore I can't maintain user-facing seamlessness, because the entire purpose *is* to increase friction.
+> *Why do this?* To publish on the Microsoft Store, CardReflex needs a name that is its own, and that can't be confused with upstream's name. CardReflex fits the bill.
 
 
-**Did I mention we now have a Microsoft Store version?** Pending approval, CardReflex will have a Microsoft Store listing, with all features in `main` included! Even better, this version is **signed**, which means that on a laptop with Smart App Control, it will now launch! (Unfortunately, this does nothing with the MacOS installation, because Apple's developer program is gated behind a $100 fee.)
+**Did I mention we now have a Microsoft Store version?** Pending approval, CardReflex will have an invite-only Microsoft Store listing, with the same features as the v1.17.47 release. Even better, this version is **signed**, which means that it will now launch without SmartScreen getting in your way. (Unfortunately, this does nothing with the macOS installation, because Apple's developer program is gated behind a $99/year fee.)
 
 ## This is not the original Cardmirror!
 
@@ -37,7 +39,7 @@ To report bugs with a CardReflex installation, report issues [**here**](https://
 
 To put feature requests,  report suggestions for enhancements [**here as well.**](https://github.com/Jaydewg/cardmirror/issues)
 
-If your release references "CardMirror", not "CardReflex", and has a version number ≥18, go [**to upstream,**](https://github.com/ant981228/cardmirror/issues) not here.
+If your release references "CardMirror", not "CardReflex", and wasn't downloaded from this repo's Releases page, go [**to upstream,**](https://github.com/ant981228/cardmirror/issues) not here.
 
 # CardReflex
 
@@ -51,7 +53,7 @@ workflow, same Word-compatible `.docx` files — but with no Word, no
 macros, and no add-in. That keeps it fast on the multi-megabyte
 evidence files debaters work in, and enables cross-platform feature parity.
 
-Run it as a **desktop app** for tournament-day work. Alternatively, use the *upstream* version as a [**web preview**](https://cardmirror.app) in any browser for trying it out or or using it from a locked-down school machine.
+Run it as a **desktop app** for tournament-day work. Alternatively, use the *upstream* version as a [**web preview**](https://cardmirror.app) in any browser for trying it out or using it from a locked-down school machine.
 
 
 > **Keep backups.** CardReflex is stable and used daily, but no
@@ -88,7 +90,7 @@ offline and does not depend on it.
 
 ## Support
 
-The core CardReflex editor which this one is built off of is free, and built and maintained by one
+The core CardMirror editor which this one is built off of is free, and built and maintained by one
 person. Please go donate to them: there's two ways to help keep it going:
 
 - **Subscribe at [Debate Decoded](https://debate-decoded.ghost.io/)** —
@@ -151,19 +153,16 @@ Two options for installation, depending upon distribution:
   For most graphical desktop environments with modern file managers, you should
   be able to run the AppImage by double-clicking after the `chmod +x` command.
 
-- **Arch and Arch-based distributions** — use the AUR:
-  ```sh
-  yay -S cardmirror-bin
-  # or with paru: paru -S cardmirror-bin
-  ```
-  Or grab `cardreflex-x.x.x.pacman` from the release directly and:
+- **Arch and Arch-based distributions** — Grab `cardreflex-x.x.x.pacman` from the release directly and:
   ```sh
   sudo pacman -U cardreflex-x.x.x.pacman
   ```
 
 ### Modern Chromebooks
 
-**On a Chromebook made after 2018?** .AppImage files can be run through the Linux Development Environment, built into most Chromebooks. (Don't worry -- it doesn't change the normal appearance of your system at all!)
+**On a Intel/AMD Chromebook made after 2018?** .AppImage files can be run through the Linux Development Environment, built into most Chromebooks. (Don't worry -- it doesn't change the normal appearance of your system at all!)
+
+***ARM chromebooks cannot run it yet.***
 
 1. Open Settings (the gear icon in the system tray).
 2. Go to About (or Advanced) > Developers. Look for the Linux development environment (or  Linux beta) menu, and select "Turn on" or "Set up".
@@ -173,7 +172,7 @@ Two options for installation, depending upon distribution:
 6. After you log back in, first grant Linux permission to your Documents folder by right-clicking Documents and selecting *Share with Linux*.
 7. Open Terminal (which is now avaliable) and run `cp /mnt/chromeos/MyFiles/Downloads/*.AppImage ~; cd ~ && chmod +x *.AppImage`.
 8. Now install MenuLibre: Run `sudo apt update && sudo apt install menulibre -y`.
-9. Launch it, and press the `+` button in the top left corner and select *Add Launcher*. Set the name to "CardReflex", and find the CardMirror AppImage in the Linux Files section for *Command*. Click Save, and you're done!
+9. Launch it, and press the `+` button in the top left corner and select *Add Launcher*. Set the name to "CardReflex", and find the CardReflex AppImage in the Linux Files section for *Command*. Click Save, and you're done!
 
 
 - *My Chromebook doesn't have the Linux Development Environment / has that option greyed out!* This isn't all too uncommon. Either:
@@ -207,6 +206,8 @@ downloads until the shown resume date.
 
 Linux users who installed via the AUR can update with `yay -Syu`
 instead.
+
+*Microsoft Store versions are updated by the Store instead and may lag behind the Releases page because of the review process.*
 
 ## (Optional) Set up AI features
 
