@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="./logo.png" alt="CardMirror" width="280" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./brand/cardreflex/generated/readme/lockup-dark.png" />
+    <img src="./brand/cardreflex/generated/readme/lockup-light.png" alt="CardReflex, a CardMirror fork" width="360" />
+  </picture>
 </p>
 
 ## This is not the original Cardmirror!
